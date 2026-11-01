@@ -207,6 +207,31 @@ in
         # associates. 2.4 GHz, WPA2-PSK/open, station mode (see header).
         settings.General.EnableNetworkConfiguration = lib.mkDefault false;
       };
+
+      # The XR829 has no burned-in MAC, so the driver picks a random one on
+      # every boot (and reports it as permanent, so a .link
+      # MACAddressPolicy=persistent leaves it alone): new IPs each boot, and
+      # Avahi then sees its own name as taken ("mortar-2.local"). Set a
+      # stable, locally administered MAC derived from /etc/machine-id before
+      # iwd starts.
+      systemd.services.mortar-wlan-mac = {
+        description = "Stable MAC address for the XR829 Wi-Fi";
+        wantedBy = [ "sys-subsystem-net-devices-wlan0.device" ];
+        bindsTo = [ "sys-subsystem-net-devices-wlan0.device" ];
+        after = [ "sys-subsystem-net-devices-wlan0.device" ];
+        before = [ "iwd.service" "network-pre.target" ];
+        wants = [ "network-pre.target" ];
+        path = [ pkgs.coreutils pkgs.iproute2 ];
+        serviceConfig = { Type = "oneshot"; RemainAfterExit = true; };
+        script = ''
+          h=$(printf 'mortar-wlan:%s' "$(cat /etc/machine-id)" | sha256sum | cut -c1-10)
+          # 02:... = locally administered, unicast
+          mac="02:$(echo "$h" | sed 's/../&:/g; s/:$//')"
+          ip link set dev wlan0 down
+          ip link set dev wlan0 address "$mac"
+          echo "wlan0 MAC set to $mac"
+        '';
+      };
     }
 
     (lib.mkIf cfg.bluetooth.enable {
