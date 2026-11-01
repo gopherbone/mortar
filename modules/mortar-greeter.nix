@@ -130,7 +130,12 @@ let
       }) profiles;
       sessions = map (s: {
         inherit (s) id name description icon env needsWifi;
-        command = if builtins.isString s.command then [ "${pkgs.runtimeShell}" "-c" s.command ] else s.command;
+        # greetd joins cmd with spaces and runs it with `sh -c "exec <cmd>"`,
+        # so every word must already be shell-quoted. (Unquoted, a string
+        # command "exec foo" became `bash -c exec foo`: a no-op session.)
+        command = map lib.escapeShellArg (
+          if builtins.isString s.command then [ "${pkgs.runtimeShell}" "-c" s.command ] else s.command
+        );
       }) sessions;
       stateDir = cfg.stateDir;
       switchDir = "/run/mortar-greeter";
