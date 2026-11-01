@@ -86,6 +86,11 @@ let
   # kms_swrast) that buffer is uncached write-combined CMA: reads from it
   # cost several times the whole frame. Draw it opaque instead.
   m8c' = m8c.overrideAttrs (old: {
+    # Ask the M8 for a full screen after a resize or when shown again (it
+    # only sends changed cells, so content was missing until selected),
+    # and stop presenting while the compositor has us hidden.
+    patches = (old.patches or [ ]) ++ [ ./redraw-and-occlusion.patch ];
+    patchFlags = [ "-p1" ];
     postPatch = (old.postPatch or "") + ''
       substituteInPlace src/render.c --replace-fail \
         'SDL_SetTextureScaleMode(main_texture, texture_scaling_mode);' \

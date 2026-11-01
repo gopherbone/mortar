@@ -1,0 +1,57 @@
+diff -ru a/src/common.h b/src/common.h
+--- a/src/common.h	2026-11-01 01:39:44
++++ b/src/common.h	2026-11-01 01:39:45
+@@ -16,6 +16,7 @@
+     char *preferred_device;
+     unsigned char device_connected;
+     unsigned char app_suspended;
++    unsigned char window_occluded; // hidden by the compositor: skip presenting
+   };
+   
+ #endif
+\ No newline at end of file
+diff -ru a/src/events.c b/src/events.c
+--- a/src/events.c	2026-11-01 01:39:44
++++ b/src/events.c	2026-11-01 01:39:45
+@@ -20,9 +20,28 @@
+     ret_val = SDL_APP_SUCCESS;
+     break;
+   case SDL_EVENT_WINDOW_RESIZED:
++  case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
++    // A resize can recreate the render target and lose what the M8 drew;
++    // the M8 only sends changed cells, so ask it for a full screen again.
++    renderer_fix_texture_scaling_after_window_resize(&ctx->conf);
++    if (ctx->device_connected)
++      m8_reset_display();
++    break;
+   case SDL_EVENT_WINDOW_MOVED:
+     // If the window size is changed, some systems might need a little nudge to fix scaling
+     renderer_fix_texture_scaling_after_window_resize(&ctx->conf);
++    break;
++  case SDL_EVENT_WINDOW_OCCLUDED:
++    // Hidden by the compositor (e.g. another app in front): keep reading
++    // the M8 so the screen texture stays current, but stop presenting.
++    ctx->window_occluded = 1;
++    break;
++  case SDL_EVENT_WINDOW_EXPOSED:
++    if (ctx->window_occluded) {
++      ctx->window_occluded = 0;
++      if (ctx->device_connected)
++        m8_reset_display();
++    }
+     break;
+ 
+   // --- iOS specific events ---
+diff -ru a/src/main.c b/src/main.c
+--- a/src/main.c	2026-11-01 01:39:44
++++ b/src/main.c	2026-11-01 01:39:54
+@@ -126,7 +126,8 @@
+     } else if (result == DEVICE_FATAL_ERROR) {
+       return SDL_APP_FAILURE;
+     }
+-    render_screen(&ctx->conf);
++    if (!ctx->window_occluded) // hidden: nothing to present
++      render_screen(&ctx->conf);
+     break;
+   }
+ 
