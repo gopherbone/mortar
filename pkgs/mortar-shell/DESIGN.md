@@ -434,6 +434,17 @@ with any client that takes keyboard input.
   L2 Esc, START or "hide" closes it.
 - A strip along its top shows the pad legend, or, in a terminal running
   zsh, suggestion chips (below).
+- It slides up and down on a critically damped spring (~180 ms;
+  `comp/osk_slide.rs`; Reduce motion: at once), on the pixman and GLES
+  paths alike. The app is reconfigured at the start of either slide; until
+  it commits at the new size its old buffer stays, and the strip below a
+  keyboard app that is shorter than the screen is filled with its own
+  bottom row (pixman: a solid element in its edge colour; scene/GLES: the
+  last row stretched), never the black clear colour. That black band, for
+  the frames between closing and the terminal redrawing at full height
+  (and, on the scene path, while it shrank), was the flash. The headless
+  test steps UI time through both slides and fails on a frame that is
+  black over more than 1% or one flat colour.
 - Later: a text-input-v3 aware mode that pops up only when a field is
   focused, and a symbols layer.
 

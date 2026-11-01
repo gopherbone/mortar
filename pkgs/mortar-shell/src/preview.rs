@@ -220,6 +220,7 @@ pub fn run(o: &Opts) -> Result<(), String> {
         current,
         keyboard_app: true,
         osk_h,
+        osk_drop: 0.0,
         host,
         timezone: "Europe/Lisbon",
         radios: Radios { wifi: Some(true), bluetooth: Some(true) },

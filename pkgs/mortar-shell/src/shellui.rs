@@ -124,6 +124,8 @@ pub struct View<'a> {
     pub keyboard_app: bool,
     /// Height of the on-screen keyboard strip when it shows (0: hidden).
     pub osk_h: f32,
+    /// How far it is still below its place while it slides (0: up).
+    pub osk_drop: f32,
     pub host: &'a str,
     /// The current time zone ("Europe/Lisbon", "UTC").
     pub timezone: &'a str,
@@ -1787,12 +1789,19 @@ impl ShellUi {
             if a.has_buffer {
                 let g = a.geom;
                 b.image(Src::App(uid), g[0], g[1], g[2], g[3], [0.0, 0.0, 1.0, 1.0]);
+                // a keyboard app shorter than the screen (the keyboard is
+                // sliding, or it closed and the app has not drawn at full
+                // height yet): its bottom row continues down, not black
+                let bottom = g[1] + g[3];
+                if v.keyboard_app && v.current == Some(uid) && g[1] <= 0.5 && g[3] >= 1.0 && bottom < H - 0.5 {
+                    b.image(Src::App(uid), g[0], bottom, g[2], H - bottom, [0.0, 1.0 - 1.0 / g[3], 1.0, 1.0]);
+                }
             } else {
                 self.splash(b, &self.pal(), a.art, &a.name, 0.0);
             }
         }
         if osk && v.osk_h > 0.0 && v.current == Some(uid) {
-            b.image(Src::Layer(Layer::Osk), 0.0, H - v.osk_h, W, v.osk_h, [0.0, 0.0, 1.0, 1.0]);
+            b.image(Src::Layer(Layer::Osk), 0.0, H - v.osk_h + v.osk_drop, W, v.osk_h, [0.0, 0.0, 1.0, 1.0]);
         }
     }
 
@@ -2390,6 +2399,7 @@ mod tests {
             current,
             keyboard_app: false,
             osk_h: 0.0,
+            osk_drop: 0.0,
             host: "brick",
             timezone: "Europe/Lisbon",
             radios: Radios { wifi: Some(true), bluetooth: None },

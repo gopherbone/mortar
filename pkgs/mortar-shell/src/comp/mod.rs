@@ -8,6 +8,7 @@ pub mod drm;
 pub mod gl;
 pub mod gpu;
 pub mod input;
+pub mod osk_slide;
 pub mod pads;
 pub mod scanout;
 pub mod state;

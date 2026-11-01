@@ -247,6 +247,7 @@ fn state(shell: &Shell) -> String {
         "visible": vis,
         "osk": shell.osk.visible,
         "chips": shell.suggest_labels(),
+        "osk_px": shell.osk_shown_h(),
         "sleep": format!("{:?}", shell.sui.sleep_phase()),
         "power_menu": shell.sui.power_menu_open(),
         "resumes": shell.resumes,

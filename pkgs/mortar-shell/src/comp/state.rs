@@ -160,6 +160,8 @@ pub struct Shell {
     /// The UI is drawn on the GPU (else on the CPU).
     pub gpu_ui: bool,
     pub osk: Osk,
+    /// The keyboard sliding in and out (osk_slide.rs).
+    pub osk_slide: super::osk_slide::OskSlide,
     /// Suggestion chips above the OSK (suggest.rs).
     pub suggest: super::suggest::Suggest,
     pub router: Router,
@@ -327,6 +329,7 @@ impl Shell {
             last_input: Instant::now(),
             gpu_ui,
             osk: Osk::default(),
+            osk_slide: Default::default(),
             suggest: Default::default(),
             router: Router::default(),
             pads: Pads::default(),
@@ -386,7 +389,7 @@ impl Shell {
     /// Over shm apps (foot) the damage-tracked pixman copy stays.
     fn osk_on_gpu(&self) -> bool {
         self.gpu_ui
-            && self.osk.visible
+            && self.osk_shown()
             && self.visible_window().and_then(|w| w.toplevel().map(|t| t.wl_surface().clone())).is_some_and(|s| is_dmabuf(&s))
     }
 
@@ -575,7 +578,7 @@ impl Shell {
                 t = t.min(Duration::from_secs_f64(d));
             }
         }
-        if self.power_down.is_some() {
+        if self.power_down.is_some() || (!self.manual_time && self.osk_sliding()) {
             t = t.min(Duration::from_millis(16));
         }
         if let Some(at) = self.suspend_at {
@@ -723,6 +726,9 @@ impl Shell {
             self.needs_redraw = true;
         }
         self.ui_dirty = false;
+        if self.osk_slide_tick() {
+            self.needs_redraw = true;
+        }
         self.update_layers();
         if self.dark {
             // asleep: the last (black) frame stays; nothing is drawn
@@ -1290,7 +1296,7 @@ impl CompositorHandler for Shell {
                 if shown || in_scene {
                     // the CPU renders this app's dma-buf from write-combined
                     // memory: hold those redraws to SLOW_COMPOSITE
-                    let cpu_reads = is_dmabuf(&root) && !self.gpu_ui && (self.osk.visible || in_scene);
+                    let cpu_reads = is_dmabuf(&root) && !self.gpu_ui && (self.osk_shown() || in_scene);
                     if cpu_reads && self.sui.pace(self.visible_app().is_some()) != Pace::Full {
                         self.slow_redraw = true;
                     } else {

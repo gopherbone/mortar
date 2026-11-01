@@ -263,7 +263,8 @@ impl Shell {
         let (running, launcher) = self.view_parts();
         let host = self.host.clone();
         let timezone = self.timezone.clone();
-        let osk_h = if self.osk.visible { self.osk_height() as f32 } else { 0.0 };
+        let osk_h = if self.osk_shown() { self.osk_height() as f32 } else { 0.0 };
+        let osk_drop = if self.osk_shown() { (self.osk_height() - self.osk_shown_h()) as f32 } else { 0.0 };
         let update = self.update.view.clone();
         let v = View {
             running: &running,
@@ -273,6 +274,7 @@ impl Shell {
             current: self.visible_app(),
             keyboard_app: self.keyboard_app(),
             osk_h,
+            osk_drop,
             host: &host,
             timezone: &timezone,
             radios: self.radios,
@@ -311,6 +313,7 @@ impl Shell {
             self.handle_outs(outs);
             left -= dt;
         }
+        self.osk_slide_step(ms as f32 / 1000.0);
         self.sync_cover();
         self.needs_redraw = true;
     }

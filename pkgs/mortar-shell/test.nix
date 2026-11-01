@@ -21,6 +21,7 @@
   tzdata,
   zsh,
   zsh-autosuggestions,
+  python3,
 }:
 
 let
@@ -39,6 +40,54 @@ let
     source ${zsh-autosuggestions}/share/zsh-autosuggestions/zsh-autosuggestions.zsh
     source ${mortar-shell}/share/mortar-shell/mortar-osk.zsh
     PS1='%~ > '
+  '';
+  # Frames around the keyboard opening/closing: none may show the black
+  # clear colour over more than 1% of the screen, or be one flat colour.
+  framecheck = writeText "framecheck.py" ''
+    import struct, sys, zlib
+    from collections import Counter
+
+    def rgb_rows(path):
+        d = open(path, "rb").read()
+        i, idat = 8, b""
+        while i < len(d):
+            n = struct.unpack(">I", d[i:i + 4])[0]
+            t, c = d[i + 4:i + 8], d[i + 8:i + 8 + n]
+            if t == b"IHDR":
+                w, h, _, ct = struct.unpack(">IIBB", c[:10])
+            elif t == b"IDAT":
+                idat += c
+            i += 12 + n
+        bpp = {2: 3, 6: 4}[ct]
+        raw, stride, prev, out = zlib.decompress(idat), w * bpp, bytearray(w * bpp), []
+        for y in range(h):
+            f, line = raw[y * (stride + 1)], bytearray(raw[y * (stride + 1) + 1:(y + 1) * (stride + 1)])
+            for x in range(stride):
+                a = line[x - bpp] if x >= bpp else 0
+                b, cc = prev[x], prev[x - bpp] if x >= bpp else 0
+                if f == 1: line[x] = (line[x] + a) & 255
+                elif f == 2: line[x] = (line[x] + b) & 255
+                elif f == 3: line[x] = (line[x] + (a + b) // 2) & 255
+                elif f == 4:
+                    p = a + b - cc
+                    pa, pb, pc = abs(p - a), abs(p - b), abs(p - cc)
+                    line[x] = (line[x] + (a if pa <= pb and pa <= pc else b if pb <= pc else cc)) & 255
+            out.append([bytes(line[i:i + 3]) for i in range(0, stride, bpp * 4)])  # every 4th pixel
+            prev = line
+        return out
+
+    bad = []
+    for path in sys.argv[1:]:
+        px = Counter()
+        for row in rgb_rows(path)[::4]:
+            px.update(row)
+        n = sum(px.values())
+        black = px[b"\0\0\0"] / n
+        top = px.most_common(1)[0][1] / n
+        if black > 0.01 or top > 0.999:
+            bad.append(f"{path}: black {black:.1%}, one colour {top:.1%}")
+    print("\n".join(bad) or "frames ok")
+    sys.exit(1 if bad else 0)
   '';
   zdotdir = runCommand "mortar-test-zdotdir" { } "mkdir $out; cp ${zshrc} $out/.zshrc";
   config = writeText "mortar-shell-test.json" (
@@ -100,7 +149,7 @@ in
 # package's passthru.tests.headless) fails unless $out/result says PASS.
 runCommand "mortar-shell-headless-test"
   {
-    nativeBuildInputs = [ mortar-shell jq ];
+    nativeBuildInputs = [ mortar-shell jq python3 ];
     FONTCONFIG_FILE = makeFontsConf { fontDirectories = [ dejavu_fonts ]; };
   }
   ''
@@ -402,6 +451,27 @@ runCommand "mortar-shell-headless-test"
     shot 13-osk-chip-typed
     ctl press start
     wait_for '.osk == false and (.chips | length) == 0'
+
+    echo "== the keyboard slides in and out, and no frame flashes (UI time stepped)"
+    keys 31 18 16 57 4 11 28                    # seq 30: the prompt at the bottom
+    sleep 0.8
+    ctl time manual
+    ctl press start
+    i=0; for t in 0 30 30 30 30 60 120 300; do
+      i=$((i + 1)); ctl time +$t >/dev/null; shot "f-open-$i-$(ctl state | jq .osk_px)px"
+    done
+    jq -e '.osk_px > 300' <(ctl state) >/dev/null || echo "FAIL: keyboard up after opening" >> $out/result
+    ls $out | grep -q -E '^f-open-[0-9]-([1-9]|[1-9][0-9]|[1-2][0-9][0-9])px' \
+      || echo "FAIL: no frame with the keyboard part way up" >> $out/result
+    sleep 0.5; shot f-open-settled
+    ctl press start
+    i=0; for t in 0 30 30 30 30 60 120 300; do
+      i=$((i + 1)); ctl time +$t >/dev/null; shot "f-close-$i-$(ctl state | jq .osk_px)px"
+    done
+    jq -e '.osk_px == 0' <(ctl state) >/dev/null || echo "FAIL: keyboard gone after closing" >> $out/result
+    sleep 0.5; shot f-close-settled
+    ctl time real
+    python3 ${framecheck} $out/f-*.png >> $out/frames.txt || echo "FAIL: frames: $(cat $out/frames.txt)" >> $out/result
 
     ctl quit
     wait $shell || true

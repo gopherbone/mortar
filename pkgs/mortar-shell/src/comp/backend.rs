@@ -20,6 +20,7 @@ use smithay::backend::allocator::format::FormatSet;
 use smithay::backend::allocator::Fourcc;
 use smithay::backend::renderer::damage::OutputDamageTracker;
 use smithay::backend::renderer::element::memory::MemoryRenderBufferRenderElement;
+use smithay::backend::renderer::element::solid::{SolidColorBuffer, SolidColorRenderElement};
 use smithay::backend::renderer::element::surface::WaylandSurfaceRenderElement;
 use smithay::backend::renderer::element::{render_elements, AsRenderElements, Kind};
 use smithay::backend::renderer::pixman::PixmanRenderer;
@@ -44,6 +45,7 @@ render_elements! {
     pub ShellElement<R> where R: ImportAll + ImportMem;
     Surface=WaylandSurfaceRenderElement<R>,
     Memory=MemoryRenderBufferRenderElement<R>,
+    Solid=SolidColorRenderElement,
 }
 
 /// The visible app's buffer, copied into memory the renderer treats as
@@ -62,6 +64,10 @@ pub struct OpaqueCopy {
     buf: MemoryRenderBuffer,
     size: (i32, i32),
     commit: Option<CommitCounter>,
+    /// The colour of its bottom-left pixel (a terminal's background), for
+    /// the strip below it while it is shorter than its area.
+    edge: [f32; 4],
+    fill: SolidColorBuffer,
 }
 
 fn opaque_copy<R>(shell: &mut Shell, r: &mut R, surface: &WlSurface, loc: Point<i32, Physical>) -> Option<MemoryRenderBufferRenderElement<R>>
@@ -84,7 +90,13 @@ where
         let o = &shell.opaque[&id];
         return MemoryRenderBufferRenderElement::from_buffer(r, loc.to_f64(), &o.buf, None, Some(view.src), Some(view.dst), Kind::Unspecified).ok();
     }
-    let entry = shell.opaque.entry(id).or_insert_with(|| OpaqueCopy { buf: xrgb_buffer(1, 1), size: (1, 1), commit: None });
+    let entry = shell.opaque.entry(id).or_insert_with(|| OpaqueCopy {
+        buf: xrgb_buffer(1, 1),
+        size: (1, 1),
+        commit: None,
+        edge: [0.0, 0.0, 0.0, 1.0],
+        fill: SolidColorBuffer::new((1, 1), [0.0, 0.0, 0.0, 1.0]),
+    });
     let ok = with_buffer_contents(&buffer, |ptr, len, data| {
         if !matches!(data.format, wl_shm::Format::Argb8888 | wl_shm::Format::Xrgb8888) {
             return false;
@@ -107,6 +119,9 @@ where
         // SAFETY: bounds checked above; the client may scribble concurrently
         // (its problem, as with any shm compositor)
         let src = unsafe { std::slice::from_raw_parts(ptr.add(off), stride * h as usize) };
+        // XRGB little-endian: B, G, R, X
+        let px = &src[(h as usize - 1) * stride..(h as usize - 1) * stride + 4];
+        entry.edge = [px[2] as f32 / 255.0, px[1] as f32 / 255.0, px[0] as f32 / 255.0, 1.0];
         let mut ctx = entry.buf.render();
         let _ = ctx.draw(|mem: &mut [u8]| {
             let dst_stride = w as usize * 4;
@@ -154,8 +169,9 @@ where
         return out;
     }
     let area = shell.app_area();
-    if shell.osk.visible
-        && let Some(e) = mem(r, (0.0, (shell.size.1 - shell.osk_height()) as f64), &shell.osk_buf)
+    // the keyboard, sliding (osk_slide.rs): its top shows first
+    if shell.osk_shown()
+        && let Some(e) = mem(r, (0.0, (shell.size.1 - shell.osk_shown_h()) as f64), &shell.osk_buf)
     {
         out.push(ShellElement::Memory(e));
     }
@@ -172,7 +188,20 @@ where
             w.toplevel().map(|t| t.wl_surface().clone()).and_then(|s| opaque_copy(shell, r, &s, loc))
         };
         match fast {
-            Some(e) => out.push(ShellElement::Memory(e)),
+            Some(e) => {
+                out.push(ShellElement::Memory(e));
+                // Shorter than the screen (the keyboard just closed and the
+                // app has not drawn at full height yet, or the keyboard is
+                // still sliding over the gap): fill below it with its own
+                // edge colour, not black.
+                let bottom = (loc.y + geo.loc.y + geo.size.h).max(0);
+                if bottom < shell.size.1 && loc.y + geo.loc.y == 0 && shell.keyboard_app()
+                    && let Some(o) = w.toplevel().and_then(|t| shell.opaque.get_mut(&t.wl_surface().id()))
+                {
+                    o.fill.update((shell.size.0, shell.size.1 - bottom), o.edge);
+                    out.push(ShellElement::Solid(SolidColorRenderElement::from_buffer(&o.fill, (0, bottom), 1.0, 1.0, Kind::Unspecified)));
+                }
+            }
             None => {
                 let els: Vec<WaylandSurfaceRenderElement<R>> = w.render_elements(r, loc, Scale::from(1.0), 1.0);
                 out.extend(els.into_iter().map(ShellElement::Surface));
