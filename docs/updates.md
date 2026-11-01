@@ -112,12 +112,12 @@ CI gets a read-only deploy key for it:
 ```sh
 ssh-keygen -t ed25519 -N "" -C mortar-ci -f /tmp/puzzlescript-deploy
 gh repo deploy-key add /tmp/puzzlescript-deploy.pub -R gopherbone/puzzlescript_pd -t mortar-ci
-gh secret set PUZZLESCRIPT_DEPLOY_KEY -R gopherbone/trimui_nix < /tmp/puzzlescript-deploy
+gh secret set PUZZLESCRIPT_DEPLOY_KEY -R gopherbone/mortar < /tmp/puzzlescript-deploy
 rm /tmp/puzzlescript-deploy /tmp/puzzlescript-deploy.pub
 
-gh secret set NIX_SIGNING_KEY -R gopherbone/trimui_nix < ~/.config/mortar/signing-key
-gh secret set R2_ACCESS_KEY_ID -R gopherbone/trimui_nix        # mortar-ci Access Key ID
-gh secret set R2_SECRET_ACCESS_KEY -R gopherbone/trimui_nix    # mortar-ci Secret Access Key
+gh secret set NIX_SIGNING_KEY -R gopherbone/mortar < ~/.config/mortar/signing-key
+gh secret set R2_ACCESS_KEY_ID -R gopherbone/mortar        # mortar-ci Access Key ID
+gh secret set R2_SECRET_ACCESS_KEY -R gopherbone/mortar    # mortar-ci Secret Access Key
 ```
 
 (`gh secret set NAME` without `<` asks for the value.) Check that Actions
@@ -128,7 +128,7 @@ Builds on push stay off until you turn them on, so pushes don't spend
 minutes or fail before the secrets exist:
 
 ```sh
-gh variable set MORTAR_CI -R gopherbone/trimui_nix --body true
+gh variable set MORTAR_CI -R gopherbone/mortar --body true
 ```
 
 ### 5. Your Mac as a fallback publisher (optional)
