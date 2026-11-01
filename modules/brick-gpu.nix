@@ -17,6 +17,12 @@
 # software GL if the app fails to start that way. MORTAR_SDL=software
 # skips the GPU attempt. Only one GL app can own the DC at a time.
 #
+# Inside mortar-shell the shell owns the display, so the DC path is off
+# limits; the shell sets MORTAR_SDL=wayland-gpu and apps run as Wayland
+# clients on the same stock EGL through mortar-wlegl (pkgs/mortar-wlegl):
+# GPU-rendered dma-bufs that the shell scans out directly. Any number of
+# such apps can run at once. Same fallback to software GL.
+#
 # Notes: a GPU fault can latch the GPU until reboot. A GL window app replaces
 # the console on screen while it runs; the console comes back when it exits.
 { config, lib, pkgs, ... }:
@@ -41,10 +47,16 @@ in
       defaultText = lib.literalExpression "pkgs.callPackage ../pkgs/pvr-ddk-userspace.nix { ... }";
       description = "Stock PowerVR userspace libraries.";
     };
+    wlegl = lib.mkOption {
+      type = lib.types.package;
+      default = pkgs.callPackage ../pkgs/mortar-wlegl { pvr-ddk = cfg.package; };
+      defaultText = lib.literalExpression "pkgs.callPackage ../pkgs/mortar-wlegl { pvr-ddk = config.mortar.gpu.package; }";
+      description = "Wayland EGL platform for the stock EGL (GPU apps inside mortar-shell).";
+    };
     sdl3 = lib.mkOption {
       type = lib.types.package;
-      default = pkgs.callPackage ../pkgs/sdl3-pvr { pvr-ddk = cfg.package; };
-      defaultText = lib.literalExpression "pkgs.callPackage ../pkgs/sdl3-pvr { pvr-ddk = config.mortar.gpu.package; }";
+      default = pkgs.callPackage ../pkgs/sdl3-pvr { pvr-ddk = cfg.package; mortar-wlegl = cfg.wlegl; };
+      defaultText = lib.literalExpression "pkgs.callPackage ../pkgs/sdl3-pvr { pvr-ddk = config.mortar.gpu.package; mortar-wlegl = config.mortar.gpu.wlegl; }";
       description = "SDL3 with the PowerVR (vivante-style) video backend.";
     };
     sdlRun = lib.mkOption {
@@ -60,6 +72,8 @@ in
       runtimeInputs = [ pkgs.coreutils ];
       text = ''
         # usage: mortar-sdl-run APP [ARGS...]
+        # MORTAR_SDL: unset = GPU on the panel (DC), wayland-gpu = GPU as a
+        # Wayland client (mortar-shell), software = Mesa llvmpipe only.
         if [ "''${MORTAR_SDL:-}" = software ] || ${if cfg.enable then "false" else "true"}; then
           exec "$@"
         fi
@@ -68,8 +82,13 @@ in
         # the DC). Then run it again on software GL.
         start=$(date +%s)
         status=0
-        ${lib.concatStringsSep " " (lib.mapAttrsToList (k: v: "${k}=${lib.escapeShellArg v}") cfg.sdl3.env)} \
-          "$@" || status=$?
+        if [ "''${MORTAR_SDL:-}" = wayland-gpu ]; then
+          ${lib.concatStringsSep " " (lib.mapAttrsToList (k: v: "${k}=${lib.escapeShellArg v}") cfg.sdl3.envWayland)} \
+            "$@" || status=$?
+        else
+          ${lib.concatStringsSep " " (lib.mapAttrsToList (k: v: "${k}=${lib.escapeShellArg v}") cfg.sdl3.env)} \
+            "$@" || status=$?
+        fi
         if [ "$status" -ne 0 ] && [ $(( $(date +%s) - start )) -lt 5 ]; then
           echo "mortar-sdl-run: GPU start failed ($status), using software GL" >&2
           exec "$@"
@@ -90,6 +109,7 @@ in
     environment.systemPackages = [
       cfg.package
       (pkgs.callPackage ../pkgs/mortar-gpu-tests { pvr-ddk = cfg.package; })
+      cfg.wlegl # mortar-wlegl-demo
       cfg.sdlRun
     ];
   }) ];
