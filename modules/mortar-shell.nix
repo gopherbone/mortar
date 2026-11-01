@@ -150,10 +150,12 @@ let
         command = argv a.command;
       }) sorted;
       inherit (cfg) autostart backgroundFps theme keyboardLayout;
-      # SDL apps that would take the GPU's display path (mortar-sdl-run,
-      # modules/brick-gpu.nix) must stay on software GL: the shell owns
-      # the display, so they render as Wayland clients.
-      env = { MORTAR_SDL = "software"; } // cfg.environment;
+      # SDL apps started through mortar-sdl-run (modules/brick-gpu.nix)
+      # must not take the GPU's display path (brick_dc_drm drives the CRTC,
+      # and the shell owns it). With gpuApps they render on the GPU as
+      # Wayland clients (mortar-wlegl dma-bufs, scanned out directly),
+      # otherwise on software GL.
+      env = { MORTAR_SDL = if cfg.gpuApps then "wayland-gpu" else "software"; } // cfg.environment;
     }
   );
 
@@ -270,6 +272,18 @@ in
       type = types.attrsOf types.str;
       default = { };
       description = "Environment for every app.";
+    };
+
+    gpuApps = mkOption {
+      type = types.bool;
+      default = config.mortar.gpu.enable or false;
+      defaultText = lib.literalExpression "config.mortar.gpu.enable";
+      description = ''
+        Run SDL apps started through `mortar-sdl-run` on the PowerVR as
+        Wayland clients (pkgs/mortar-wlegl; the shell scans their buffers
+        out without a copy), falling back to software GL if that fails.
+        Off: software GL (Mesa llvmpipe) only.
+      '';
     };
 
     exclusive = mkOption {

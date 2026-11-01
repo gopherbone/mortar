@@ -6,6 +6,7 @@ pub mod ctl;
 pub mod drm;
 pub mod input;
 pub mod pads;
+pub mod scanout;
 pub mod state;
 
 use backend::{Backend, Headless};

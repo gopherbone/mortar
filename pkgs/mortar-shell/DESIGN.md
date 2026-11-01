@@ -25,6 +25,7 @@ pkgs/mortar-shell/
     input.rs         evdev devices via the session, classification, grabs
     pads.rs          per-app uinput gamepads
     ctl.rs           control socket
+    scanout.rs       direct scanout of client dmabufs (PRIME import)
   test.nix           headless integration test (screenshots)
 modules/mortar-shell.nix
 ```
@@ -39,7 +40,7 @@ events, input fds, the control socket and a 2 s device rescan timer.
 ## Wayland surface
 
 Globals: wl_compositor/subcompositor, wl_shm, zwp_linux_dmabuf_v1 (formats
-the pixman renderer can import: linear), xdg_wm_base (toplevels and
+the pixman renderer can import: linear; GPU apps use XRGB8888), xdg_wm_base (toplevels and
 popups), wl_seat (keyboard), wl_output + xdg-output, wl_data_device_manager
 (clipboard). No pointer or touch yet (the Brick has neither), no
 server-side decorations (apps are fullscreen anyway), no XWayland.
@@ -173,7 +174,10 @@ with any client that takes keyboard input.
 
 ## Rendering
 
-Now: Smithay's pixman (CPU) renderer everywhere.
+The compositor renders with Smithay's pixman (CPU) renderer. GPU apps
+render on the PowerVR into dma-bufs that the shell puts straight on the
+display plane, so in the common case (one fullscreen app) the compositor
+copies nothing and the CPU is idle.
 
 - Composition is mostly one copy: the visible app's buffer is copied into
   the scanout buffer, damage-tracked, so an app that updates part of its
@@ -194,42 +198,139 @@ Now: Smithay's pixman (CPU) renderer everywhere.
 - Output: DRM/KMS through Smithay's `DrmCompositor`, swapchain buffers from
   GBM (Mesa's kms_swrast on sun4i, i.e. dumb buffers that pixman maps). If
   libgbm cannot open the card (or `MORTAR_SHELL_ALLOCATOR=dumb`), plain KMS
-  dumb buffers are used instead; only direct scanout is lost.
+  dumb buffers are used instead.
 - Direct scanout: when the only element is a client dmabuf that covers the
-  screen, `DrmCompositor` puts it on the primary plane with no copy (the
-  GBM framebuffer exporter imports client dmabufs). `ctl state` reports
-  `scanout_frames`. Today's clients (SDL on Mesa llvmpipe, foot) use
-  wl_shm, so they are copied; llvmpipe on Wayland would need a dmabuf
-  path (a render node) to benefit. `MORTAR_SHELL_NO_SCANOUT=1` disables it.
+  screen, `DrmCompositor` puts it on the primary plane with no copy.
+  Smithay's own exporters do not do that here (the GBM one only imports
+  client buffers when given an import node, the dumb one never), so
+  `comp/scanout.rs` (`ClientScanout`) wraps either exporter and
+  PRIME-imports single-plane linear XRGB/ARGB (XBGR/ABGR) client dmabufs
+  into sun4i and AddFB2s them; Smithay caches the framebuffer per buffer.
+  Anything else is composited. `ctl state` reports `scanout_frames`, the
+  log says when scanout starts and stops, `MORTAR_SHELL_NO_SCANOUT=1`
+  disables it.
 - Frame pacing: the visible app gets frame callbacks after each presented
   frame (vblank). Background apps get callbacks at `backgroundFps`
   (default 2) so SDL render loops keep ticking slowly instead of
   stalling; their audio threads are unaffected.
 - The element list (`backend::elements`) is generic over the Smithay
   renderer (`Renderer + ImportAll + ImportMem`). That is the seam for a GPU
-  renderer.
+  renderer, should one be needed (see below).
 
-Later: GLES on the PowerVR. What is needed:
+### GPU apps
 
-- The stock DDK 1.19 userspace has no GBM and only the NULL WSEGL. Smithay's
-  `GlesRenderer` needs an EGLDisplay plus `EGL_EXT_image_dma_buf_import`
-  to sample client buffers and to render into dmabufs. The display could
-  come from `EGL_PLATFORM_SURFACELESS` or the NULL WSEGL default display;
-  rendering into the GBM/dumb scanout buffers needs dmabuf import as a
-  render target (EGLImage + FBO). The README notes GLES already renders
-  into dma-bufs for KMS apps, so the pieces may exist; they need checking
-  against Smithay's EGL requirements (`EGL_KHR_surfaceless_context`,
-  `GL_OES_EGL_image`, the formats/modifiers query).
-- shm client buffers would be uploaded as textures (the same copy as now,
-  done by the GPU) unless clients render on the GPU too.
-- Apps on the GPU (mortar-sdl-run's vivante path) present through
-  brick_dc_drm, which flips the CRTC itself. That cannot coexist with a
-  compositor that owns KMS; inside the shell those apps must stay on
-  software GL (the module sets `MORTAR_SDL=software` for every app), or
-  get a Wayland EGL platform on the PowerVR (not in the stock DDK).
-- Selection: a `MORTAR_SHELL_RENDERER=gles` switch with pixman as the
-  fallback; the DRM compositor already takes the renderer as a type
-  parameter.
+Measured before: m8c in the shell on llvmpipe ~180% CPU; the same m8c from
+the greeter on the PowerVR (sdl3-pvr's vivante path, presenting through
+brick_dc_drm) 13%. The vivante path cannot run in the shell: brick_dc_drm
+drives the CRTC itself (as an in-kernel DRM client its commits get -EBUSY
+while the shell is DRM master, so the app would render to nowhere), and
+only one process can own it.
+
+The constraints: the stock DDK 1.19 userspace (GLES 3.2) has no GBM and no
+Wayland or DRM WSEGL, only the NULL one. It does have
+`EGL_EXT_image_dma_buf_import(_modifiers)`, `EGL_KHR_fence_sync` and
+`EGL_KHR_surfaceless_context`, and pkgs/mortar-gpu-tests' `kms-gles
+import` showed it rendering into sun4i dumb buffers imported as EGLImages
+(FBO target, 1.5 ms/frame, 60 fps on page flips). The display has no
+IOMMU, so a scanout buffer must be CMA (contiguous); sun4i dumb buffers
+are.
+
+Options:
+
+1. **Client side: a Wayland EGL platform for the stock EGL (chosen).**
+   `pkgs/mortar-wlegl`: a library that sits in front of the stock
+   libEGL/libGLESv2 (SDL loads it as both, via `SDL_EGL_LIBRARY` /
+   `SDL_OPENGL_LIBRARY`; whatever it does not wrap falls through to the
+   stock libs it links). `eglGetPlatformDisplay(WAYLAND)` returns the stock
+   default display, `eglCreateWindowSurface(wl_egl_window)` our surface:
+   up to 4 sun4i dumb buffers (PRIME-exported, imported once as EGLImages
+   and as `zwp_linux_dmabuf_v1` wl_buffers, XRGB8888 linear), the context
+   current surfaceless, "framebuffer 0" redirected to an FBO
+   (`glBindFramebuffer(0)`, `glGetIntegerv(FRAMEBUFFER_BINDING)`,
+   `GL_BACK` in DrawBuffers/ReadBuffer/Invalidate are wrapped). Swap:
+   discard depth/stencil, `glFinish` (no implicit dma-buf fencing in this
+   DDK config), attach + damage + commit, take a buffer the compositor
+   released. SDL's own Wayland backend works unchanged on top. Apps that
+   are not SDL work too (any EGL Wayland client that loads this library).
+   Several GPU apps can run at once (no DC involved). Zero copies when
+   the app renders top-down (below); the shell scans the buffer out.
+2. **Teach sdl3-pvr a Wayland mode** that renders into dma-buf EGLImages
+   itself. Same data path as 1, but SDL-only and a bigger SDL patch; 1
+   keeps SDL's Wayland backend as is, and gets the SDL-specific part down
+   to a few lines in the GLES2 renderer (orientation, below).
+3. **Compositor side: a GLES renderer for Smithay on the stock EGL**
+   (surfaceless display, dmabuf EGLImages, render into the scanout
+   buffers). It would make composited frames (OSD over an app, shm apps)
+   cheaper, but it does not by itself give apps a GPU path, and with
+   direct scanout the fullscreen GPU app needs no composition at all. It
+   would also put the shell, which must never die, on a GPU whose faults
+   latch it until reboot. Not done; mortar-wlegl already answers
+   `EGL_PLATFORM_SURFACELESS_MESA`, the first thing it would need.
+4. **Let apps keep presenting through brick_dc_drm** and have the shell
+   scan out the DC's buffers. Rejected: the DC drives the CRTC, it is one
+   process at a time, and those apps would not be Wayland clients (no
+   focus, frame callbacks or input routing).
+
+Orientation. GL's window origin is bottom-left, but an FBO texture keeps
+GL row 0 in memory row 0: rendered naively, the dma-buf is upside down for
+the display. mortar-wlegl has three modes, best first:
+
+- **topdown**: the app draws the window top row first, like a render
+  target. Negotiated per context: `glGetString(GL_EXTENSIONS)` lists
+  `GL_MORTAR_window_topdown` and the app calls `glWindowTopDownMORTAR(GL_TRUE)`.
+  sdl3-pvr's GLES2 renderer does (`pkgs/sdl3-pvr/wayland-pvr.patch`: SDL
+  already draws render targets that way, so it is the target branch of
+  viewport, scissor and projection, and no row flip in ReadPixels). The
+  FBO renders into the dma-buf, which goes to the plane: no copy at all.
+- **blit** (default for other apps): the app renders into a private
+  renderbuffer, blitted Y-flipped into the dma-buf at swap
+  (`glBlitFramebuffer`). One GPU copy (~3 MB), no CPU.
+- **transform** (GLES 2 contexts without blit): render into the dma-buf
+  and set `wl_surface.set_buffer_transform(FLIPPED_180)`; Smithay then
+  composites it (the sun4i planes have no reflect property).
+
+`MORTAR_WLEGL_MODE` forces one, `MORTAR_WLEGL_DEBUG=1` logs.
+
+Wiring: `mortar-sdl-run` (modules/brick-gpu.nix) has a `MORTAR_SDL=wayland-gpu`
+mode (sdl3-pvr's `envWayland`: SDL's Wayland backend, mortar-wlegl as EGL
+and GLES library, GLES2 renderer, `SDL_MORTAR_GL_DEFAULT_PROFILE=es2` so
+m8c's early `SDL_WINDOW_OPENGL` window gets a GLES config). The shell
+module sets it for every app when `mortar.shell.gpuApps` (default: when
+the GPU is enabled), else `software`. An app that fails within 5 s is run
+again on Mesa llvmpipe, as before.
+
+What is on screen when:
+
+| Screen | Path |
+|---|---|
+| GPU app alone | its dma-buf on the primary plane; the shell only flips |
+| MENU overlay / home | the opaque overlay, drawn by pixman into the swapchain; the app is not drawn; it is `suspended` and gets background-rate frame callbacks |
+| volume OSD or OSK over a GPU app | composited: pixman reads the app's dma-buf (write-combined, so slower than an shm copy) for those frames only |
+| shm app (foot, llvmpipe SDL) | opaque copy, as above |
+
+The OSD could go on an overlay plane over the scanned-out app instead
+(sun4i exposes UI overlay planes), but Smithay 0.7 only puts elements
+with a Wayland buffer on planes, not memory buffers; the OSD would have to
+be a dmabuf-backed element of our own. Not worth it for a 1.5 s toast.
+
+Focus switching needs nothing special: a background GPU app keeps
+rendering at the background frame rate (SDL's 50 ms swap timeout) or
+idles if it honours `suspended` (m8c does); the shell holds only its
+latest buffer. Switching back puts that buffer on the plane at once.
+
+Costs and limits:
+
+- CMA: each GPU app holds 1-4 dumb buffers of 3 MB (allocated as the
+  compositor holds them: on screen, queued, rendering), on top of the
+  shell's swapchain, brick_dc_drm's 3 buffers and the fbdev emulation.
+- The GPU latches until reboot after a fault; apps then fail at
+  eglInitialize/surface creation and mortar-sdl-run falls back to
+  software GL. The shell itself never touches the GPU.
+- eglInitialize on the stock libs needs a registered DC device, so
+  brick_dc_drm stays loaded; mortar-wlegl never creates DC window
+  surfaces.
+- One wl_display per process; a surface current in one context at a time;
+  no MSAA window configs.
 
 ## Memory budget
 
@@ -239,6 +340,7 @@ Later: GLES on the PowerVR. What is needed:
 | Scanout | 2-3 swapchain buffers x 3 MB (CMA/dumb) |
 | Per shm app | 2-3 client buffers x 3 MB, shared with the client |
 | SDL app on llvmpipe | ~160 MB RSS, mostly shared libraries (pkgs/mortar-apps notes) |
+| SDL app on the GPU (mortar-wlegl) | ~40-45 MB RSS (43 MB measured for m8c on the DC path) + 1-4 x 3 MB CMA dma-bufs |
 | foot | ~15-20 MB |
 
 So M8 + terminal + shell is roughly 250-280 MB of the ~970 MB, leaving room for

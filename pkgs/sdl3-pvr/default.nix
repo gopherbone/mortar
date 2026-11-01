@@ -17,7 +17,14 @@
 #
 # Same soname and ABI as nixpkgs' SDL3, so existing SDL3 apps use it via
 # LD_LIBRARY_PATH (see passthru.env / mortar.gpu.sdlEnv).
-{ lib, stdenv, sdl3, pvr-ddk, writeTextDir }:
+#
+# Inside mortar-shell (a Wayland compositor owns the display, so the DC path
+# is off limits) apps use SDL's Wayland backend instead, on the same stock
+# EGL through mortar-wlegl (pkgs/mortar-wlegl): GPU-rendered dma-bufs the
+# shell scans out directly. wayland-pvr.patch lets the GLES2 renderer draw
+# the window top-down there (no flip, no copy) and defaults GL to ES 2.0.
+# passthru.envWayland is that environment.
+{ lib, stdenv, sdl3, pvr-ddk, mortar-wlegl, writeTextDir }:
 
 let
   fbwin = stdenv.mkDerivation {
@@ -37,8 +44,9 @@ let
 
   sdl = sdl3.overrideAttrs (old: {
     pname = "sdl3-pvr";
-    # fb* calls from libpvr-fbwin.so; NULL native window; GLES 2 by default
-    patches = (old.patches or [ ]) ++ [ ./vivante-pvr.patch ];
+    # fb* calls from libpvr-fbwin.so; NULL native window; GLES 2 by default.
+    # Wayland on mortar-wlegl: top-down window in the GLES2 renderer.
+    patches = (old.patches or [ ]) ++ [ ./vivante-pvr.patch ./wayland-pvr.patch ];
     postPatch = (old.postPatch or "") + ''
       substituteInPlace CMakeLists.txt --replace-fail \
         '"Use Vivante EGL video driver" ON "''${UNIX_SYS};SDL_CPU_ARM32" OFF' \
@@ -64,7 +72,7 @@ let
     # nixpkgs' SDL3 runs its test suite; the vivante backend adds nothing to it
     doCheck = false;
     passthru = (old.passthru or { }) // {
-      inherit fbwin;
+      inherit fbwin mortar-wlegl;
       # Run an SDL3 app on the GPU: SDL_VIDEO_DRIVER=vivante, IMG EGL/GLES.
       env = {
         LD_LIBRARY_PATH = "${lib.getLib sdl}/lib";
@@ -72,6 +80,15 @@ let
         SDL_EGL_LIBRARY = "${pvr-ddk}/lib/libEGL.so.1";
         SDL_OPENGL_LIBRARY = "${pvr-ddk}/lib/libGLESv2.so";
         SDL_RENDER_DRIVER = "opengles2";
+      };
+      # Run an SDL3 app on the GPU as a Wayland client (inside mortar-shell).
+      envWayland = {
+        LD_LIBRARY_PATH = "${lib.getLib sdl}/lib";
+        SDL_VIDEO_DRIVER = "wayland";
+        SDL_EGL_LIBRARY = "${mortar-wlegl}/lib/libmortar-wlegl.so";
+        SDL_OPENGL_LIBRARY = "${mortar-wlegl}/lib/libmortar-wlegl.so";
+        SDL_RENDER_DRIVER = "opengles2";
+        SDL_MORTAR_GL_DEFAULT_PROFILE = "es2";
       };
     };
   });

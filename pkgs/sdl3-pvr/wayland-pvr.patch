@@ -1,0 +1,112 @@
+SDL3 on Wayland with the PowerVR stock EGL through mortar-wlegl
+(pkgs/mortar-wlegl), for apps inside mortar-shell.
+
+- GLES2 renderer: if the GL context lists GL_MORTAR_window_topdown (only
+  mortar-wlegl does), call glWindowTopDownMORTAR(GL_TRUE) and draw the
+  window framebuffer top row first, the way SDL already draws render-target
+  textures (viewport, scissor and projection Y; no row flip in ReadPixels).
+  The window buffer is then a correctly oriented dma-buf the compositor can
+  scan out with no copy. Without the extension nothing changes.
+- SDL_MORTAR_GL_DEFAULT_PROFILE=es2: default GL attributes to ES 2.0, so a
+  window created with SDL_WINDOW_OPENGL before a renderer (m8c) finds an
+  EGL config on a GLES-only EGL. The vivante backend does the same through
+  its GL_DefaultProfileConfig (vivante-pvr.patch).
+
+diff -ru a/src/render/opengles2/SDL_render_gles2.c b/src/render/opengles2/SDL_render_gles2.c
+--- a/src/render/opengles2/SDL_render_gles2.c	2026-11-01 01:14:09
++++ b/src/render/opengles2/SDL_render_gles2.c	2026-11-01 01:15:05
+@@ -185,6 +185,9 @@
+ #include "SDL_gles2funcs.h"
+ #undef SDL_PROC
+     GLuint window_framebuffer;
++    /* The window framebuffer is stored top row first, like a render
++       target (mortar-wlegl's GL_MORTAR_window_topdown): no flip at present. */
++    bool window_topdown;
+ 
+     GLuint shader_id_cache[GLES2_SHADER_COUNT];
+ 
+@@ -1023,13 +1026,14 @@
+ 
+     if (data->drawstate.viewport_dirty) {
+         const SDL_Rect *viewport = &data->drawstate.viewport;
++        const bool topdown = data->drawstate.target || data->window_topdown;
+         data->glViewport(viewport->x,
+-                         data->drawstate.target ? viewport->y : (data->drawstate.drawableh - viewport->y - viewport->h),
++                         topdown ? viewport->y : (data->drawstate.drawableh - viewport->y - viewport->h),
+                          viewport->w, viewport->h);
+         if (viewport->w && viewport->h) {
+             data->drawstate.projection[0][0] = 2.0f / viewport->w;
+-            data->drawstate.projection[1][1] = (data->drawstate.target ? 2.0f : -2.0f) / viewport->h;
+-            data->drawstate.projection[3][1] = data->drawstate.target ? -1.0f : 1.0f;
++            data->drawstate.projection[1][1] = (topdown ? 2.0f : -2.0f) / viewport->h;
++            data->drawstate.projection[3][1] = topdown ? -1.0f : 1.0f;
+         }
+         data->drawstate.viewport_dirty = false;
+     }
+@@ -1047,7 +1051,7 @@
+         const SDL_Rect *viewport = &data->drawstate.viewport;
+         const SDL_Rect *rect = &data->drawstate.cliprect;
+         data->glScissor(viewport->x + rect->x,
+-                        data->drawstate.target ? viewport->y + rect->y : data->drawstate.drawableh - viewport->y - rect->y - rect->h,
++                        (data->drawstate.target || data->window_topdown) ? viewport->y + rect->y : data->drawstate.drawableh - viewport->y - rect->y - rect->h,
+                         rect->w, rect->h);
+         data->drawstate.cliprect_dirty = false;
+     }
+@@ -2241,7 +2245,8 @@
+     }
+ 
+     int y = rect->y;
+-    if (!renderer->target) {
++    const bool flip = !renderer->target && !data->window_topdown;
++    if (flip) {
+         int w, h;
+         SDL_GetRenderOutputSize(renderer, &w, &h);
+         y = (h - y) - rect->h;
+@@ -2254,7 +2259,7 @@
+     }
+ 
+     // Flip the rows to be top-down if necessary
+-    if (!renderer->target) {
++    if (flip) {
+         SDL_FlipSurface(surface, SDL_FLIP_VERTICAL);
+     }
+     return surface;
+@@ -2403,6 +2408,16 @@
+ 
+     data->glGetIntegerv(GL_FRAMEBUFFER_BINDING, &window_framebuffer);
+     data->window_framebuffer = (GLuint)window_framebuffer;
++
++    /* mortar-wlegl (PowerVR Wayland EGL shim): rendering the window top-down
++       lets the compositor scan the buffer out without a flip or a copy. */
++    if (SDL_GL_ExtensionSupported("GL_MORTAR_window_topdown")) {
++        void (APIENTRY *topdown)(GLboolean) = (void (APIENTRY *)(GLboolean))SDL_GL_GetProcAddress("glWindowTopDownMORTAR");
++        if (topdown) {
++            topdown(GL_TRUE);
++            data->window_topdown = true;
++        }
++    }
+ 
+     SDL_AddSupportedTextureFormat(renderer, SDL_PIXELFORMAT_BGRA32);    // SDL_PIXELFORMAT_ARGB8888 on little endian systems
+     SDL_AddSupportedTextureFormat(renderer, SDL_PIXELFORMAT_RGBA32);
+diff -ru a/src/video/SDL_video.c b/src/video/SDL_video.c
+--- a/src/video/SDL_video.c	2026-11-01 01:14:09
++++ b/src/video/SDL_video.c	2026-11-01 01:15:05
+@@ -5012,6 +5012,18 @@
+                                        &_this->gl_config.minor_version);
+     }
+ 
++    /* GLES-only EGL (the PowerVR stock libs, e.g. through mortar-wlegl on
++       Wayland): a window created with SDL_WINDOW_OPENGL before any renderer
++       must ask for ES, or no EGL config matches. */
++    {
++        const char *profile = SDL_getenv("SDL_MORTAR_GL_DEFAULT_PROFILE");
++        if (profile && SDL_strcmp(profile, "es2") == 0) {
++            _this->gl_config.profile_mask = SDL_GL_CONTEXT_PROFILE_ES;
++            _this->gl_config.major_version = 2;
++            _this->gl_config.minor_version = 0;
++        }
++    }
++
+     _this->gl_config.flags = 0;
+     _this->gl_config.framebuffer_srgb_capable = 0;
+     _this->gl_config.no_error = 0;
