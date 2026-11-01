@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //! The shell's own UI, after the approved motion prototype
-//! (plan/mortar-motion): boot, home, the MENU drawer (Apps fan of live
-//! cards, Launch grid, Settings), launch/close/switch transitions, the
-//! volume OSD, toasts and the screenshot flash.
+//! (plan/mortar-motion) and cross menu (plan/mortar-cross): boot, home, the
+//! MENU cross (cross.rs: Running, Apps, Games, Music, Quick, Power), the
+//! settings screen, launch/close/switch transitions, the volume OSD, toasts
+//! and the screenshot flash.
 //!
 //! Pure state: the compositor feeds it buttons, the passing of time and a
 //! `View` of the apps; it answers with `Out`s (actions, sounds, haptic
@@ -10,12 +11,18 @@
 //! the prototype's 1024x768 logical pixels.
 //!
 //! Layers, bottom to top: home or the visible app (+ on-screen keyboard),
-//! the launch/close/switch transition, the drawer and its scrim, the time
-//! zone picker, a setup page, the power menu, the OSD, a toast, the
-//! shutter flash, the boot screen, the power-key hold indicator, and the
-//! black of sleep.
+//! the MENU and its veil, the launch/close/switch transition, the settings
+//! screen, the time zone picker, a setup page, the power menu, the OSD, a
+//! toast, the shutter flash, the boot screen, the power-key hold
+//! indicator, and the black of sleep.
+
+#[path = "cross.rs"]
+mod cross;
+pub use cross::Cat;
 
 use crate::art::{self, Art, Pal, DAY, NIGHT};
+use crate::config::Category;
+use crate::radio::Radio;
 use crate::haptics::Haptic;
 use crate::motion::{self, Params, Preset, Spring};
 use crate::scene::{ts, Layer, Scene, Src, Typo, Xf, B, P};
@@ -31,7 +38,7 @@ pub const H: f32 = 768.0;
 
 // ------------------------------------------------------------- settings ----
 
-/// User settings changed from the Settings tab (persisted by the compositor;
+/// User settings changed from the settings screen (persisted by the compositor;
 /// defaults from the NixOS module).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -73,6 +80,17 @@ pub struct LauncherInfo {
     pub description: String,
     pub art: Art,
     pub running: bool,
+    /// Where it shows in the MENU besides Apps.
+    pub category: Category,
+    /// Opening it while it runs switches to it.
+    pub single_instance: bool,
+}
+
+/// The rfkill switches (None: the device has none of that kind).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Radios {
+    pub wifi: Option<bool>,
+    pub bluetooth: Option<bool>,
 }
 
 /// What the compositor knows, rebuilt for each call.
@@ -91,6 +109,7 @@ pub struct View<'a> {
     pub host: &'a str,
     /// The current time zone ("Europe/Lisbon", "UTC").
     pub timezone: &'a str,
+    pub radios: Radios,
 }
 
 impl View<'_> {
@@ -107,10 +126,14 @@ pub enum Out {
     Launch(String),
     Focus(u32),
     Close(u32),
+    /// Close the app, then start its entry again.
+    Restart(u32),
     /// Show the home screen (the front app keeps running behind).
     Home,
     Volume(i32),
     Brightness(i32),
+    /// Switch a radio on or off.
+    Radio(Radio, bool),
     ShowKeyboard,
     OpenSetup { wifi: bool },
     /// Open the time zone picker (the compositor loads the zones).
@@ -126,25 +149,8 @@ pub enum Out {
     Prefs,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Tab {
-    Apps,
-    Launch,
-    Settings,
-}
-
-const TABS: [Tab; 3] = [Tab::Apps, Tab::Launch, Tab::Settings];
-
-impl Tab {
-    fn name(self) -> &'static str {
-        match self {
-            Tab::Apps => "Apps",
-            Tab::Launch => "Launch",
-            Tab::Settings => "Settings",
-        }
-    }
-}
-
+/// Rows of the settings screen (MENU > Quick > Settings…). Volume,
+/// brightness, sleep and power live in the MENU itself.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Setting {
     Sounds,
@@ -152,63 +158,26 @@ enum Setting {
     Motion,
     ReduceMotion,
     Palette,
-    Volume,
-    Brightness,
     TimeZone,
-    Keyboard,
     Wifi,
     Remote,
-    Sleep,
     Logout,
-    Reboot,
-    PowerOff,
 }
 
-fn settings(keyboard_app: bool) -> Vec<Setting> {
+const SETTINGS: [Setting; 9] = {
     use Setting::*;
-    let mut v = vec![Sounds, Haptics, Motion, ReduceMotion, Palette, Volume, Brightness, TimeZone];
-    if keyboard_app {
-        v.push(Keyboard);
-    }
-    v.extend([Wifi, Remote, Sleep, Logout, Reboot, PowerOff]);
-    v
+    [Sounds, Haptics, Motion, ReduceMotion, Palette, TimeZone, Wifi, Remote, Logout]
+};
+
+/// The settings screen: a list that slides in from the right.
+struct SettingsPanel {
+    sel: usize,
+    scroll: Spring,
+    x: Spring,
+    closing: bool,
 }
 
 // ---------------------------------------------------------------- state ----
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum CardKey {
-    Home,
-    App(u32),
-}
-
-struct Card {
-    key: CardKey,
-    y: Spring,
-    gone: Option<f64>,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-enum Then {
-    Home,
-    Focus(u32),
-    Launch(String, usize),
-}
-
-struct Menu {
-    tab: Tab,
-    dy: Spring,
-    sa: Spring,
-    fan_pos: Spring,
-    fan_sel: usize,
-    cards: Vec<Card>,
-    lg_sel: usize,
-    lg_scroll: Spring,
-    set_sel: usize,
-    set_scroll: Spring,
-    closing: bool,
-    then: Option<Then>,
-}
 
 /// A zone and its current UTC offset (seconds).
 #[derive(Clone, Debug, PartialEq)]
@@ -329,12 +298,11 @@ enum Target {
 }
 
 enum Trans {
-    /// An app grows out of its tile (from home).
-    Launch { target: Target, name: String, art: Art, from: R4, t0: f64 },
+    /// An app grows out of its home tile or MENU row, over `prev` (the app
+    /// that was in front, or home).
+    Launch { target: Target, name: String, art: Art, from: R4, prev: Option<u32>, t0: f64 },
     /// The front app shrinks back into its tile.
     Close { uid: u32, art: Art, to: R4 },
-    /// Another app slides in from the right over the current screen.
-    Swap { target: Target, name: String, art: Art, prev: Option<u32>, t0: f64 },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -426,9 +394,11 @@ pub struct ShellUi {
     row_x: Spring,
     tiles: Vec<TileAnim>,
     lp: Spring,
-    swap_p: Spring,
     trans: Option<Trans>,
-    menu: Option<Menu>,
+    menu: Option<cross::Cross>,
+    /// Each MENU category's selected row (kept between openings).
+    cross_sel: [usize; 6],
+    settings: Option<SettingsPanel>,
     page: Option<SetupUi>,
     tz: Option<TzPicker>,
     sleep: Option<SleepSt>,
@@ -457,9 +427,10 @@ impl ShellUi {
             row_x: Spring::new(0.0),
             tiles: Vec::new(),
             lp: Spring::new(0.0),
-            swap_p: Spring::new(1.0),
             trans: None,
             menu: None,
+            cross_sel: [0; 6],
+            settings: None,
             page: None,
             tz: None,
             sleep: None,
@@ -502,6 +473,7 @@ impl ShellUi {
         !has_app
             || self.boot.is_some()
             || self.menu.is_some()
+            || self.settings.is_some()
             || self.page.is_some()
             || self.tz.is_some()
             || self.trans.is_some()
@@ -523,8 +495,13 @@ impl ShellUi {
         self.menu.as_ref().is_some_and(|m| !m.closing)
     }
 
-    pub fn tab(&self) -> Option<Tab> {
-        self.menu.as_ref().map(|m| m.tab)
+    /// The MENU's category (while it shows).
+    pub fn menu_category(&self) -> Option<Cat> {
+        self.menu.as_ref().filter(|m| !m.closing).map(|m| m.cat)
+    }
+
+    pub fn settings_open(&self) -> bool {
+        self.settings.as_ref().is_some_and(|s| !s.closing)
     }
 
     pub fn page_mut(&mut self) -> Option<&mut SetupUi> {
@@ -739,11 +716,6 @@ impl ShellUi {
         self.boot.is_some()
     }
 
-    /// Live app cards are on screen (their apps should keep drawing).
-    pub fn cards_visible(&self) -> bool {
-        self.menu.as_ref().is_some_and(|m| m.tab == Tab::Apps) && self.page.is_none()
-    }
-
     pub fn pace(&self, has_app: bool) -> Pace {
         // asleep and dark: nothing at all
         if self.sleep_phase() == SleepPhase::Dark {
@@ -757,20 +729,17 @@ impl ShellUi {
             || self.osd.is_some()
             || self.power_hold.is_some();
         // layers that can sit still: moving only while their springs are
-        let menu_moving = self.menu.as_ref().is_some_and(|m| {
-            m.closing
-                || ![&m.dy, &m.sa, &m.fan_pos, &m.lg_scroll, &m.set_scroll].iter().all(|s| s.rest())
-                || !m.cards.iter().all(|c| c.gone.is_none() && c.y.rest())
-        });
+        let menu_moving = self.menu.as_ref().is_some_and(|m| m.moving());
+        let settings_moving = self.settings.as_ref().is_some_and(|p| p.closing || !(p.scroll.rest() && p.x.rest()));
         let tz_moving = self.tz.as_ref().is_some_and(|p| p.closing || !(p.scroll.rest() && p.x.rest() && p.swap.rest()));
         let power_moving = self.power.as_ref().is_some_and(|p| p.closing || !p.x.rest());
         let sleep_moving = self.sleep.as_ref().is_some_and(|s| !s.a.rest());
         let springs = self.springs_ref().iter().any(|s| !s.rest());
-        if timed || menu_moving || tz_moving || power_moving || sleep_moving || springs {
+        if timed || menu_moving || settings_moving || tz_moving || power_moving || sleep_moving || springs {
             return Pace::Full;
         }
         // home visible (no app, nothing opaque over it): the slow drift
-        let over_home = self.menu.is_none() && self.tz.is_none() && self.power.is_none() && self.sleep.is_none() && self.page.is_none();
+        let over_home = self.menu.is_none() && self.settings.is_none() && self.tz.is_none() && self.power.is_none() && self.sleep.is_none() && self.page.is_none();
         if !has_app && over_home && self.drifting() {
             return Pace::Ambient;
         }
@@ -799,7 +768,7 @@ impl ShellUi {
     }
 
     fn springs_ref(&self) -> Vec<&Spring> {
-        let mut v: Vec<&Spring> = vec![&self.row_x, &self.lp, &self.swap_p];
+        let mut v: Vec<&Spring> = vec![&self.row_x, &self.lp];
         for t in &self.tiles {
             v.extend([&t.lift, &t.sc, &t.back]);
         }
@@ -807,15 +776,15 @@ impl ShellUi {
     }
 
     fn springs_mut(&mut self) -> Vec<&mut Spring> {
-        let mut v: Vec<&mut Spring> = vec![&mut self.row_x, &mut self.lp, &mut self.swap_p];
+        let mut v: Vec<&mut Spring> = vec![&mut self.row_x, &mut self.lp];
         for t in &mut self.tiles {
             v.extend([&mut t.lift, &mut t.sc, &mut t.back]);
         }
         if let Some(m) = &mut self.menu {
-            v.extend([&mut m.dy, &mut m.sa, &mut m.fan_pos, &mut m.lg_scroll, &mut m.set_scroll]);
-            for c in &mut m.cards {
-                v.push(&mut c.y);
-            }
+            v.extend(m.springs());
+        }
+        if let Some(p) = &mut self.settings {
+            v.extend([&mut p.scroll, &mut p.x]);
         }
         if let Some(p) = &mut self.tz {
             v.extend([&mut p.scroll, &mut p.x, &mut p.swap]);
@@ -912,16 +881,11 @@ impl ShellUi {
                 self.dirty = true;
             }
         }
-        // drawer closing: run what was asked once it is out of sight
-        if let Some(m) = &self.menu
-            && m.closing
-            && m.dy.x < -660.0
-        {
-            let then = self.menu.take().and_then(|m| m.then);
+        // the MENU: in step with the apps; gone once faded out
+        self.sync_menu(v);
+        if self.settings.as_ref().is_some_and(|p| p.closing && p.x.x > W - 8.0) {
+            self.settings = None;
             self.dirty = true;
-            if let Some(th) = then {
-                self.run_then(th, v);
-            }
         }
         // power menu closed; sleep woken
         if self.power.as_ref().is_some_and(|p| p.closing && p.x.x < 0.02) {
@@ -937,42 +901,17 @@ impl ShellUi {
             self.tz = None;
             self.dirty = true;
         }
-        // fan: drop cards that flew away, add newly running apps
-        if let Some(m) = &mut self.menu {
-            let before = m.cards.len();
-            m.cards.retain(|c| match (c.key, c.gone) {
-                (_, Some(t)) => now - t < 0.38,
-                (CardKey::App(u), None) => v.app(u).is_some(),
-                (CardKey::Home, None) => true,
-            });
-            for r in v.running {
-                if !m.cards.iter().any(|c| c.key == CardKey::App(r.uid)) {
-                    m.cards.push(Card { key: CardKey::App(r.uid), y: Spring::new(0.0), gone: None });
-                }
-            }
-            if m.cards.len() != before {
-                let n = m.cards.len();
-                m.fan_sel = m.fan_sel.min(n.saturating_sub(1));
-                // skip over a card that is flying away
-                while m.fan_sel > 0 && m.cards[m.fan_sel].gone.is_some() {
-                    m.fan_sel -= 1;
-                }
-                m.fan_pos.snap(m.fan_sel as f32);
-            }
-        }
         // transitions
         match &self.trans {
-            Some(Trans::Launch { target, t0, .. }) | Some(Trans::Swap { target, t0, .. }) => {
-                let is_launch = matches!(self.trans, Some(Trans::Launch { .. }));
-                let spring = if is_launch { &self.lp } else { &self.swap_p };
-                let anim_done = spring.rest() || spring.x > 0.995;
+            Some(Trans::Launch { target, t0, .. }) => {
+                let anim_done = self.lp.rest() || self.lp.x > 0.995;
                 let shown = target_uid(target, v).is_some_and(|u| v.current == Some(u) && v.app(u).is_some_and(|a| a.has_buffer));
                 if anim_done && shown {
                     self.trans = None;
                     self.dirty = true;
                 } else if now - t0 > 20.0 {
                     let name = match &self.trans {
-                        Some(Trans::Launch { name, .. } | Trans::Swap { name, .. }) => name.clone(),
+                        Some(Trans::Launch { name, .. }) => name.clone(),
                         _ => String::new(),
                     };
                     self.trans = None;
@@ -1100,12 +1039,22 @@ impl ShellUi {
 
     /// The compositor could not start an app the UI is animating in.
     pub fn launch_failed(&mut self, msg: &str) {
-        if matches!(self.trans, Some(Trans::Launch { .. } | Trans::Swap { .. })) {
+        if matches!(self.trans, Some(Trans::Launch { .. })) {
             self.trans = None;
         }
         self.show_toast(Toast::info(msg.to_string()));
         self.fx(Sfx::Deny, None);
         self.dirty = true;
+    }
+
+    /// The compositor started entry `id` as app `uid`: the transition
+    /// waits for that app (a second instance has the same entry).
+    pub fn launched(&mut self, id: &str, uid: u32) {
+        if let Some(Trans::Launch { target, .. }) = &mut self.trans
+            && *target == Target::Entry(id.to_string())
+        {
+            *target = Target::Uid(uid);
+        }
     }
 
     /// A button was pressed (`repeat`: software auto-repeat).
@@ -1128,6 +1077,8 @@ impl ShellUi {
             self.tz_button(b, repeat);
         } else if self.page.is_some() {
             self.page_button(b, v);
+        } else if self.settings.is_some() {
+            self.settings_button(b, repeat, v);
         } else if self.menu.is_some() {
             self.menu_button(b, repeat, v);
         } else if self.trans.is_some() {
@@ -1138,7 +1089,8 @@ impl ShellUi {
         std::mem::take(&mut self.out)
     }
 
-    /// MENU (on its own) toggles the drawer.
+    /// MENU (on its own) opens the cross menu, or closes it and whatever
+    /// was opened from it.
     pub fn menu_key(&mut self, v: &View) -> Vec<Out> {
         self.drift_until = self.t + DRIFT_SECS;
         self.dirty = true;
@@ -1153,20 +1105,14 @@ impl ShellUi {
             self.close_power_menu();
             return std::mem::take(&mut self.out);
         }
-        if self.tz.is_some() {
-            self.tz = None;
-            self.close_menu(None);
-        } else if self.page.is_some() {
-            self.page = None;
-            self.close_menu(None);
-        } else if self.menu.as_ref().is_some_and(|m| !m.closing) {
-            self.close_menu(None);
+        let sub = self.tz.take().is_some() | self.page.take().is_some() | self.settings.take().is_some();
+        if sub || self.menu.as_ref().is_some_and(|m| !m.closing) {
+            self.close_menu();
         } else {
-            if let Some(Trans::Launch { .. } | Trans::Swap { .. }) = &self.trans {
+            if let Some(Trans::Launch { .. }) = &self.trans {
                 // still starting: leave it to start in the background
                 self.trans = None;
                 self.lp.snap(0.0);
-                self.swap_p.snap(1.0);
             }
             self.open_menu(v);
         }
@@ -1230,11 +1176,8 @@ impl ShellUi {
             }
             Button::B | Button::Up | Button::Down => self.fx(Sfx::Deny, None),
             Button::L1 | Button::R1 | Button::Select => {
-                // shortcuts: open the drawer on Launch/Settings
-                self.open_menu(v);
-                if let Some(m) = &mut self.menu {
-                    m.tab = if b == Button::R1 { Tab::Settings } else { Tab::Launch };
-                }
+                // shortcuts: the MENU on Apps (L1, SELECT) or Quick (R1)
+                self.open_menu_on(if b == Button::R1 { Cat::Quick } else { Cat::Apps }, v);
             }
             _ => {}
         }
@@ -1254,7 +1197,7 @@ impl ShellUi {
             self.set_focus(i as i32, v.launcher.len(), true);
         }
         let from = self.tile_rect(i);
-        self.trans = Some(Trans::Launch { target: Target::Entry(l.id.clone()), name: l.name.clone(), art: l.art, from, t0: self.t });
+        self.trans = Some(Trans::Launch { target: Target::Entry(l.id.clone()), name: l.name.clone(), art: l.art, from, prev: None, t0: self.t });
         self.lp.snap(0.0);
         self.lp.set(1.0);
         self.out.push(Out::Launch(l.id.clone()));
@@ -1280,214 +1223,49 @@ impl ShellUi {
         self.fx(Sfx::Close, Some(Haptic::Tick));
     }
 
-    fn swap_to(&mut self, target: Target, v: &View) {
-        let (name, art) = match &target {
-            Target::Uid(u) => v.app(*u).map(|a| (a.name.clone(), a.art)).unwrap_or_default(),
-            Target::Entry(id) => v.launcher.iter().find(|l| &l.id == id).map(|l| (l.name.clone(), l.art)).unwrap_or_default(),
-        };
-        match &target {
-            Target::Uid(u) => self.out.push(Out::Focus(*u)),
-            Target::Entry(id) => self.out.push(Out::Launch(id.clone())),
-        }
-        self.trans = Some(Trans::Swap { target, name, art, prev: v.current, t0: self.t });
-        self.swap_p.snap(0.0);
-        self.swap_p.set(1.0);
-        self.fx(Sfx::Open, Some(Haptic::Double));
-    }
-
-    fn run_then(&mut self, th: Then, v: &View) {
-        match th {
-            Then::Home => {
-                if v.current.is_some() {
-                    self.go_home(v);
-                }
-            }
-            Then::Focus(uid) => {
-                if v.current != Some(uid) {
-                    self.swap_to(Target::Uid(uid), v);
-                }
-            }
-            Then::Launch(id, idx) => {
-                let running = v.by_entry(&id).map(|a| a.uid);
-                if running.is_some() && running == v.current {
-                    return;
-                }
-                if v.current.is_some() {
-                    match running {
-                        Some(u) => self.swap_to(Target::Uid(u), v),
-                        None => self.swap_to(Target::Entry(id), v),
-                    }
-                } else {
-                    self.set_focus(idx as i32, v.launcher.len(), true);
-                    self.launch_from_tile(idx, v);
-                }
-            }
-        }
-    }
-
-    fn open_menu(&mut self, v: &View) {
-        let mut cards = vec![Card { key: CardKey::Home, y: Spring::new(0.0), gone: None }];
-        cards.extend(v.running.iter().map(|r| Card { key: CardKey::App(r.uid), y: Spring::new(0.0), gone: None }));
-        // MENU then A flips to the previous app: preselect it
-        let fan_sel = match v.current {
-            Some(_) if v.running.len() > 1 => 2,
-            Some(_) => 1,
-            None if !v.running.is_empty() => 1,
-            None => 0,
-        };
-        let mut dy = Spring::new(-680.0);
-        dy.set(0.0);
-        let mut sa = Spring::new(0.0);
-        sa.set(1.0);
-        let lg_sel = self.focus.min(v.launcher.len().saturating_sub(1));
-        self.menu = Some(Menu {
-            tab: Tab::Apps,
-            dy,
-            sa,
-            fan_pos: Spring::new(fan_sel as f32),
-            fan_sel,
-            cards,
-            lg_sel,
-            lg_scroll: Spring::new(lg_scroll_for(lg_sel)),
-            set_sel: 0,
-            set_scroll: Spring::new(0.0),
-            closing: false,
-            then: None,
-        });
+    /// MENU > Quick > Settings…: the settings screen slides in.
+    fn open_settings(&mut self) {
+        let mut x = Spring::new(W);
+        x.set(0.0);
+        self.settings = Some(SettingsPanel { sel: 0, scroll: Spring::new(0.0), x, closing: false });
         self.confirm = None;
-        self.fx(Sfx::Drawer, Some(Haptic::Tick));
+        self.fx(Sfx::Tab, Some(Haptic::Tick));
     }
 
-    fn close_menu(&mut self, then: Option<Then>) {
-        if let Some(m) = &mut self.menu {
-            m.dy.set(-700.0);
-            m.sa.set(0.0);
-            m.closing = true;
-            m.then = then;
+    fn close_settings(&mut self) {
+        if let Some(p) = &mut self.settings {
+            p.closing = true;
+            p.x.set(W);
         }
         self.fx(Sfx::DrawerUp, Some(Haptic::Tick));
     }
 
-    fn menu_button(&mut self, b: Button, repeat: bool, v: &View) {
-        let Some(m) = &mut self.menu else { return };
-        if m.closing {
+    fn settings_button(&mut self, b: Button, repeat: bool, _v: &View) {
+        let Some(p) = &mut self.settings else { return };
+        if p.closing {
             return;
         }
+        let n = SETTINGS.len();
         match b {
-            Button::B => {
-                self.close_menu(None);
-                return;
-            }
-            Button::L1 | Button::R1 if !repeat => {
-                let i = TABS.iter().position(|t| *t == m.tab).unwrap_or(0);
-                m.tab = TABS[(i + if b == Button::R1 { 1 } else { 2 }) % 3];
-                self.confirm = None;
-                self.fx(Sfx::Tab, Some(Haptic::Tick));
-                return;
-            }
-            _ => {}
-        }
-        match m.tab {
-            Tab::Apps => self.apps_button(b, repeat),
-            Tab::Launch => self.launch_button(b, repeat, v),
-            Tab::Settings => self.settings_button(b, repeat, v),
-        }
-    }
-
-    fn apps_button(&mut self, b: Button, repeat: bool) {
-        let Some(m) = &mut self.menu else { return };
-        let n = m.cards.len();
-        match b {
-            Button::Left | Button::Right => {
-                let d: i32 = if b == Button::Right { 1 } else { -1 };
-                let mut s = m.fan_sel as i32;
-                loop {
-                    s += d;
-                    if s < 0 || s >= n as i32 || m.cards[s as usize].gone.is_none() {
-                        break;
-                    }
-                }
-                let s = s.clamp(0, n as i32 - 1) as usize;
-                if s != m.fan_sel && m.cards[s].gone.is_none() {
-                    m.fan_sel = s;
-                    m.fan_pos.set(s as f32);
-                    self.fx(Sfx::Move, Some(Haptic::Tick));
+            Button::Up | Button::Down => {
+                let old = p.sel;
+                p.sel = if b == Button::Up { old.saturating_sub(1) } else { (old + 1).min(n - 1) };
+                p.scroll.set(set_scroll_for(p.sel, n));
+                if p.sel != old {
+                    self.confirm = None;
+                    self.fx(Sfx::Tick, Some(Haptic::Tick));
                 } else {
                     self.fx(Sfx::Deny, None);
                 }
-            }
-            Button::A if !repeat => {
-                let key = m.cards.get(m.fan_sel).map(|c| c.key);
-                match key {
-                    Some(CardKey::Home) => self.close_menu(Some(Then::Home)),
-                    Some(CardKey::App(u)) => self.close_menu(Some(Then::Focus(u))),
-                    None => {}
-                }
-            }
-            Button::X if !repeat => {
-                let t = self.t;
-                match m.cards.get_mut(m.fan_sel) {
-                    Some(c) if c.key != CardKey::Home && c.gone.is_none() => {
-                        c.gone = Some(t);
-                        c.y.set(700.0);
-                        let CardKey::App(uid) = c.key else { return };
-                        self.out.push(Out::Close(uid));
-                        self.fx(Sfx::Close, Some(Haptic::Double));
-                    }
-                    _ => self.fx(Sfx::Deny, None),
-                }
-            }
-            _ => {}
-        }
-    }
-
-    fn launch_button(&mut self, b: Button, repeat: bool, v: &View) {
-        let Some(m) = &mut self.menu else { return };
-        let n = v.launcher.len();
-        if n == 0 {
-            return;
-        }
-        let cols = 3;
-        let old = m.lg_sel.min(n - 1);
-        let new = match b {
-            Button::Left => old.saturating_sub(1),
-            Button::Right => (old + 1).min(n - 1),
-            Button::Up => old.saturating_sub(cols),
-            Button::Down => (old + cols).min(n - 1),
-            Button::A | Button::Start if !repeat => {
-                let id = v.launcher[old].id.clone();
-                self.close_menu(Some(Then::Launch(id, old)));
                 return;
             }
-            _ => return,
-        };
-        m.lg_sel = new;
-        m.lg_scroll.set(lg_scroll_for(new));
-        if new != old {
-            self.fx(Sfx::Move, Some(Haptic::Tick));
-        }
-    }
-
-    fn settings_button(&mut self, b: Button, repeat: bool, v: &View) {
-        let items = settings(v.keyboard_app);
-        let Some(m) = &mut self.menu else { return };
-        let n = items.len();
-        m.set_sel = m.set_sel.min(n - 1);
-        match b {
-            Button::Up | Button::Down => {
-                let old = m.set_sel;
-                m.set_sel = if b == Button::Up { old.saturating_sub(1) } else { (old + 1).min(n - 1) };
-                m.set_scroll.set(set_scroll_for(m.set_sel, n));
-                if m.set_sel != old {
-                    self.confirm = None;
-                    self.fx(Sfx::Move, Some(Haptic::Tick));
-                }
+            Button::B if !repeat => {
+                self.close_settings();
                 return;
             }
             _ => {}
         }
-        let it = items[m.set_sel];
-        let right = b == Button::Right;
+        let it = SETTINGS[p.sel];
         let horiz = matches!(b, Button::Left | Button::Right);
         let mut changed = true;
         match (it, b) {
@@ -1500,32 +1278,18 @@ impl ShellUi {
                 let d = if b == Button::Left { -1 } else { 1 };
                 self.prefs.motion = Preset::ALL[(i + d).rem_euclid(3) as usize];
             }
-            (Setting::Volume, _) if horiz => {
-                changed = false;
-                self.out.push(Out::Volume(if right { 5 } else { -5 }));
-            }
-            (Setting::TimeZone, _) if (b == Button::A || right) && !repeat => {
+            (Setting::TimeZone, Button::A | Button::Right) if !repeat => {
                 changed = false;
                 self.out.push(Out::OpenTimeZone);
             }
-            (Setting::Brightness, _) if horiz => {
+            (Setting::Wifi | Setting::Remote, Button::A | Button::Right) if !repeat => {
                 changed = false;
-                self.out.push(Out::Brightness(if right { 10 } else { -10 }));
+                self.out.push(Out::OpenSetup { wifi: it == Setting::Wifi });
             }
-            (_, Button::A) if !repeat => {
+            (Setting::Logout, Button::A) if !repeat => {
                 changed = false;
-                match it {
-                    Setting::Keyboard => {
-                        self.close_menu(None);
-                        self.out.push(Out::ShowKeyboard);
-                    }
-                    Setting::Wifi => self.out.push(Out::OpenSetup { wifi: true }),
-                    Setting::Remote => self.out.push(Out::OpenSetup { wifi: false }),
-                    Setting::Sleep => self.out.push(Out::Sleep),
-                    Setting::Logout if self.confirmed(it, "log out (all apps close)") => self.out.push(Out::Logout),
-                    Setting::Reboot if self.confirmed(it, "restart") => self.out.push(Out::Reboot),
-                    Setting::PowerOff if self.confirmed(it, "power off") => self.out.push(Out::PowerOff),
-                    _ => {}
+                if self.confirmed(it, "log out (all apps close)") {
+                    self.out.push(Out::Logout);
                 }
             }
             _ => changed = false,
@@ -1555,15 +1319,9 @@ fn target_uid(t: &Target, v: &View) -> Option<u32> {
     }
 }
 
-/// Launch grid scroll: keep the selected row in the two visible rows.
-fn lg_scroll_for(sel: usize) -> f32 {
-    (sel / 3).saturating_sub(1) as f32 * 150.0
-}
-
-/// Settings scroll: five rows show; keep the selection inside them.
+/// Settings scroll: seven rows show; keep the selection inside them.
 fn set_scroll_for(sel: usize, n: usize) -> f32 {
-    let first = sel.saturating_sub(3).min(n.saturating_sub(5));
-    first as f32 * 76.0
+    sel.saturating_sub(3).min(n.saturating_sub(7)) as f32 * 76.0
 }
 
 // ---------------------------------------------------------------- drawing ----
@@ -1674,17 +1432,21 @@ impl ShellUi {
         }
         // base: what is under any transition
         let base_app = match &self.trans {
-            Some(Trans::Launch { .. }) | Some(Trans::Close { .. }) => None,
-            Some(Trans::Swap { prev, .. }) => *prev,
+            Some(Trans::Launch { prev, .. }) => prev.filter(|u| v.app(*u).is_some()),
+            Some(Trans::Close { .. }) => None,
             None => v.current,
         };
         match base_app {
             Some(uid) => self.draw_app(&mut b, v, uid, true),
             None => self.draw_home(&mut b, &pal, v),
         }
-        self.draw_trans(&mut b, &pal, v);
+        // the MENU fades out under the transition it started
         if let Some(m) = &self.menu {
             self.draw_menu(&mut b, &pal, v, m);
+        }
+        self.draw_trans(&mut b, &pal, v);
+        if let Some(p) = &self.settings {
+            self.draw_settings(&mut b, &pal, v, p);
         }
         if let Some(p) = &self.tz {
             self.draw_tz(&mut b, &pal, p);
@@ -1887,17 +1649,6 @@ impl ShellUi {
                     b.pop_alpha();
                 }
             }
-            Some(Trans::Swap { target, name, art, .. }) => {
-                let dx = (1.0 - self.swap_p.x) * W;
-                b.push(Xf::translate(dx, 0.0));
-                let uid = target_uid(target, v).filter(|u| v.app(*u).is_some_and(|a| a.has_buffer) && v.current == Some(*u));
-                match uid {
-                    Some(u) => self.draw_app(b, v, u, false),
-                    None => self.splash(b, pal, *art, name, 0.0),
-                }
-                b.rect(-1.0, 0.0, 1.0, H, pal.ink);
-                b.pop();
-            }
             None => {}
         }
     }
@@ -1912,167 +1663,17 @@ impl ShellUi {
         b.pop();
     }
 
-    fn draw_menu(&self, b: &mut B, pal: &Pal, v: &View, m: &Menu) {
-        b.rect(0.0, 0.0, W, H, Color(29, 29, 29, (0.42 * m.sa.x.clamp(0.0, 1.0) * 255.0) as u8));
-        b.push(Xf::translate(0.0, m.dy.x));
-        b.rect(0.0, 0.0, W, 620.0, pal.ground);
-        b.rect(0.0, 619.0, W, 1.0, pal.ink);
-        match m.tab {
-            Tab::Apps => self.draw_fan(b, pal, v, m),
-            Tab::Launch => {
-                b.clip(Some([0.0, 119.0, W, 437.0]));
-                self.draw_grid(b, pal, v, m);
-                b.clip(None);
-            }
-            Tab::Settings => {
-                b.clip(Some([0.0, 119.0, W, 437.0]));
-                self.draw_settings(b, pal, v, m);
-                b.clip(None);
-            }
-        }
-        // header
-        b.rect(0.0, 0.0, W, 118.0, pal.ground);
-        b.rect(0.0, 118.0, W, 1.0, pal.ink);
-        let sub = ts(Face::Mono400, 15.0, pal.soft);
-        b.text(40.0, 26.0, &format!("MENU · {} running", v.running.len()), &sub);
-        let title = ts(Face::SerifItalic, 54.0, pal.ink).line_height(1.0);
-        b.text(40.0, 50.0, m.tab.name(), &title);
-        let tab_st = ts(Face::Mono400, 17.0, pal.soft);
-        let mut right = W - 40.0;
-        for t in TABS.iter().rev() {
-            let on = *t == m.tab;
-            let st = if on { ts(Face::Mono600, 17.0, pal.lime_ink) } else { tab_st };
-            let tw = b.measure(t.name(), &st);
-            let (w, h) = (tw + 26.0, st.line_px() + 10.0);
-            let (x, y) = ((right - w).round(), (104.0 - h).round());
-            if on {
-                b.block(x, y, w.round(), h.round(), pal.lime, pal.lime_ink);
-            } else {
-                b.frame(x, y, w.round(), h.round(), 1.0, pal.ink);
-            }
-            b.text(x + 13.0, y + 5.0, t.name(), &st);
-            right -= w + 10.0;
-        }
-        let hint_items: Vec<(&str, &str)> = match m.tab {
-            Tab::Apps => vec![("L1/R1", "Tabs"), ("◀▶", "Choose"), ("X", "Close app"), ("B", "Back"), ("A", "Switch")],
-            Tab::Launch => vec![("L1/R1", "Tabs"), ("◀▶▲▼", "Choose"), ("B", "Back"), ("A", "Open")],
-            Tab::Settings => {
-                let items = settings(v.keyboard_app);
-                let it = items.get(m.set_sel.min(items.len() - 1)).copied();
-                let mut h = vec![("L1/R1", "Tabs"), ("▲▼", "Choose")];
-                match it {
-                    Some(Setting::TimeZone | Setting::Keyboard | Setting::Wifi | Setting::Remote | Setting::Sleep | Setting::Logout | Setting::Reboot | Setting::PowerOff) => h.push(("A", "Choose")),
-                    _ => h.push(("◀▶", "Change")),
-                }
-                h.push(("B", "Back"));
-                h
-            }
-        };
-        hints(b, pal, 556.0, &hint_items);
-        b.pop();
-    }
-
-    fn draw_fan(&self, b: &mut B, pal: &Pal, v: &View, m: &Menu) {
-        let mut order: Vec<usize> = (0..m.cards.len()).collect();
-        order.sort_by(|a, c| {
-            let da = (*a as f32 - m.fan_pos.x).abs();
-            let dc = (*c as f32 - m.fan_pos.x).abs();
-            dc.partial_cmp(&da).unwrap_or(std::cmp::Ordering::Equal)
-        });
-        for i in order {
-            let c = &m.cards[i];
-            let dd = i as f32 - m.fan_pos.x;
-            let ad = dd.abs();
-            if ad > 3.2 {
-                continue;
-            }
-            let (tx, rot, sc, ty) = (dd * 250.0, (dd * 6.0).to_radians(), (1.0 - ad * 0.16).max(0.55), ad * 26.0 + c.y.x);
-            let (x0, y0) = (312.0, 142.0);
-            let center = (512.0, y0 + 174.0);
-            b.push(Xf::translate(tx, ty).mul(&Xf::about(center.0, center.1, Xf::rotate(rot).mul(&Xf::scale(sc, sc)))));
-            let alpha = if c.gone.is_some() { (1.0 - c.y.x / 400.0).max(0.0) } else { 1.0 };
-            b.push_alpha(alpha);
-            let (name, sub) = match c.key {
-                CardKey::Home => {
-                    b.rect(x0, y0, 400.0, 300.0, pal.lime);
-                    let st = ts(Face::SerifItalic, 96.0, pal.lime_ink);
-                    b.text_base(x0 + 34.0, y0 + 150.0, &v.sys.time, &st);
-                    for k in 0..4 {
-                        let (rx, ry) = (x0 + 34.0 + k as f32 * 86.0, y0 + 190.0);
-                        b.stroke(&[(rx, ry), (rx + 72.0, ry), (rx + 72.0, ry + 84.0), (rx, ry + 84.0)], true, 1.5, pal.lime_ink);
-                    }
-                    ("Home".to_string(), "Tiles".to_string())
-                }
-                CardKey::App(uid) => match v.app(uid) {
-                    Some(a) => {
-                        b.rect(x0, y0, 400.0, 300.0, Color(0, 0, 0, 255));
-                        if a.has_buffer {
-                            let s = 400.0 / W;
-                            let g = a.geom;
-                            b.image(Src::App(uid), x0 + g[0] * s, y0 + g[1] * s, g[2] * s, g[3] * s, [0.0, 0.0, 1.0, 1.0]);
-                        } else {
-                            b.rect(x0, y0, 400.0, 300.0, a.art.accent(pal));
-                            art::draw(b, a.art, x0 + 200.0, y0 + 150.0, 1.0, *pal, pal.dark);
-                        }
-                        let sub = if a.closing {
-                            "Closing…"
-                        } else if !a.has_buffer {
-                            "Starting…"
-                        } else if v.current == Some(uid) {
-                            "On screen"
-                        } else {
-                            "Running"
-                        };
-                        (a.name.clone(), sub.to_string())
-                    }
-                    None => (String::new(), String::new()),
-                },
-            };
-            b.frame(x0, y0, 400.0, 300.0, 1.0, pal.ink);
-            if i == m.fan_sel && c.gone.is_none() {
-                b.frame(x0 - 4.0, y0 - 4.0, 408.0, 308.0, 4.0, pal.lime);
-            }
-            let nm = ts(Face::SerifItalic, 32.0, pal.ink);
-            let base = y0 + 310.0 + b.typo.base_in_line(Face::SerifItalic, 32.0, 1.2);
-            let subst = ts(Face::Mono400, 14.0, pal.soft);
-            let sw = b.measure(&sub, &subst);
-            let name = b.fit(&name, &nm, 390.0 - sw - 12.0);
-            b.text_base(x0 + 2.0, base, &name, &nm);
-            b.text_base(x0 + 398.0 - sw, base, &sub, &subst);
-            b.pop_alpha();
-            b.pop();
-        }
-    }
-
-    fn draw_grid(&self, b: &mut B, pal: &Pal, v: &View, m: &Menu) {
-        let cw = (W - 80.0 - 36.0) / 3.0;
-        for (i, l) in v.launcher.iter().enumerate() {
-            let (col, row) = (i % 3, i / 3);
-            let x = 40.0 + col as f32 * (cw + 18.0);
-            let y = 140.0 + row as f32 * 150.0 - m.lg_scroll.x;
-            if y > 620.0 || y + 132.0 < 100.0 {
-                continue;
-            }
-            let on = i == m.lg_sel;
-            let (bg, fg) = if on { (pal.lime, pal.lime_ink) } else { (pal.tile, pal.ink) };
-            b.block(x, y, cw, 132.0, bg, pal.ink);
-            art::draw(b, l.art, x + 18.0 + 50.0, y + 66.0, 0.5, *pal, fg);
-            let st = ts(Face::SerifItalic, 34.0, fg).line_height(1.0);
-            let name = b.fit(&l.name, &st, cw - 150.0);
-            b.text(x + 18.0 + 100.0 + 16.0, y + 66.0 - 17.0, &name, &st);
-            if l.running {
-                chip(b, x + cw - 10.0, y + 10.0 + 9.0, "ON", 12.0, (6.0, 1.0), pal.lavender, pal.lavender_ink);
-            }
-        }
-    }
-
-    fn draw_settings(&self, b: &mut B, pal: &Pal, v: &View, m: &Menu) {
-        let items = settings(v.keyboard_app);
-        let sel = m.set_sel.min(items.len() - 1);
+    /// The settings screen (MENU > Quick > Settings…), full screen.
+    fn draw_settings(&self, b: &mut B, pal: &Pal, v: &View, p: &SettingsPanel) {
+        b.push(Xf::translate(p.x.x, 0.0));
+        b.block(0.0, 0.0, W + 2.0, H, pal.ground, pal.ink);
+        let n = SETTINGS.len();
+        let sel = p.sel.min(n - 1);
         let onoff = |on: bool| (vec!["On", "Off"], if on { 0 } else { 1 });
-        for (i, it) in items.iter().enumerate() {
-            let y = 136.0 + i as f32 * 76.0 - m.set_scroll.x;
-            if y > 620.0 || y + 76.0 < 100.0 {
+        b.clip(Some([0.0, 119.0, W, H - 64.0 - 119.0]));
+        for (i, it) in SETTINGS.iter().enumerate() {
+            let y = 136.0 + i as f32 * 76.0 - p.scroll.x;
+            if y > H || y + 76.0 < 100.0 {
                 continue;
             }
             let on = i == sel;
@@ -2088,11 +1689,8 @@ impl ShellUi {
                 Setting::Motion => ("Motion", Ok((Preset::ALL.iter().map(|p| p.name()).collect(), Preset::ALL.iter().position(|p| *p == self.prefs.motion).unwrap_or(0)))),
                 Setting::ReduceMotion => ("Reduce motion", Ok((vec!["Off", "On"], self.prefs.reduce_motion as usize))),
                 Setting::Palette => ("Palette", Ok((vec!["Day", "Night"], self.prefs.night as usize))),
-                Setting::Volume => ("Volume", Err(v.volume.map(|x| format!("{x}%")).unwrap_or_else(|| "n/a".into()))),
-                Setting::Brightness => ("Brightness", Err(v.sys.brightness.map(|x| format!("{x}%")).unwrap_or_else(|| "n/a".into()))),
                 Setting::TimeZone => ("Time zone", Err(format!("{} · {} ›", crate::tz::pretty(v.timezone).0, v.sys.time))),
-                Setting::Keyboard => ("On-screen keyboard", Err("START in the app ›".into())),
-                Setting::Wifi => ("Wi-Fi", Err(if v.sys.wifi { "Connected ›".into() } else { "Not connected ›".into() })),
+                Setting::Wifi => ("Wi-Fi networks", Err(if v.sys.wifi { "Connected ›".into() } else { "Not connected ›".into() })),
                 Setting::Remote => (
                     "Remote access",
                     Err(if v.sys.sshd_listening {
@@ -2105,10 +1703,7 @@ impl ShellUi {
                         "Off ›".into()
                     }),
                 ),
-                Setting::Sleep => ("Sleep", Err("Power key · hold for menu".into())),
                 Setting::Logout => ("Log out", Err("Closes all apps".into())),
-                Setting::Reboot => ("Restart", Err("›".into())),
-                Setting::PowerOff => ("Power off", Err("›".into())),
             };
             let lab = ts(Face::Body400, 24.0, fg);
             b.text(60.0, y + 38.0 - lab.line_px() / 2.0, name, &lab);
@@ -2117,7 +1712,7 @@ impl ShellUi {
             let st_off = ts(Face::Mono400, 18.0, with_a(fg, 0.55));
             let st_txt = ts(Face::Mono400, 18.0, fg);
             let mut segs: Vec<(String, TextStyle)> = Vec::new();
-            let adjustable = matches!(it, Setting::Volume | Setting::Brightness) || val.is_ok();
+            let adjustable = val.is_ok();
             if on && adjustable {
                 segs.push(("◀ ".into(), st_txt));
             }
@@ -2142,8 +1737,23 @@ impl ShellUi {
                 x += arrow_text(b, x, top, s, st, true);
             }
         }
+        b.clip(None);
+        // header
+        b.rect(0.0, 0.0, W, 118.0, pal.ground);
+        b.rect(0.0, 118.0, W, 1.0, pal.ink);
+        let sub = ts(Face::Mono400, 15.0, pal.soft);
+        b.text(40.0, 26.0, "MENU · QUICK · SETTINGS", &sub);
+        b.text_right(W - 40.0, 26.0, &format!("{} / {}", sel + 1, n), &sub);
+        let title = ts(Face::SerifItalic, 54.0, pal.ink).line_height(1.0);
+        b.text(40.0, 50.0, "Settings", &title);
+        let last = match SETTINGS[sel] {
+            Setting::TimeZone | Setting::Wifi | Setting::Remote | Setting::Logout => ("A", "Open"),
+            _ => ("◀▶", "Change"),
+        };
+        let last = if SETTINGS[sel] == Setting::Logout { ("A", "Log out") } else { last };
+        hints(b, pal, H - 64.0, &[("▲▼", "Choose"), last, ("B", "Back"), ("MENU", "Close")]);
+        b.pop();
     }
-
     fn draw_tz(&self, b: &mut B, pal: &Pal, p: &TzPicker) {
         b.push(Xf::translate(p.x.x, 0.0));
         b.block(0.0, 0.0, W + 2.0, H, pal.ground, pal.ink);
@@ -2364,10 +1974,24 @@ mod tests {
         RunningInfo { uid, entry: Some(entry.into()), name: entry.into(), art: Art::Generic, has_buffer: true, closing: false, geom: [0.0, 0.0, W, H] }
     }
     fn launcher() -> Vec<LauncherInfo> {
-        ["term", "m8", "pico"].iter().map(|i| LauncherInfo { id: i.to_string(), name: i.to_string(), description: String::new(), art: Art::Generic, running: false }).collect()
+        [("term", Category::Apps), ("m8", Category::Music), ("pico", Category::Games)]
+            .iter()
+            .map(|(i, c)| LauncherInfo { id: i.to_string(), name: i.to_string(), description: String::new(), art: Art::Generic, running: false, category: *c, single_instance: true })
+            .collect()
     }
     fn view<'a>(running: &'a [RunningInfo], launcher: &'a [LauncherInfo], sys: &'a Sys, current: Option<u32>) -> View<'a> {
-        View { running, launcher, sys, volume: Some(50), current, keyboard_app: false, osk_h: 0.0, host: "brick", timezone: "Europe/Lisbon" }
+        View {
+            running,
+            launcher,
+            sys,
+            volume: Some(50),
+            current,
+            keyboard_app: false,
+            osk_h: 0.0,
+            host: "brick",
+            timezone: "Europe/Lisbon",
+            radios: Radios { wifi: Some(true), bluetooth: None },
+        }
     }
     fn settle(ui: &mut ShellUi, v: &View) -> Vec<Out> {
         let mut out = Vec::new();
@@ -2378,6 +2002,26 @@ mod tests {
     }
     fn actions(o: &[Out]) -> Vec<Out> {
         o.iter().filter(|o| !matches!(o, Out::Sfx(_) | Out::Haptic(_))).cloned().collect()
+    }
+    fn press(ui: &mut ShellUi, v: &View, bs: &[Button]) -> Vec<Out> {
+        bs.iter().flat_map(|b| actions(&ui.button(*b, false, v))).collect()
+    }
+    fn sel_row(ui: &ShellUi) -> Option<cross::Row> {
+        let m = ui.menu.as_ref()?;
+        m.sel_key(ui.cross_sel[m.cat as usize])
+    }
+    /// MENU, then to Quick (R1 jumps to Power, ◀ is Quick).
+    fn to_quick(ui: &mut ShellUi, v: &View) {
+        ui.menu_key(v);
+        press(ui, v, &[Button::R1, Button::Left]);
+        assert_eq!(ui.menu_category(), Some(Cat::Quick));
+    }
+    fn to_settings(ui: &mut ShellUi, v: &View) {
+        to_quick(ui, v);
+        press(ui, v, &[Button::Down; 8]);
+        assert_eq!(sel_row(ui), Some(cross::Row::Settings));
+        ui.button(Button::A, false, v);
+        assert!(ui.settings_open());
     }
 
     #[test]
@@ -2421,14 +2065,20 @@ mod tests {
         let v = view(&r, &l, &sys, Some(2));
         let mut ui = ShellUi::new(Prefs::default(), false);
         ui.menu_key(&v);
-        settle(&mut ui, &v);
-        ui.button(Button::A, false, &v);
-        let out = settle(&mut ui, &v);
-        assert_eq!(actions(&out), vec![Out::Focus(1)]);
+        assert_eq!(ui.menu_category(), Some(Cat::Running));
+        // Home, the app on screen, the previous one (selected)
+        assert_eq!(sel_row(&ui), Some(cross::Row::App(1)));
+        assert_eq!(actions(&ui.button(Button::A, false, &v)), vec![Out::Focus(1)]);
+        // it zooms out of its row over the app that was in front
+        assert!(matches!(ui.trans, Some(Trans::Launch { target: Target::Uid(1), prev: Some(2), .. })));
+        let v2 = view(&r, &l, &sys, Some(1));
+        settle(&mut ui, &v2);
+        assert!(ui.menu.is_none() && ui.trans.is_none());
+        assert!(!ui.captures_input(true));
     }
 
     #[test]
-    fn x_flicks_a_card_away() {
+    fn x_closes_a_running_app() {
         let sys = Sys::demo(None);
         let l = launcher();
         let r = [run(2, "term"), run(1, "m8")];
@@ -2437,19 +2087,21 @@ mod tests {
         ui.menu_key(&v);
         settle(&mut ui, &v);
         assert_eq!(actions(&ui.button(Button::X, false, &v)), vec![Out::Close(1)]);
-        // the app goes away; the fan closes the gap
+        assert_eq!(ui.toast.as_ref().map(|t| t.toast.title.as_str()), Some("Closed"));
+        // its row goes at once (the app takes a moment to exit)
+        assert_eq!(sel_row(&ui), Some(cross::Row::App(2)));
         let r2 = [run(2, "term")];
         let v2 = view(&r2, &l, &sys, Some(2));
         settle(&mut ui, &v2);
-        assert_eq!(ui.menu.as_ref().unwrap().cards.len(), 2);
-        // the home card cannot be closed
-        ui.button(Button::Left, false, &v2);
-        ui.button(Button::Left, false, &v2);
+        assert_eq!(sel_row(&ui), Some(cross::Row::App(2)));
+        // Home cannot be closed
+        ui.button(Button::Up, false, &v2);
+        assert_eq!(sel_row(&ui), Some(cross::Row::Home));
         assert!(actions(&ui.button(Button::X, false, &v2)).is_empty());
     }
 
     #[test]
-    fn home_card_goes_home_with_close_transition() {
+    fn home_row_goes_home_with_close_transition() {
         let sys = Sys::demo(None);
         let l = launcher();
         let r = [run(2, "term")];
@@ -2457,17 +2109,122 @@ mod tests {
         let mut ui = ShellUi::new(Prefs::default(), false);
         ui.menu_key(&v);
         settle(&mut ui, &v);
-        ui.button(Button::Left, false, &v);
-        ui.button(Button::A, false, &v);
-        let mut out = Vec::new();
-        for _ in 0..60 {
-            out.extend(ui.step(1.0 / 60.0, &v));
-            if out.contains(&Out::Home) {
-                break;
-            }
-        }
-        assert_eq!(actions(&out), vec![Out::Home]);
+        assert_eq!(sel_row(&ui), Some(cross::Row::App(2)));
+        ui.button(Button::Up, false, &v);
+        assert_eq!(actions(&ui.button(Button::A, false, &v)), vec![Out::Home]);
         assert!(matches!(ui.trans, Some(Trans::Close { uid: 2, .. })));
+    }
+
+    #[test]
+    fn categories_remember_their_selection() {
+        let sys = Sys::demo(None);
+        let l = launcher();
+        let v = view(&[], &l, &sys, None);
+        let mut ui = ShellUi::new(Prefs::default(), false);
+        ui.menu_key(&v);
+        assert_eq!(cross::cats(&v).len(), 6);
+        press(&mut ui, &v, &[Button::Right, Button::Down, Button::Down]);
+        assert_eq!(ui.menu_category(), Some(Cat::Apps));
+        assert_eq!(sel_row(&ui), Some(cross::Row::Launch("pico".into())));
+        press(&mut ui, &v, &[Button::Right]);
+        assert_eq!(ui.menu_category(), Some(Cat::Games));
+        assert_eq!(sel_row(&ui), Some(cross::Row::Launch("pico".into())));
+        press(&mut ui, &v, &[Button::R1]);
+        assert_eq!(ui.menu_category(), Some(Cat::Power));
+        press(&mut ui, &v, &[Button::L1]);
+        assert_eq!(ui.menu_category(), Some(Cat::Running));
+        // closed and opened again: Apps is still on its third row
+        ui.menu_key(&v);
+        settle(&mut ui, &v);
+        assert!(ui.menu.is_none());
+        ui.menu_key(&v);
+        press(&mut ui, &v, &[Button::Right]);
+        assert_eq!(sel_row(&ui), Some(cross::Row::Launch("pico".into())));
+        assert_eq!(press(&mut ui, &v, &[Button::A]), vec![Out::Launch("pico".into())]);
+        // Games and Music only show with something in them
+        let l2: Vec<LauncherInfo> = l.into_iter().filter(|x| x.category == Category::Apps).collect();
+        let v2 = view(&[], &l2, &sys, None);
+        assert_eq!(cross::cats(&v2), vec![Cat::Running, Cat::Apps, Cat::Quick, Cat::Power]);
+    }
+
+    #[test]
+    fn launching_a_running_app_switches_to_it() {
+        let sys = Sys::demo(None);
+        let l = launcher();
+        let r = [run(2, "term"), run(1, "m8")];
+        let v = view(&r, &l, &sys, Some(2));
+        let mut ui = ShellUi::new(Prefs::default(), false);
+        ui.menu_key(&v);
+        assert_eq!(press(&mut ui, &v, &[Button::Right, Button::Down, Button::A]), vec![Out::Focus(1)]);
+        // the one in front: the MENU just closes
+        ui.trans = None;
+        settle(&mut ui, &v);
+        ui.menu_key(&v);
+        press(&mut ui, &v, &[Button::Right, Button::Up]);
+        assert!(press(&mut ui, &v, &[Button::A]).is_empty());
+        assert!(!ui.menu_open());
+    }
+
+    #[test]
+    fn quick_values_and_toggles() {
+        let sys = Sys::demo(None);
+        let l = launcher();
+        let r = [run(2, "term")];
+        let v = view(&r, &l, &sys, Some(2));
+        let mut ui = ShellUi::new(Prefs::default(), false);
+        to_quick(&mut ui, &v);
+        assert_eq!(sel_row(&ui), Some(cross::Row::Brightness));
+        assert_eq!(press(&mut ui, &v, &[Button::Right]), vec![Out::Brightness(10)]);
+        assert_eq!(press(&mut ui, &v, &[Button::Down, Button::Left]), vec![Out::Volume(-10)]);
+        // ◀▶ change the value; L1/R1 still change category
+        assert_eq!(ui.menu_category(), Some(Cat::Quick));
+        press(&mut ui, &v, &[Button::L1]);
+        assert_eq!(ui.menu_category(), Some(Cat::Running));
+        press(&mut ui, &v, &[Button::R1, Button::Left]);
+        assert_eq!(sel_row(&ui), Some(cross::Row::Volume));
+        assert_eq!(press(&mut ui, &v, &[Button::Down, Button::Right]), vec![Out::Radio(Radio::Wifi, false)]);
+        assert_eq!(press(&mut ui, &v, &[Button::A]), vec![Out::OpenSetup { wifi: true }]);
+        // no Bluetooth switch on this device: nothing to toggle
+        assert!(press(&mut ui, &v, &[Button::Down, Button::Right]).is_empty());
+        // Sleep closes the MENU and sleeps
+        assert_eq!(press(&mut ui, &v, &[Button::Down, Button::A]), vec![Out::Sleep]);
+        assert!(!ui.menu_open());
+    }
+
+    #[test]
+    fn power_needs_a_second_a() {
+        let sys = Sys::demo(None);
+        let l = launcher();
+        let v = view(&[], &l, &sys, None);
+        let mut ui = ShellUi::new(Prefs::default(), false);
+        ui.menu_key(&v);
+        press(&mut ui, &v, &[Button::R1, Button::Down]);
+        assert_eq!(sel_row(&ui), Some(cross::Row::Restart));
+        assert!(press(&mut ui, &v, &[Button::A]).is_empty());
+        assert_eq!(press(&mut ui, &v, &[Button::A]), vec![Out::Reboot]);
+        // moving away forgets the first press
+        assert!(press(&mut ui, &v, &[Button::Down, Button::A, Button::Up, Button::Down, Button::A]).is_empty());
+        assert_eq!(press(&mut ui, &v, &[Button::A]), vec![Out::PowerOff]);
+    }
+
+    #[test]
+    fn options_popup() {
+        let sys = Sys::demo(None);
+        let l = launcher();
+        let r = [run(2, "term"), run(1, "m8")];
+        let v = view(&r, &l, &sys, Some(2));
+        let mut ui = ShellUi::new(Prefs::default(), false);
+        ui.menu_key(&v);
+        assert_eq!(press(&mut ui, &v, &[Button::Y, Button::Down, Button::A]), vec![Out::Restart(1)]);
+        assert!(ui.menu_open());
+        // B backs out of the popup, not the MENU
+        assert!(press(&mut ui, &v, &[Button::Y, Button::B]).is_empty());
+        assert!(ui.menu_open());
+        assert_eq!(press(&mut ui, &v, &[Button::Y, Button::Up, Button::A]), vec![Out::Close(1)]);
+        // Y on Home: nothing
+        ui.button(Button::Up, false, &v);
+        ui.button(Button::Up, false, &v);
+        assert!(press(&mut ui, &v, &[Button::Y, Button::A]).iter().all(|o| *o == Out::Home));
     }
 
     #[test]
@@ -2476,32 +2233,35 @@ mod tests {
         let l = launcher();
         let v = view(&[], &l, &sys, None);
         let mut ui = ShellUi::new(Prefs::default(), false);
-        ui.menu_key(&v);
-        ui.button(Button::L1, false, &v); // Apps -> Settings
-        assert_eq!(ui.tab(), Some(Tab::Settings));
+        to_settings(&mut ui, &v);
         let out = ui.button(Button::Right, false, &v);
         assert!(out.contains(&Out::Prefs));
         assert!(!ui.prefs.sounds);
-        ui.button(Button::Down, false, &v);
-        ui.button(Button::Down, false, &v);
-        ui.button(Button::Right, false, &v);
+        press(&mut ui, &v, &[Button::Down, Button::Down, Button::Right]);
         assert_eq!(ui.prefs.motion, Preset::Calm);
-        // power off needs a second press
-        for _ in 0..20 {
-            ui.button(Button::Down, false, &v);
-        }
-        assert!(actions(&ui.button(Button::A, false, &v)).is_empty());
-        assert_eq!(actions(&ui.button(Button::A, false, &v)), vec![Out::PowerOff]);
+        // log out needs a second press
+        press(&mut ui, &v, &[Button::Down; 10]);
+        assert!(press(&mut ui, &v, &[Button::A]).is_empty());
+        assert_eq!(press(&mut ui, &v, &[Button::A]), vec![Out::Logout]);
+        // B: back to the MENU; MENU closes everything
+        ui.button(Button::B, false, &v);
+        settle(&mut ui, &v);
+        assert!(!ui.settings_open() && ui.menu_open());
+        ui.button(Button::A, false, &v);
+        assert!(ui.settings_open());
+        ui.menu_key(&v);
+        settle(&mut ui, &v);
+        assert!(ui.settings.is_none() && ui.menu.is_none());
     }
 
     #[test]
-    fn drawer_at_rest_is_not_full_pace() {
+    fn menu_at_rest_is_not_full_pace() {
         let sys = Sys::demo(None);
         let l = launcher();
         let v = view(&[], &l, &sys, None);
         let mut ui = ShellUi::new(Prefs::default(), false);
         ui.menu_key(&v);
-        ui.button(Button::R1, false, &v);
+        ui.button(Button::Right, false, &v);
         settle(&mut ui, &v);
         assert_ne!(ui.pace(false), Pace::Full);
         for _ in 0..(40 * 60) {
@@ -2516,9 +2276,8 @@ mod tests {
         let l = launcher();
         let v = view(&[], &l, &sys, None);
         let mut ui = ShellUi::new(Prefs::default(), false);
-        ui.menu_key(&v);
-        ui.button(Button::L1, false, &v); // Settings
-        let tz_row = settings(false).iter().position(|s| *s == Setting::TimeZone).unwrap();
+        to_settings(&mut ui, &v);
+        let tz_row = SETTINGS.iter().position(|s| *s == Setting::TimeZone).unwrap();
         for _ in 0..tz_row {
             ui.button(Button::Down, false, &v);
         }
@@ -2540,7 +2299,7 @@ mod tests {
         assert_eq!(actions(&ui.button(Button::A, false, &v)), vec![Out::SetTimeZone("Europe/Berlin".into())]);
         settle(&mut ui, &v);
         assert!(!ui.tz_open());
-        assert!(ui.menu_open());
+        assert!(ui.settings_open() && ui.menu_open());
     }
 
     #[test]

@@ -11,7 +11,7 @@ use crate::haptics::Haptic;
 use crate::raster::{pixmap_from_xrgb, Images};
 use crate::scene::{Layer, Scene, Src};
 use crate::sfx::Sfx;
-use crate::shellui::{LauncherInfo, Out, RunningInfo, Toast, ToastIcon, View};
+use crate::shellui::{LauncherInfo, Out, Radios, RunningInfo, Toast, ToastIcon, View};
 use mortar_ui::status::{Backlight, Sys};
 use resvg::tiny_skia::Pixmap;
 use smithay::backend::allocator::Buffer;
@@ -33,6 +33,12 @@ pub fn surface_buffer(s: &WlSurface) -> Option<(WlBuffer, CommitCounter)> {
         let b: WlBuffer = (**d.buffer()?).clone();
         Some((b, d.current_commit()))
     })
+}
+
+/// The rfkill switches for MENU > Quick.
+pub fn read_radios() -> Radios {
+    use crate::radio::{state, Radio};
+    Radios { wifi: state(Radio::Wifi), bluetooth: state(Radio::Bluetooth) }
 }
 
 /// CPU copies of app buffers and layers, for the software renderer and
@@ -154,12 +160,17 @@ impl Shell {
             .cfg
             .apps
             .iter()
-            .map(|e| LauncherInfo {
-                id: e.id.clone(),
-                name: e.name.clone(),
-                description: e.description.clone(),
-                art: self.art_for(Some(&e.id), &e.name, e.icon),
-                running: self.apps.by_entry(&e.id).is_some(),
+            .map(|e| {
+                let art = self.art_for(Some(&e.id), &e.name, e.icon);
+                LauncherInfo {
+                    id: e.id.clone(),
+                    name: e.name.clone(),
+                    description: e.description.clone(),
+                    art,
+                    running: self.apps.by_entry(&e.id).is_some(),
+                    category: e.category.unwrap_or_else(|| crate::config::Category::guess(art, &e.id, &e.name)),
+                    single_instance: e.single_instance,
+                }
             })
             .collect();
         (running, launcher)
@@ -185,6 +196,7 @@ impl Shell {
             osk_h,
             host: &host,
             timezone: &timezone,
+            radios: self.radios,
         };
         f(&mut self.sui, &v)
     }
@@ -262,14 +274,29 @@ impl Shell {
             match o {
                 Out::Sfx(s) => self.play_sfx(s),
                 Out::Haptic(h) => self.play_haptic(h),
-                Out::Launch(id) => {
-                    if let Err(e) = self.launch(&id) {
+                Out::Launch(id) => match self.launch(&id) {
+                    Ok(uid) => self.sui.launched(&id, uid),
+                    Err(e) => {
                         tracing::warn!("launch {id}: {e}");
                         self.sui.launch_failed(&e);
                     }
-                }
+                },
                 Out::Focus(uid) => self.show_app(uid),
                 Out::Close(uid) => self.close_app(uid),
+                Out::Restart(uid) => {
+                    if let Some(id) = self.apps.get(uid).and_then(|a| a.entry_id.clone()) {
+                        self.restarts.push((uid, id));
+                        self.close_app(uid);
+                    }
+                }
+                Out::Radio(r, on) => {
+                    if let Err(e) = crate::radio::set(r, on) {
+                        tracing::warn!("{}: {e}", r.name());
+                        self.sui.show_toast(Toast::info(format!("{}: {e}", r.name())));
+                        self.play_sfx(Sfx::Deny);
+                    }
+                    self.radios = read_radios();
+                }
                 Out::Home => {
                     self.at_home = true;
                     self.refocus();
@@ -282,7 +309,13 @@ impl Shell {
                             self.sui.show_toast(Toast::info(format!("Brightness: {e}")));
                         }
                         self.sys.brightness = b.get();
-                        self.sui.osd("BRI", self.sys.brightness.unwrap_or(0));
+                        let level = self.sys.brightness.unwrap_or(0);
+                        if self.sui.menu_open() {
+                            // MENU > Quick shows the value in its row
+                            self.play_sfx(Sfx::Vol(level));
+                        } else {
+                            self.sui.osd("BRI", level);
+                        }
                         self.play_haptic(Haptic::Tick);
                     } else {
                         self.sui.show_toast(Toast::info("No backlight"));
@@ -395,7 +428,9 @@ impl Shell {
         super::state::run_quiet(&argv);
         self.volume = self.read_volume();
         let v = self.volume.unwrap_or(0);
-        self.sui.osd("VOL", v);
+        if !self.sui.menu_open() {
+            self.sui.osd("VOL", v);
+        }
         self.play_sfx(Sfx::Vol(v));
         self.play_haptic(Haptic::Tick);
         self.needs_redraw = true;
@@ -567,8 +602,10 @@ impl Shell {
 
     pub fn status_refresh(&mut self) -> bool {
         let new = Sys::read();
-        let changed = format!("{new:?}") != format!("{:?}", self.sys);
+        let radios = read_radios();
+        let changed = format!("{new:?}") != format!("{:?}", self.sys) || radios != self.radios;
         self.sys = new;
+        self.radios = radios;
         changed
     }
 }

@@ -11,6 +11,7 @@ mod haptics;
 mod motion;
 mod osk;
 mod preview;
+mod radio;
 mod raster;
 mod router;
 mod scene;

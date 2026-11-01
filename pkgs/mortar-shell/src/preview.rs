@@ -8,10 +8,11 @@
 //!     (writes launch-000.png ... : the transition, 33 ms apart)
 
 use crate::art::Art;
+use crate::config::Category;
 use crate::osk::{self, Osk};
 use crate::raster::{Images, Raster};
 use crate::scene::{Layer, Src, Typo};
-use crate::shellui::{LauncherInfo, Prefs, RunningInfo, ShellUi, Toast, View, H, W};
+use crate::shellui::{LauncherInfo, Prefs, Radios, RunningInfo, ShellUi, Toast, View, H, W};
 use mortar_ui::gfx::{Color, Face, Fonts, TextStyle, Ui};
 use mortar_ui::input::Button;
 use mortar_ui::status::Sys;
@@ -26,14 +27,18 @@ pub fn demo_launcher() -> Vec<LauncherInfo> {
         description: d.into(),
         art,
         running,
+        category: Category::guess(art, id, name),
+        single_instance: id != "terminal-new",
     };
     vec![
         l("m8", "M8", "Tracker · top USB-C", Art::M8, true),
+        l("choochoo", "ChooChoo", "Tracker · groovebox", Art::Generic, false),
         l("pico8", "PICO-8", "Splore · carts", Art::Pico8, false),
         l("play", "Games", "16 systems · libretro", Art::Games, false),
         l("claude", "Claude", "Claude Code · approvals", Art::Claude, true),
         l("games", "PuzzleScript", "94 puzzles", Art::Puzzle, false),
         l("terminal", "Terminal", "foot · on-screen keys", Art::Term, false),
+        l("terminal-new", "New terminal", "Another foot window", Art::Term, false),
     ]
 }
 
@@ -136,7 +141,7 @@ pub fn run(o: &Opts) -> Result<(), String> {
     let prefs = Prefs { night: o.night, ..Prefs::default() };
     let s = o.screen.as_str();
     let mut ui = ShellUi::new(prefs, s == "boot");
-    let over_app = matches!(s, "menu" | "menu-apps" | "menu-launch" | "menu-settings" | "app" | "osd" | "toast" | "achievement" | "flash" | "osk" | "close" | "swap" | "remote" | "wifi");
+    let over_app = s.starts_with("menu") || matches!(s, "settings" | "app" | "osd" | "toast" | "achievement" | "flash" | "osk" | "close" | "swap" | "remote" | "wifi");
     let mut current = if over_app { Some(2) } else { None };
     let run_ref: &[RunningInfo] = if s == "home-empty" { &none } else { &running };
     let host = "brick";
@@ -150,6 +155,7 @@ pub fn run(o: &Opts) -> Result<(), String> {
         osk_h,
         host,
         timezone: "Europe/Lisbon",
+        radios: Radios { wifi: Some(true), bluetooth: Some(false) },
     };
     let dt = 1.0 / 120.0;
     let settle = |ui: &mut ShellUi, v: &View, secs: f64| {
@@ -163,21 +169,44 @@ pub fn run(o: &Opts) -> Result<(), String> {
     settle(&mut ui, &v0, 0.05);
     match s {
         "boot" | "home" | "home-empty" | "app" => {}
-        "menu" | "menu-apps" => {
+        "menu" | "menu-running" => {
             ui.menu_key(&v0);
         }
-        "menu-launch" => {
+        "menu-apps" | "menu-games" | "menu-music" | "menu-quick" | "menu-power" | "menu-confirm" => {
+            ui.menu_key(&v0);
+            match s {
+                "menu-apps" => ui.button(Button::Right, false, &v0),
+                "menu-games" | "menu-music" => {
+                    let n = if s == "menu-games" { 2 } else { 3 };
+                    (0..n).flat_map(|_| ui.button(Button::Right, false, &v0)).collect()
+                }
+                "menu-quick" => {
+                    ui.button(Button::R1, false, &v0);
+                    ui.button(Button::Left, false, &v0)
+                }
+                _ => ui.button(Button::R1, false, &v0),
+            };
+            if s == "menu-confirm" {
+                ui.button(Button::Down, false, &v0);
+                ui.button(Button::A, false, &v0);
+            }
+        }
+        "menu-options" => {
+            ui.menu_key(&v0);
+            ui.button(Button::Y, false, &v0);
+        }
+        "settings" => {
             ui.menu_key(&v0);
             ui.button(Button::R1, false, &v0);
-        }
-        "menu-settings" => {
-            ui.menu_key(&v0);
-            ui.button(Button::L1, false, &v0);
+            ui.button(Button::Left, false, &v0);
+            for _ in 0..8 {
+                ui.button(Button::Down, false, &v0);
+            }
+            ui.button(Button::A, false, &v0);
         }
         "remote" | "wifi" => {
             use mortar_setup::ui::{demo::DemoDevice, SetupUi};
             ui.menu_key(&v0);
-            ui.button(Button::L1, false, &v0);
             let dev = Box::new(DemoDevice::settings());
             ui.open_page(if s == "wifi" { SetupUi::wifi(dev, sys.clone()) } else { SetupUi::remote_access(dev, sys.clone()) });
         }
@@ -193,10 +222,10 @@ pub fn run(o: &Opts) -> Result<(), String> {
         "close" => {
             ui.menu_key(&v0);
             settle(&mut ui, &v0, 0.8);
-            ui.button(Button::Left, false, &v0);
-            ui.button(Button::Left, false, &v0);
+            ui.button(Button::Up, false, &v0);
+            ui.button(Button::Up, false, &v0);
             ui.button(Button::A, false, &v0);
-            // the drawer closes, then the app shrinks into its tile
+            // the MENU fades, the app shrinks into its tile
             let mut t = 0.0;
             while t < 0.8 {
                 let v = mk(current, 0.0);
@@ -211,16 +240,10 @@ pub fn run(o: &Opts) -> Result<(), String> {
         "swap" => {
             ui.menu_key(&v0);
             settle(&mut ui, &v0, 0.8);
-            ui.button(Button::A, false, &v0);
-            let mut t = 0.0;
-            while t < 0.8 {
-                let v = mk(current, 0.0);
-                let outs = ui.step(dt, &v);
-                if outs.iter().any(|o| matches!(o, crate::shellui::Out::Focus(_))) {
-                    current = Some(1);
-                    break;
-                }
-                t += dt;
+            // A on the previous app: it zooms out of its row
+            let outs = ui.button(Button::A, false, &v0);
+            if outs.iter().any(|o| matches!(o, crate::shellui::Out::Focus(_))) {
+                current = Some(1);
             }
         }
         "osd" => ui.osd("VOL", 70),
@@ -238,7 +261,6 @@ pub fn run(o: &Opts) -> Result<(), String> {
         "power" => ui.open_power_menu(),
         "timezone" | "timezone-zones" => {
             ui.menu_key(&v0);
-            ui.button(Button::L1, false, &v0);
             let dir = std::path::Path::new("/usr/share/zoneinfo");
             let ids = crate::tz::list(dir);
             let off = crate::tz::offsets(dir, &ids);
@@ -249,7 +271,11 @@ pub fn run(o: &Opts) -> Result<(), String> {
                 ui.button(Button::A, false, &v0);
             }
         }
-        other => return Err(format!("unknown preview screen '{other}' (boot, home, home-empty, app, menu, menu-launch, menu-settings, remote, wifi, launch, close, swap, osd, toast, achievement, flash, osk)")),
+        other => {
+            return Err(format!(
+                "unknown preview screen '{other}' (boot, home, home-empty, app, menu, menu-apps, menu-games, menu-music, menu-quick, menu-power, menu-confirm, menu-options, settings, remote, wifi, timezone, timezone-zones, launch, close, swap, osd, toast, achievement, flash, osk, power)"
+            ))
+        }
     }
     let osk_h = if s == "osk" { demo.pix[&Src::Layer(Layer::Osk)].height() as f32 } else { 0.0 };
     let v = mk(current, osk_h);

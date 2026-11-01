@@ -3,7 +3,7 @@
 //! force-feedback input device (see pkgs/mortar-rumble). The motor is on/off,
 //! so the feel comes from pulse length alone:
 //!
-//!   tick    one short pulse (default 8 ms): moves, tabs, the drawer
+//!   tick    one short pulse (default 8 ms): moves, categories, the MENU
 //!   double  two pulses (18 ms, 72 ms apart): launch, switch, close
 //!   long    one long pulse (60 ms): screenshot
 //!

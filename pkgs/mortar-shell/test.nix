@@ -5,7 +5,7 @@
 # composited output after each step ($out/*.png, plus state.json and the
 # shell's log). The UI is drawn by the CPU renderer here (no GPU in the
 # sandbox); `ctl time manual` freezes UI time so transition frames
-# (drawer, launch, toast, OSD, flash, boot) are captured exactly
+# (MENU, launch, toast, OSD, flash, boot) are captured exactly
 # ($out/t-*.png).
 {
   lib,
@@ -118,15 +118,15 @@ runCommand "mortar-shell-headless-test"
     wait_for '.ui.layer == false'
     shot 02-weston-fullscreen
 
-    echo "== MENU: the drawer drops; R1 to Launch, Right, A: start the terminal"
+    echo "== MENU: the cross over the app; Right to Apps, Down, A: start the terminal"
     ctl press menu
-    wait_for '.overlay == true'
+    wait_for '.overlay == true and .category == "Running"'
     sleep 0.8
-    shot 03-menu-apps
-    ctl press r1
+    shot 03-menu-running
     ctl press right
+    ctl press down
     sleep 0.5
-    shot 04-menu-launch
+    shot 04-menu-apps
     ctl press a
     wait_for "$(visible terminal)"
     wait_for '.ui.layer == false'
@@ -151,7 +151,7 @@ runCommand "mortar-shell-headless-test"
     ctl press start
     wait_for '.osk == false'
 
-    echo "== MENU, A: back to the previous app (the fan preselects it)"
+    echo "== MENU, A: back to the previous app (Running preselects it)"
     ctl press menu
     wait_for '.overlay == true'
     ctl press a
@@ -161,21 +161,23 @@ runCommand "mortar-shell-headless-test"
     ctl state | jq . > $out/state.json
     jq -e '.apps | length == 2' $out/state.json || echo "FAIL: two apps" >> $out/result
 
-    echo "== MENU, settings tab"
+    echo "== MENU, Quick (R1: the last category, Power; Left: Quick)"
     ctl press menu
-    ctl press l1
+    ctl press r1
+    ctl press left
+    wait_for '.category == "Quick"'
     sleep 0.8
-    shot 08-menu-settings
+    shot 08-menu-quick
     ctl press b
     wait_for '.ui.layer == false'
 
-    echo "== close the terminal from the fan (X flicks its card away)"
+    echo "== close the terminal from Running (X)"
     ctl press menu   # opens with the previous app (the terminal) selected
     sleep 0.5
     ctl press x
     wait_for '.apps | length == 1'
     sleep 0.6
-    shot 09-card-closed
+    shot 09-app-closed
     ctl press b
     wait_for '.ui.layer == false'
     shot 10-after-close
@@ -190,12 +192,12 @@ runCommand "mortar-shell-headless-test"
     tshot 60 home-move-060
     tshot 400 home-move-460
     ctl press menu
-    tshot 50 drawer-050
-    tshot 100 drawer-150
-    tshot 600 drawer-750
+    tshot 50 menu-050
+    tshot 100 menu-150
+    tshot 600 menu-750
     ctl press b
-    tshot 80 drawer-up-080
-    tshot 600 drawer-up-680
+    tshot 80 menu-close-080
+    tshot 600 menu-close-680
     ctl press left
     tshot 600 home-focus-first
     ctl press a     # weston-fullscreen is running: it grows out of its tile
@@ -223,35 +225,43 @@ runCommand "mortar-shell-headless-test"
     sleep 3
     ls $HOME/Pictures/Screenshots/mortar-*.png > $out/screenshots.txt || echo "FAIL: screenshot file" >> $out/result
 
-    echo "== MENU from the app, Home card: the app shrinks back into its tile"
+    echo "== MENU from the app, Home row: the app shrinks back into its tile"
     ctl time manual
     ctl press menu
     tshot 700 menu-over-app
-    ctl press left
-    ctl press left
-    tshot 300 menu-home-card
+    ctl press up
+    tshot 300 menu-home-row
     ctl press a
-    tshot 140 close-drawer-up
+    tshot 100 close-menu-fade
     tshot 40 close-040
     tshot 60 close-100
     tshot 800 close-done
 
-    echo "== night palette (Settings), saved"
-    ctl press menu
-    ctl press l1
+    # MENU > Quick > Settings… (the last Quick row)
+    settings() {
+      ctl press menu
+      ctl press r1
+      ctl press left
+      for _ in 1 2 3 4 5 6 7 8; do ctl press down >/dev/null; done
+      ctl press a
+    }
+
+    echo "== night palette (MENU > Quick > Settings…), saved"
+    settings
+    tshot 800 settings
+    jq -e '.settings == true' <(ctl state) >/dev/null || echo "FAIL: settings screen" >> $out/result
     for _ in 1 2 3 4; do ctl press down >/dev/null; done
     ctl press right
     tshot 800 night-settings
-    ctl press b
+    ctl press menu
     tshot 800 night-home
     ctl prefs > $out/prefs.json
     jq -e '.night == true' $HOME/.local/state/mortar-shell/prefs.json >/dev/null || echo "FAIL: prefs saved" >> $out/result
 
     echo "== Settings > Time zone: region list, Europe, pick the first city"
     jq -e '.timezone == "UTC"' <(ctl state) >/dev/null || echo "FAIL: starts in UTC" >> $out/result
-    ctl press menu
-    ctl press l1
-    for _ in 1 2 3 4 5 6 7; do ctl press down >/dev/null; done
+    settings
+    for _ in 1 2 3 4 5; do ctl press down >/dev/null; done
     tshot 700 tz-settings-row
     ctl press a
     tshot 700 tz-regions
@@ -266,7 +276,7 @@ runCommand "mortar-shell-headless-test"
     tshot 800 tz-back-in-settings
     ctl state | jq -r .timezone > $out/timezone.txt
     jq -e '.timezone | startswith("Europe/")' <(ctl state) >/dev/null || echo "FAIL: time zone set" >> $out/result
-    ctl press b
+    ctl press menu
     tshot 800 tz-home
 
     echo "== power key: hold for the power menu, confirm, Sleep, wake"

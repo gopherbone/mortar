@@ -85,9 +85,11 @@ impl Spring {
         self.v += a * dt;
         self.x += self.v * dt;
     }
-    /// Close enough to the target to stop animating (prototype thresholds).
+    /// Close enough to the target to stop animating (prototype thresholds;
+    /// for targets of hundreds of pixels the velocity bound grows with the
+    /// target, or f32 rounding keeps the spring jittering by an ulp).
     pub fn rest(&self) -> bool {
-        (self.x - self.t).abs() < 0.0005 && self.v.abs() < 0.002
+        (self.x - self.t).abs() < 0.0005 && self.v.abs() < 0.002f32.max(self.t.abs() * 2e-5)
     }
     /// Settle exactly once at rest, so the next frame is identical.
     pub fn settle(&mut self) {

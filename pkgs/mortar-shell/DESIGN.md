@@ -15,8 +15,10 @@ pkgs/mortar-shell/
   src/config.rs      /etc/mortar-shell/config.json (written by the module)
   src/apps.rs        running apps: launch, pid ancestry -> app, MRU, close, reap
   src/router.rs      who gets a pad button (pure, unit-tested)
-  src/shellui.rs     the shell UI: boot, home, MENU drawer, transitions,
+  src/shellui.rs     the shell UI: boot, home, settings screen, transitions,
                      OSD, toasts (pure state + scene building, unit-tested)
+  src/cross.rs       the MENU: the cross menu (a child module of shellui)
+  src/radio.rs       Wi-Fi / Bluetooth on/off (rfkill)
   src/motion.rs      springs and the Bouncy/Calm/Snappy presets
   src/scene.rs       display list (shapes, text, images) both renderers draw
   src/raster.rs      CPU renderer of scenes (tiny-skia)
@@ -64,7 +66,7 @@ on black.
 
 - Launcher entries come from the config: `id, name, description, icon,
   command (argv), env, gamepad (forward | keyboard | none),
-  singleInstance`. Launching sets `WAYLAND_DISPLAY`,
+  singleInstance, art, category (apps | games | music)`. Launching sets `WAYLAND_DISPLAY`,
   `SDL_VIDEO_DRIVER=wayland`, `XDG_SESSION_TYPE=wayland`, `MORTAR_APP`, the
   gamepad blacklist (below) and the entry's env, and puts the app in its
   own process group.
@@ -76,12 +78,12 @@ on black.
 - An app the user starts is shown when its first buffer arrives; until
   then the previous screen stays.
 - Focus is a most-recently-used list. The visible app is the head of the
-  list (its newest window). MENU, A in the switcher goes back to the
-  previous app, so flipping between two apps is two presses.
+  list (its newest window). MENU opens with the previous app selected, so
+  MENU, A flips between two apps.
 - Close: `xdg_toplevel.close`, then SIGTERM to the process group after 3 s
   and SIGKILL after 6 s. Exited apps with no window are dropped and the
   next app in MRU order is shown, or the home screen.
-- Log out (quick settings) ends the shell; greetd returns to the greeter
+- Log out (settings screen) ends the shell; greetd returns to the greeter
   and all apps get SIGTERM.
 
 ## Screens
@@ -99,29 +101,64 @@ blocks with 1 px ink outlines, isometric illustrations.
   RUNNING tag) over slowly drifting flat shapes. The focused tile lifts
   onto a lavender offset block; Left/Right move, A launches. The drift
   runs for 30 s after the last press, then the screen goes idle.
-- Launch: the app grows out of its tile in its accent colour (whoosh,
-  double haptic) and fades in once its first buffer arrives; if it is
-  slow, the accent fills the screen with the illustration and
-  "STARTING…" until it maps (B: back home, it keeps starting; 20 s
-  timeout). Closing to home is the reverse: the app shrinks into its tile.
-- MENU (anywhere, on its own): the drawer drops with a bounce over a
-  scrim. Tabs (L1/R1):
-  - Apps: a fanned stack of live cards: Home plus every running app,
-    most recent first, each showing the app's current buffer. The
-    previous app is preselected, so MENU, A flips between two apps. A
-    switches (the app slides in from the right), X flicks the card away
-    and closes the app, Home goes home.
-  - Launch: a 3-column grid of all entries; starting from home grows the
-    app from its tile, from an app slides it in.
-  - Settings: UI sounds, Haptic ticks, Motion (Bouncy/Calm/Snappy),
-    Reduce motion, Palette (Day/Night), Volume, Brightness, On-screen
-    keyboard (keyboard apps), Wi-Fi and Remote access (mortar-setup
-    pages), Sleep, Log out, Restart, Power off (the last three need a
-    second A). Changes are saved in $XDG_STATE_HOME/mortar-shell/prefs.json
-    over the module's defaults (`mortar.shell.ui.*`).
-  B or MENU closes the drawer (it rises), then the chosen action runs.
+- Launch: the app grows out of its tile (or its MENU row) in its accent
+  colour (whoosh, double haptic) and fades in once its first buffer
+  arrives; if it is slow, the accent fills the screen with the
+  illustration and "STARTING…" until it maps (B: back, it keeps
+  starting; 20 s timeout). Closing to home is the reverse: the app
+  shrinks into its tile.
+- MENU (anywhere, on its own) opens the cross menu (`cross.rs`, after the
+  approved plan/mortar-cross.html) over the app, which stays on screen
+  dimmed by a veil (the ground colour at 90%). Everything fades and
+  slides 18 px on one spring; MENU or B closes it.
+  - Status bar: the clock (serif), "N running", SSH, Wi-Fi, battery.
+  - Categories run across: Running (with a count badge), Apps, Games,
+    Music, Quick, Power. The selected one is bigger and lime and sits at
+    the left column; its items run down beneath it. Games and Music only
+    show when an entry is in them. ◀▶ move one category, L1/R1 jump to
+    the first / last.
+  - Items: the selected one is larger with its name in the serif italic;
+    the ones above it fade out, up to four show below. ▲▼ move. Each
+    category remembers its selection (across openings too).
+  - Running: Home, then every running app, most recent first (the app
+    on screen has an ON SCREEN chip). MENU opens here with the previous
+    app selected, so MENU, A flips between two apps. A live preview of
+    the selected app's buffer sits on the right (that app alone gets
+    `ui.cardFps` frame callbacks). A switches: the app zooms from its row
+    to the full screen while the MENU fades. X closes it (its row goes
+    at once, a "Closed" toast). Y opens Switch to it / Restart app /
+    Close (Restart closes the app and starts its entry again once it has
+    exited; apps nobody launched have no Restart).
+  - Apps: every launcher entry. Games, Music: the entries with that
+    `category` (the module's `category` or `categories.<id>`, else
+    guessed: M8 and trackers are music, PICO-8, PuzzleScript and
+    emulators games). A launches (zooming from the row); a running
+    single-instance entry switches to its app instead.
+  - Quick: Brightness and Volume (◀▶ change them in steps of 10 in
+    place; the row's value chip shows the level and the volume OSD stays
+    away), Wi-Fi and Bluetooth (◀▶ switch the radio with rfkill, see
+    radio.rs; A on Wi-Fi opens the mortar-setup networks page), Sleep,
+    Keyboard (keyboard apps: the on-screen keyboard), and Settings…, which
+    opens the settings screen. On value rows ◀▶ change the value, so
+    L1/R1 change category (the hint bar says so).
+  - Power: Sleep, Restart, Power off. Restart and Power off need a second
+    A: the swatch turns orange and the subtitle reads "Press A again to
+    …"; moving away cancels.
+  - The hint bar follows the selection.
+  - Sounds: move (category), tick (item), drawer / drawerUp (open,
+    close, popup), open (go), close (kill), deny (nothing there), vol
+    (values); haptic tick on moves, double on go/kill/confirm.
+- Settings screen (MENU > Quick > Settings…): slides in from the right
+  over the MENU. UI sounds, Haptic ticks, Motion (Bouncy/Calm/Snappy),
+  Reduce motion, Palette (Day/Night), Time zone, Wi-Fi networks and
+  Remote access (mortar-setup pages), Log out (second A). B goes back
+  to the MENU, MENU closes both. Changes are saved in
+  $XDG_STATE_HOME/mortar-shell/prefs.json over the module's defaults
+  (`mortar.shell.ui.*`).
+- Home shortcuts: L1 or SELECT opens the MENU on Apps, R1 on Quick.
 - Volume keys work everywhere: an OSD slides in from the right with the
-  level (and a pitch-tracking blip); brightness uses the same OSD.
+  level (and a pitch-tracking blip); brightness uses the same OSD. With
+  the MENU up the Quick rows show the level instead.
 - Screenshot: VOL+ and VOL- together (the shell owns those keys, so no
   app or game ever sees the chord). Shutter flash, shutter sound, long
   buzz, PNG in `ui.screenshotDir` (~/Pictures/Screenshots), then a toast.
@@ -132,7 +169,7 @@ blocks with 1 px ink outlines, isometric illustrations.
   TITLE [SUBTITLE]` (control socket `toast {json}`), e.g. mortar-play for
   RetroAchievements.
 
-- Time zone (Settings): a full-screen picker, regions then cities (from
+- Time zone (settings screen): a full-screen picker, regions then cities (from
   the system tzdata's zone1970.tab; offsets and local times computed by a
   `mortar-shell tz-offsets` child process, since setting TZ in the
   threaded compositor is unsafe). A sets it with `timedatectl
@@ -148,7 +185,7 @@ blocks with 1 px ink outlines, isometric illustrations.
   button wakes; holding it shows a filling "hold for power menu" pill and
   at 0.8 s opens the power menu (Sleep, Restart, Power off; the last two
   need a second A, B backs out).
-- Sleep (power tap, Settings > Sleep, the power menu): the screen fades to
+- Sleep (power tap, MENU > Quick or Power > Sleep, the power menu): the screen fades to
   black, then the backlight goes off (bl_power), nothing is redrawn, UI
   sounds and haptics are muted, and the front app is `suspended` like a
   background app (SDL apps see OCCLUDED and can idle). Apps keep running:
@@ -439,7 +476,7 @@ What is on screen when:
 | Screen | Path |
 |---|---|
 | GPU app alone | its dma-buf on the primary plane; the shell only flips |
-| MENU drawer / home / transitions / OSD / toasts | GPU UI renderer into its own dumb buffers (app images sampled from their dma-bufs); the app under the drawer is `suspended`, apps whose cards show get `ui.cardFps` frame callbacks. CPU fallback: full frames by tiny-skia, composited by pixman |
+| MENU / home / transitions / OSD / toasts | GPU UI renderer into its own dumb buffers (app images sampled from their dma-bufs); the app under the MENU is drawn under the veil and `suspended`, the app in the live preview gets `ui.cardFps` frame callbacks. CPU fallback: full frames by tiny-skia, composited by pixman |
 | OSK over a GPU app (nothing else) | composited: pixman reads the app's dma-buf (write-combined, so slower than an shm copy) for those frames only |
 | shm app (foot, llvmpipe SDL) | opaque copy, as above |
 
@@ -506,7 +543,8 @@ records the shell's RSS (`rss_kib` in state.json).
 ## Control socket
 
 `$XDG_RUNTIME_DIR/mortar-shell.sock` (0600), one line per connection:
-`state` (JSON), `press|down|up BUTTON`, `key CODE`, `launch ID`,
+`state` (JSON; `overlay`, `category` and `settings` say what of the MENU
+shows), `press|down|up BUTTON`, `key CODE`, `launch ID`,
 `focus ID`, `close ID`, `home`, `screenshot PATH`, `shot` (the screenshot
 combo), `toast JSON`, `boot` (replay), `time manual|real|+MS`, `prefs`,
 `quit`. Tests drive the
@@ -534,14 +572,17 @@ shell through it; over SSH it gives remote screenshots and app control
 
 - Unit tests (`cargo test`, also on macOS): config parsing, pid ancestry,
   MRU, button routing (MENU chord, releases on retarget, keyboard mode),
-  OSK layout and typing, overlay navigation, gamepad blacklist.
+  OSK layout and typing, the MENU (previous app, categories and their
+  memory, Quick values and toggles, Power confirm, options popup,
+  settings screen, time zone picker), rfkill state, gamepad blacklist.
 - `passthru.tests.headless`: the compositor on the headless backend in
   the build sandbox; weston-fullscreen (wl_shm) and foot started from the
-  launcher with injected buttons; typing through keys and the OSK;
-  switching back; closing from the fan; a screenshot after every step;
+  MENU with injected buttons; typing through keys and the OSK;
+  switching back; closing from Running; a screenshot after every step;
   then UI time frozen and stepped for transition frames (`t-*.png`:
-  drawer, launch, close, OSD, toast, shutter, night palette, boot), the
-  screenshot file and the saved settings checked.
+  MENU, launch, close, OSD, toast, shutter, settings, night palette,
+  time zone, power menu, boot), the screenshot file and the saved
+  settings checked.
 - `mortar-shell preview --screen ... [--at MS --frames N --every MS]`
   renders screens and transition frames on any OS for UI work (demo
   apps).
@@ -565,3 +606,10 @@ shell through it; over SSH it gives remote screenshots and app control
   Settings instead?
 - Settings screens (Wi-Fi, SSH) are still the mockups' future work; the
   quick settings link to them with a toast.
+- MENU > Quick Wi-Fi / Bluetooth: untested on the Brick. Writing
+  /dev/rfkill relies on systemd's `uaccess` tag for the seat's user; if
+  the XR829 registers no rfkill switch the rows say so and do nothing.
+  Bluetooth has no pairing screen yet (the row only switches the radio).
+- The mockup's per-app subtitles ("Song · playing") and CPU figure under
+  the preview need data apps do not give the shell; rows say on screen /
+  in the background / starting / closing instead.
