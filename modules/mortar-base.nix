@@ -79,7 +79,7 @@
     display.color = { keys = "38;2;206;240;88"; title = "38;2;203;166;247"; };
     modules = [
       "title" "separator" "os" "host" "kernel" "uptime" "packages" "shell"
-      "display" "wm" "cpu" "gpu" "memory" "swap" "disk" "battery" "wifi" "sound"
+      "display" "wm" "cpu" "gpu" "memory" "swap" "disk" "battery" "sound"
       "break" "colors"
     ];
   };
