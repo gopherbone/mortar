@@ -36,7 +36,7 @@
           ./modules/trimui-brick.nix
           ./modules/mortar-usb.nix
           ./modules/brick-firmware.nix
-          ./configuration.nix
+          ./modules/mortar-base.nix
           # SD image: mainline SPL + TF-A + U-Boot at 128 KiB, FAT /boot
           # with extlinux generations, ext4 root.
           (import ./image/build-image-mainline.nix { })
@@ -44,8 +44,6 @@
             nixpkgs.hostPlatform = lib.mkDefault "aarch64-linux";
             nixpkgs.config.allowUnfreePredicate = mortarUnfree;
             hardware.trimui-brick.variant = "mainline";
-            # configuration.nix sets "trimui-brick"
-            networking.hostName = lib.mkForce "mortar";
             # TF-A /reserved-memory (0x40000000, 0x40000, no-map)
             hardware.trimui-brick.extraDtOverlays = [
               { name = "tf-a-reserved"; dtsFile = ./firmware/mainline/reserved-memory.dtso; }
@@ -123,6 +121,22 @@
           default = self.packages.${system}.sd-image;
         }
       );
+
+      # `nix run .#mortar -- deploy` from a Mac or Linux machine
+      apps = nixpkgs.lib.genAttrs [ "aarch64-darwin" "x86_64-darwin" "x86_64-linux" "aarch64-linux" ] (system:
+        let
+          pkgs = nixpkgs.legacyPackages.${system};
+          mortar = pkgs.writeShellApplication {
+            name = "mortar";
+            runtimeInputs = with pkgs; [ openssh coreutils ];
+            # remote commands are single-quoted on purpose (expand on the Brick)
+            excludeShellChecks = [ "SC2016" ];
+            text = builtins.readFile ./scripts/mortar.sh;
+          };
+        in {
+          mortar = { type = "app"; program = "${mortar}/bin/mortar"; };
+          default = self.apps.${system}.mortar;
+        });
 
       devShells = forAllSystems (system:
         let pkgs = import nixpkgs { inherit system; };

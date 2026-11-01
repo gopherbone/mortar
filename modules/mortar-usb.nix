@@ -328,7 +328,7 @@ in
       services.openssh.enable = true;
       # Keys only. Root is allowed, but never with a password: the base
       # config ships known passwords for the local console.
-      services.openssh.settings.PermitRootLogin = lib.mkDefault "prohibit-password";
+      services.openssh.settings.PermitRootLogin = lib.mkForce "prohibit-password";
       services.openssh.settings.PasswordAuthentication = lib.mkForce false;
       services.openssh.settings.KbdInteractiveAuthentication = lib.mkForce false;
       # No keys live in this repo. Each user's keys are read from the FAT
