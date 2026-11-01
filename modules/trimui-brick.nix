@@ -45,14 +45,18 @@ in {
       description = "Kernel package set used when variant = \"mainline\".";
     };
 
-    vendorAtfCompat = mkOption {
-      type = types.bool;
-      default = true;
+    extraDtOverlays = mkOption {
+      type = types.listOf types.raw;
+      default = [ ];
+      example = literalExpression ''
+        [ { name = "tfa-reserved-memory"; dtsFile = ./tfa-reserved-memory.dtso; } ]
+      '';
       description = ''
-        (mainline only) Apply dtb/mortar-vendor-atf.dtso, which disables PSCI
-        and runs single-core. Required while booting through the patched
-        vendor ATF + RMR chain, whose EL3 cannot service AArch64 SMCs.
-        Turn off once the boot chain provides working PSCI.
+        (mainline only) Extra hardware.deviceTree.overlays entries for
+        sun50i-a133-trimui-brick.dtb, e.g. the bootloader's /reserved-memory
+        node for TF-A. Overlays need a root `compatible = "trimui,brick";`
+        to be applied. (Appending to hardware.deviceTree.overlays directly
+        works too; this is just a discoverable place for it.)
       '';
     };
   };
@@ -236,18 +240,23 @@ in {
   #     eMMC disable, EMAC disable: Liontron-DTB-specific. The Brick DTS
   #     describes the real AXP2202 (MFD_TRIMUI_BRICK + regulators) and has
   #     no EMAC, so none of it applies.
-  #   - PSCI disable: still required by the *boot chain* (vendor ATF after
-  #     RMR can't take AArch64 SMCs), not by the DTB. Kept as a separate,
-  #     optional overlay (vendorAtfCompat).
-  #   - Watchdog disable: not carried over. The watchdog is the only restart
-  #     handler without PSCI. watchdog.open_timeout=0 below keeps the kernel
-  #     pinging a boot-enabled watchdog so CONFIG_WATCHDOG_OPEN_TIMEOUT=30
-  #     can't reboot us mid-boot.
-  #   - SD 25 MHz / no-1-8-v: the Brick DTS sets its own mmc0 properties;
-  #     not overridden. If "Card stuck being busy" returns, revisit.
+  #   - PSCI disable: dropped. The mainline variant targets jkingston's
+  #     mainline SPL + TF-A + U-Boot chain, where PSCI/SMP work.
+  #     (Booting it through brittonr's vendor-ATF chain would need PSCI
+  #     disabled again, as in trimui-brick.dtso.)
+  #   - Watchdog disable: dropped. U-Boot arms the hardware watchdog and the
+  #     defconfig has WATCHDOG_HANDLE_BOOT_ENABLED + WATCHDOG_OPEN_TIMEOUT=30,
+  #     so systemd must take it over (runtimeTime below), or the board
+  #     resets ~30 s after the driver probes. watchdog.open_timeout=0 also
+  #     covers a slow initrd (e.g. rootwait on a slow card) before systemd
+  #     opens /dev/watchdog0. The watchdog is also the restart handler.
+  #   - SD 25 MHz / no-1-8-v: not carried over. The Brick DTS runs mmc0 at
+  #     SDR104/150 MHz with real vmmc/vqmmc supplies. Root-on-SD write load
+  #     is untested on this kernel; if "Card stuck being busy" returns, add
+  #     an overlay (extraDtOverlays) capping mmc0 max-frequency at 50 MHz.
   #   - regulator_ignore_unused / clk_ignore_unused: kept (common params).
   #     Harmless and safer during bring-up; drop once the PMIC driver is
-  #     known to describe every rail boot0 enabled.
+  #     known to describe every rail the bootloader enabled.
   #   - journald volatile, tmpfs /tmp,/var/tmp,/var/log, ext4 commit=120:
   #     kept (common). The SD write failures may have been the Liontron mmc
   #     setup, but we have not proven that yet.
@@ -257,6 +266,11 @@ in {
   # ===================================================================
   (mkIf isMainline {
     boot.kernelPackages = cfg.mainlineKernelPackages;
+
+    systemd.watchdog.runtimeTime = mkDefault "15s";
+    # VERIFY: newer nixpkgs renames this to
+    # systemd.settings.Manager.RuntimeWatchdogSec (old name should still
+    # work via mkRenamedOptionModule, with a warning).
 
     # Serial stays the primary console (/dev/console = last console=), the
     # panel gets kernel messages too. mkBefore puts tty0 ahead of the
@@ -284,10 +298,7 @@ in {
       # Also used by image/build-image.nix for the extlinux FDT line, and by
       # generic-extlinux-compatible for on-device rebuilds.
       name = "allwinner/sun50i-a133-trimui-brick.dtb";
-      overlays = optional cfg.vendorAtfCompat {
-        name = "mortar-vendor-atf";
-        dtsFile = ../dtb/mortar-vendor-atf.dtso;
-      };
+      overlays = cfg.extraDtOverlays;
     };
 
     # The device kernel has nf_tables but no legacy iptables/x_tables.
