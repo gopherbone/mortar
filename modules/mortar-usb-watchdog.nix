@@ -33,7 +33,7 @@ in
       wantedBy = [ "multi-user.target" ];
       after = [ "mortar-usb-gadget.service" "systemd-networkd.service" ];
       wants = [ "mortar-usb-gadget.service" ];
-      path = [ pkgs.coreutils pkgs.gawk pkgs.iproute2 pkgs.iputils config.systemd.package ];
+      path = [ pkgs.coreutils pkgs.gawk pkgs.iproute2 pkgs.iputils pkgs.util-linux config.systemd.package ];
       environment = {
         MORTAR_USB_IF = "usb0";
         MORTAR_USB_GADGET = "/sys/kernel/config/usb_gadget/mortar";

@@ -5,7 +5,11 @@
 #
 #  - USB input current: TrimUI's stock policy. Every plug-in starts at the
 #    USB 2.0 PC limit (500 mA); when no USB host configures the gadget within
-#    5 s (20 s at boot) it is a charger and the limit goes to 2.5 A.
+#    5 s (20 s at boot) it is a charger and the limit goes to 2.5 A; never
+#    while the gadget is configured. On unplug it soft-reconnects the USB
+#    gadget (sharing mortar-usb-watchdog's lock), since the MUSB otherwise
+#    keeps reporting "configured" and a charger plugged in next would be
+#    held at 500 mA until the watchdog notices.
 #  - Warnings at 15 % and 5 %: a toast with sound and haptics in the shell
 #    (the rumble motor alone when no shell runs).
 #  - A clean `systemctl poweroff` at 3 % (only if the battery also reads

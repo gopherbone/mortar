@@ -10,18 +10,33 @@ use std::collections::VecDeque;
 /// jkingston's brick-usb-current reimplements it: start every attach at the
 /// USB 2.0 PC limit; if no USB host configures the gadget within a few
 /// seconds it is a charger, so raise the limit to the adapter current. A
-/// data connection keeps the PC limit until the cable is pulled.
+/// data connection keeps the PC limit until the cable is pulled; the
+/// adapter current is never chosen while the gadget is (or was, during this
+/// attach) configured.
+///
+/// The MUSB does not notice a cable pull by itself: its UDC keeps reporting
+/// "configured" from the last computer, and a wall charger plugged in next
+/// would then be held at the PC limit until mortar-usb-watchdog notices the
+/// dead link (about a minute). So once VBUS has been gone for two polls in
+/// a row (debounced: a blip must not drop a live computer link) the policy
+/// asks for a gadget soft disconnect/reconnect, once per unplug, so the next
+/// attach starts from a clean "not attached" state.
 #[derive(Debug, Default)]
 pub struct UsbPolicy {
     observed: bool,
     attached_ms: Option<u64>,
     delay_ms: u64,
     configured: bool,
+    /// VBUS was present since the last gadget reset (or since start).
+    powered_since_reset: bool,
+    offline_polls: u32,
 }
 
 pub const ATTACH_DELAY_MS: u64 = 5_000;
 /// At boot the gadget needs longer to come up and enumerate.
 pub const BOOT_DELAY_MS: u64 = 20_000;
+/// Consecutive offline polls (2 s apart) before the gadget is reset.
+pub const UNPLUG_POLLS: u32 = 2;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UsbLimit {
@@ -29,23 +44,40 @@ pub enum UsbLimit {
     Adapter,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UsbDecision {
+    pub limit: UsbLimit,
+    /// Soft-disconnect and reconnect the gadget now (the cable is gone).
+    pub reset_gadget: bool,
+}
+
 impl UsbPolicy {
-    pub fn update(&mut self, online: bool, configured: bool, now_ms: u64) -> UsbLimit {
+    pub fn update(&mut self, online: bool, configured: bool, now_ms: u64) -> UsbDecision {
         if !online {
-            *self = UsbPolicy { observed: true, ..UsbPolicy::default() };
-            return UsbLimit::Host;
+            self.offline_polls = self.offline_polls.saturating_add(1);
+            let reset_gadget = self.powered_since_reset && self.offline_polls >= UNPLUG_POLLS;
+            if reset_gadget {
+                self.powered_since_reset = false;
+            }
+            self.observed = true;
+            self.attached_ms = None;
+            self.configured = false;
+            return UsbDecision { limit: UsbLimit::Host, reset_gadget };
         }
+        self.offline_polls = 0;
+        self.powered_since_reset = true;
         let attached = *self.attached_ms.get_or_insert_with(|| {
             self.delay_ms = if self.observed { ATTACH_DELAY_MS } else { BOOT_DELAY_MS };
             now_ms
         });
         self.observed = true;
         self.configured |= configured;
-        if self.configured || now_ms.saturating_sub(attached) < self.delay_ms {
+        let limit = if self.configured || configured || now_ms.saturating_sub(attached) < self.delay_ms {
             UsbLimit::Host
         } else {
             UsbLimit::Adapter
-        }
+        };
+        UsbDecision { limit, reset_gadget: false }
     }
 }
 
@@ -224,6 +256,56 @@ impl Battery {
 mod tests {
     use super::*;
 
+    impl UsbPolicy {
+        fn up(&mut self, online: bool, configured: bool, now_ms: u64) -> UsbLimit {
+            self.update(online, configured, now_ms).limit
+        }
+    }
+
+    #[test]
+    fn unplug_resets_the_gadget_once_after_two_offline_polls() {
+        let mut p = UsbPolicy::default();
+        p.update(true, true, 0);
+        // a one-poll blip keeps a live computer link alone
+        assert!(!p.update(false, true, 2_000).reset_gadget);
+        assert!(!p.update(true, true, 4_000).reset_gadget);
+        assert!(!p.update(false, false, 6_000).reset_gadget);
+        assert!(p.update(false, false, 8_000).reset_gadget);
+        // once per unplug
+        assert!(!p.update(false, false, 10_000).reset_gadget);
+        assert!(!p.update(false, false, 12_000).reset_gadget);
+    }
+
+    #[test]
+    fn booting_unplugged_does_not_reset_the_gadget() {
+        let mut p = UsbPolicy::default();
+        for t in 0..5 {
+            assert!(!p.update(false, false, t * 2_000).reset_gadget);
+        }
+    }
+
+    #[test]
+    fn charger_after_computer_gets_adapter_current_within_seconds() {
+        let mut p = UsbPolicy::default();
+        assert_eq!(p.up(true, true, 0), UsbLimit::Host);
+        p.update(false, true, 2_000);
+        assert!(p.update(false, false, 4_000).reset_gadget);
+        // wall charger: after the reset the UDC is no longer configured
+        assert_eq!(p.up(true, false, 10_000), UsbLimit::Host);
+        assert_eq!(p.up(true, false, 15_000), UsbLimit::Adapter);
+    }
+
+    #[test]
+    fn never_adapter_while_configured() {
+        let mut p = UsbPolicy::default();
+        p.update(false, false, 0);
+        p.update(true, false, 0);
+        assert_eq!(p.up(true, false, 6_000), UsbLimit::Adapter);
+        // a host enumerates late: back to the PC limit at once, and it stays
+        assert_eq!(p.up(true, true, 7_000), UsbLimit::Host);
+        assert_eq!(p.up(true, false, 60_000), UsbLimit::Host);
+    }
+
     fn on(c: u8, mv: u32) -> Reading {
         Reading { capacity: Some(c), voltage_mv: Some(mv), on_battery: true }
     }
@@ -231,31 +313,31 @@ mod tests {
     #[test]
     fn usb_charger_gets_adapter_current_after_delay() {
         let mut p = UsbPolicy::default();
-        assert_eq!(p.update(false, false, 0), UsbLimit::Host);
-        assert_eq!(p.update(true, false, 1000), UsbLimit::Host);
-        assert_eq!(p.update(true, false, 5_999), UsbLimit::Host);
-        assert_eq!(p.update(true, false, 6_000), UsbLimit::Adapter);
+        assert_eq!(p.up(false, false, 0), UsbLimit::Host);
+        assert_eq!(p.up(true, false, 1000), UsbLimit::Host);
+        assert_eq!(p.up(true, false, 5_999), UsbLimit::Host);
+        assert_eq!(p.up(true, false, 6_000), UsbLimit::Adapter);
         // unplug resets
-        assert_eq!(p.update(false, false, 7_000), UsbLimit::Host);
-        assert_eq!(p.update(true, false, 8_000), UsbLimit::Host);
+        assert_eq!(p.up(false, false, 7_000), UsbLimit::Host);
+        assert_eq!(p.up(true, false, 8_000), UsbLimit::Host);
     }
 
     #[test]
     fn usb_host_keeps_pc_limit_until_unplugged() {
         let mut p = UsbPolicy::default();
-        p.update(false, false, 0);
-        p.update(true, false, 0);
-        assert_eq!(p.update(true, true, 1000), UsbLimit::Host);
+        p.up(false, false, 0);
+        p.up(true, false, 0);
+        assert_eq!(p.up(true, true, 1000), UsbLimit::Host);
         // a configured host that suspends the bus stays a host
-        assert_eq!(p.update(true, false, 60_000), UsbLimit::Host);
+        assert_eq!(p.up(true, false, 60_000), UsbLimit::Host);
     }
 
     #[test]
     fn usb_plugged_at_boot_waits_longer() {
         let mut p = UsbPolicy::default();
-        assert_eq!(p.update(true, false, 0), UsbLimit::Host);
-        assert_eq!(p.update(true, false, 19_000), UsbLimit::Host);
-        assert_eq!(p.update(true, false, 20_000), UsbLimit::Adapter);
+        assert_eq!(p.up(true, false, 0), UsbLimit::Host);
+        assert_eq!(p.up(true, false, 19_000), UsbLimit::Host);
+        assert_eq!(p.up(true, false, 20_000), UsbLimit::Adapter);
     }
 
     #[test]

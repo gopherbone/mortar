@@ -92,6 +92,12 @@ dump_state() {
   systemctl start --no-block mortar-blackbox@usbwedge.service >/dev/null 2>&1 || true
 }
 
+# mortar-power soft-reconnects the gadget when the cable is pulled (so the
+# UDC forgets a stale "configured" state); both take this lock around any
+# UDC change so they never toggle it at the same time.
+LOCK=${MORTAR_USB_UDC_LOCK:-/run/mortar-usb-udc.lock}
+with_udc_lock() { ( flock -w 10 9 || exit 1; "$@" ) 9>"$LOCK"; }
+
 step_softconnect() {
   local u; u=$(bound_udc); [ -n "$u" ] || return 1
   log "recovery 1: soft_connect toggle on $u"
@@ -154,7 +160,7 @@ while sleep "$INTERVAL"; do
   dump_state
   ok=0
   for step in step_softconnect step_rebind step_long_rebind; do
-    if $step && wait_rx; then
+    if with_udc_lock $step && wait_rx; then
       log "recovered by ${step#step_}"
       ok=1
       break

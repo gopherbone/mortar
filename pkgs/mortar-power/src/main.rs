@@ -2,7 +2,8 @@
 //! mortar-power: battery policy for Mortar on the TrimUI Brick.
 //!
 //! - USB input current: the stock PC/adapter policy (500 mA until it is
-//!   clear no USB host is on the cable, then 2.5 A).
+//!   clear no USB host is on the cable, then 2.5 A). On unplug the gadget
+//!   is soft-reconnected so the UDC forgets its last host.
 //! - Low battery: toasts with sound and haptics in the shell at 15 % and
 //!   5 % (the rumble motor alone when no shell is running).
 //! - Empty battery: a clean `systemctl poweroff` at 3 % (confirmed by
@@ -121,6 +122,44 @@ fn gadget_configured() -> bool {
     fs::read_dir("/sys/class/udc")
         .map(|rd| rd.flatten().any(|e| read(&e.path().join("state")).as_deref() == Some("configured")))
         .unwrap_or(false)
+}
+
+/// Shared with mortar-usb-watchdog (flock on the same file): only one of
+/// us touches the UDC at a time.
+const UDC_LOCK: &str = "/run/mortar-usb-udc.lock";
+
+/// The UDC the configfs gadget is bound to (else the first one).
+fn bound_udc() -> Option<String> {
+    let bound = fs::read_dir("/sys/kernel/config/usb_gadget")
+        .ok()
+        .and_then(|rd| rd.flatten().find_map(|e| read(&e.path().join("UDC")).filter(|u| !u.is_empty())));
+    bound.or_else(|| fs::read_dir("/sys/class/udc").ok()?.flatten().next().map(|e| e.file_name().to_string_lossy().into_owned()))
+}
+
+/// The cable is gone: soft disconnect and reconnect the gadget so the UDC
+/// drops its stale "configured" state before the next plug-in (the same
+/// step mortar-usb-watchdog uses for a wedged link). Skipped if the
+/// watchdog holds the lock: it is resetting the UDC already.
+fn reset_gadget() {
+    let Some(udc) = bound_udc() else { return };
+    let Ok(lock) = fs::OpenOptions::new().create(true).truncate(false).write(true).open(UDC_LOCK) else {
+        eprintln!("{UDC_LOCK}: cannot open");
+        return;
+    };
+    if lock.try_lock().is_err() {
+        eprintln!("usb unplugged: UDC busy (watchdog), not resetting {udc}");
+        return;
+    }
+    let f = PathBuf::from("/sys/class/udc").join(&udc).join("soft_connect");
+    let r = fs::write(&f, "disconnect").and_then(|_| {
+        std::thread::sleep(Duration::from_secs(1));
+        fs::write(&f, "connect")
+    });
+    match r {
+        Ok(()) => eprintln!("usb unplugged: gadget on {udc} reset (soft disconnect/connect)"),
+        Err(e) => eprintln!("{}: {e}", f.display()),
+    }
+    // the lock is released when the file closes
 }
 
 #[derive(Debug, Default, Clone)]
@@ -294,7 +333,11 @@ fn main() {
         let online = usb.as_ref().is_some_and(|u| read(&u.join("online")).as_deref() == Some("1"));
         let mut input_current_ua = None;
         if let Some(u) = &usb {
-            let limit = usb_policy.update(online, gadget_configured(), now_ms);
+            let decision = usb_policy.update(online, gadget_configured(), now_ms);
+            if decision.reset_gadget {
+                reset_gadget();
+            }
+            let limit = decision.limit;
             if o.adapter_ua > 0 {
                 let want = if limit == UsbLimit::Adapter { o.adapter_ua } else { o.host_ua };
                 let f = u.join("input_current_limit");
