@@ -53,7 +53,36 @@
     usbutils pciutils
     ghostty.terminfo # `ssh` from Ghostty without TERM overrides
     (pkgs.callPackage ../pkgs/mortar-rumble { }) # `mortar attention` buzzes it
+    fastfetch
+    (pkgs.writeShellScriptBin "screenfetch" ''exec ${pkgs.fastfetch}/bin/fastfetch "$@"'')
   ];
+
+  # fastfetch with a Mortar brick logo (lime/lavender, Pond palette).
+  environment.etc."xdg/fastfetch/config.jsonc".text = builtins.toJSON {
+    logo = {
+      type = "data";
+      source = builtins.concatStringsSep "\n" [
+        "$1██████████$2████████"
+        "$1██████████$2████████"
+        "$3              "
+        "$2█████$1██████████$2███"
+        "$2█████$1██████████$2███"
+        "$3              "
+        "$1██████████$2████████"
+        "$1██████████$2████████"
+        "$3              "
+        "$3   m o r t a r"
+      ];
+      color = { "1" = "38;2;206;240;88"; "2" = "38;2;203;166;247"; "3" = "38;2;225;235;247"; };
+      padding = { top = 1; left = 1; right = 3; };
+    };
+    display.color = { keys = "38;2;206;240;88"; title = "38;2;203;166;247"; };
+    modules = [
+      "title" "separator" "os" "host" "kernel" "uptime" "packages" "shell"
+      "display" "wm" "cpu" "gpu" "memory" "swap" "disk" "battery" "wifi" "sound"
+      "break" "colors"
+    ];
+  };
 
   # Compressed swap in RAM: 1 GB is tight for heavier tools (Claude Code
   # alone uses ~200 MB at startup).
