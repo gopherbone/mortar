@@ -118,8 +118,11 @@ in
 
     # Codec levels at boot: speaker amp on (it defaults off), DAC at 0 dB,
     # DAC Digital 160 = 0 dB (0.75 dB steps, more is digital gain that
-    # clips), analog out 7/7 (it also drives the speaker). Volume keys
-    # adjust from here. Set with amixer; nothing is persisted.
+    # clips), Headphone 7/7 = 0 dB (the HPOUT attenuator; the speaker amp
+    # is fed from HPOUT, so this sets the speaker level too, as stock
+    # does; patches/kernel/0004 makes 7 the loud end). The codec's LINEOUT
+    # is not wired to the speaker on the Brick, so it stays off. Volume
+    # keys adjust DAC from here. Set with amixer; nothing is persisted.
     systemd.services.mortar-audio-defaults = {
       description = "Brick codec mixer defaults";
       wantedBy = [ "multi-user.target" ];
