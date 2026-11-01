@@ -53,13 +53,21 @@ in {
         default = isMainline;
         defaultText = literalExpression ''config.hardware.trimui-brick.variant == "mainline"'';
         description = ''
-          (mainline only) Suspend to RAM through the SCP ("deep"): boots the
-          kernel tree's sun50i-a133-trimui-brick-native-deep.dtb (wake
-          routing through TF-A/SCP, CCU/PIO context restore, PSCI CPU idle
-          states) and makes `systemctl suspend` enter mem/deep. Needs the
+          (mainline only) Suspend to RAM through the SCP ("deep"): applies
+          dtb/brick-deep-suspend.dtso (the kernel tree's -native-deep.dts
+          changes: wake routing through TF-A/SCP, CCU/PIO context restore)
+          to the Brick DTB and makes `systemctl suspend` enter mem/deep. Needs the
           mainline TF-A with SUNXI_A133_SYSTEM_SUSPEND
           (firmware/mainline/tf-a.nix). Off: the plain Brick DTB and no
           suspend (s2idle only).
+        '';
+      };
+      cpuIdle = mkOption {
+        type = types.bool;
+        default = false;
+        description = ''
+          Also add the PSCI CPU/cluster idle states that -native-deep.dts
+          includes (dtb/brick-cpu-idle.dtso). Suspend does not need them.
         '';
       };
       padWake = mkOption {
@@ -317,26 +325,28 @@ in {
     # failing the initrd build.
     boot.initrd.allowMissingModules = true;
 
-    hardware.deviceTree = let
-      dtb = if cfg.suspend.enable
-        then "sun50i-a133-trimui-brick-native-deep.dtb"
-        else "sun50i-a133-trimui-brick.dtb";
-    in {
+    hardware.deviceTree = {
       enable = true;
-      filter = dtb;
+      filter = "sun50i-a133-trimui-brick.dtb";
       # Also used by image/build-image.nix for the extlinux FDT line, and by
-      # generic-extlinux-compatible for on-device rebuilds.
-      name = "allwinner/${dtb}";
-      overlays = cfg.extraDtOverlays ++ optional (cfg.suspend.enable && cfg.suspend.padWake) {
-        name = "brick-pad-wake";
-        dtsText = ''
-          /dts-v1/;
-          /plugin/;
-          / { compatible = "trimui,brick"; };
-          ${concatMapStrings (b: "&{/gamepad/button-${b}} { wakeup-source; };\n")
-            [ "a" "b" "x" "y" "up" "down" "left" "right" "start" "select" "menu" ]}
-        '';
-      };
+      # generic-extlinux-compatible for on-device rebuilds. Keep this name:
+      # generic-extlinux writes it into every boot-menu entry (older
+      # generations only have this file), so deep suspend comes as overlays
+      # rather than as the kernel tree's -native-deep DTB.
+      name = "allwinner/sun50i-a133-trimui-brick.dtb";
+      overlays = cfg.extraDtOverlays
+        ++ optional cfg.suspend.enable { name = "brick-deep-suspend"; dtsFile = ../dtb/brick-deep-suspend.dtso; }
+        ++ optional (cfg.suspend.enable && cfg.suspend.cpuIdle) { name = "brick-cpu-idle"; dtsFile = ../dtb/brick-cpu-idle.dtso; }
+        ++ optional (cfg.suspend.enable && cfg.suspend.padWake) {
+          name = "brick-pad-wake";
+          dtsText = ''
+            /dts-v1/;
+            /plugin/;
+            / { compatible = "trimui,brick"; };
+            ${concatMapStrings (b: "&{/gamepad/button-${b}} { wakeup-source; };\n")
+              [ "a" "b" "x" "y" "up" "down" "left" "right" "start" "select" "menu" ]}
+          '';
+        };
     };
 
     # The device kernel has nf_tables but no legacy iptables/x_tables.
