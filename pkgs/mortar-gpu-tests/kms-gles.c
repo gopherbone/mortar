@@ -7,9 +7,14 @@
 //                               Without --show only checks pixels via mmap.
 //   kms-gles readback [frames]  copy path: render to pbuffer, glReadPixels into
 //                               the mmapped dumb buffer, page flip.
+//   kms-gles pattern  [frames]  no GPU: CPU-drawn colour bars, a 1-pixel white
+//                               border and a moving white bar, page flipped. Use
+//                               it to tell display problems from GPU ones.
 // Options: --show (actually modeset + flip on card0; restores CRTC afterwards)
 //          --novsync (flip without waiting: drmModeSetCrtc per frame / no event wait)
 //          --fmt=xrgb|xbgr|argb|abgr (dumb buffer fourcc, default xrgb)
+//          --dump=FILE (write the last presented buffer, raw XRGB at its pitch)
+//          --hold=SEC (keep the last frame on screen before restoring the CRTC)
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
 #include <GLES2/gl2.h>
@@ -160,10 +165,28 @@ static void draw_frame(int f)
 	glDrawArrays(GL_TRIANGLES, 0, 3);
 }
 
+static void draw_pattern(struct buf *b, int f)
+{
+	static const uint32_t bars[8] = { 0xffffff, 0xffff00, 0x00ffff, 0x00ff00, 0xff00ff, 0xff0000, 0x0000ff, 0x000000 };
+	uint32_t *row = malloc(b->pitch);
+	int bar = (f * 4) % W;
+	for (uint32_t y = 0; y < H; y++) {
+		for (uint32_t x = 0; x < W; x++) {
+			uint32_t c = y < H / 2 ? bars[x * 8 / W] : (x * 255 / W) * 0x010101; /* bars over a grey ramp */
+			if (x == 0 || y == 0 || x == W - 1 || y == H - 1 || ((int)x >= bar && (int)x < bar + 8))
+				c = 0xffffff;
+			row[x] = c;
+		}
+		memcpy((char *)b->map + (size_t)y * b->pitch, row, W * 4); /* one write pass into WC memory */
+	}
+	free(row);
+}
+
 int main(int argc, char **argv)
 {
 	const char *what = argc > 1 ? argv[1] : "import";
-	int frames = 300, show = 0, novsync = 0;
+	int frames = 300, show = 0, novsync = 0, hold = 0;
+	const char *dump = NULL;
 	uint32_t fourcc = DRM_FORMAT_XRGB8888;
 	for (int i = 2; i < argc; i++) {
 		if (!strcmp(argv[i], "--show")) show = 1;
@@ -171,9 +194,11 @@ int main(int argc, char **argv)
 		else if (!strcmp(argv[i], "--fmt=xbgr")) fourcc = DRM_FORMAT_XBGR8888;
 		else if (!strcmp(argv[i], "--fmt=argb")) fourcc = DRM_FORMAT_ARGB8888;
 		else if (!strcmp(argv[i], "--fmt=abgr")) fourcc = DRM_FORMAT_ABGR8888;
+		else if (!strncmp(argv[i], "--dump=", 7)) dump = argv[i] + 7;
+		else if (!strncmp(argv[i], "--hold=", 7)) hold = atoi(argv[i] + 7);
 		else frames = atoi(argv[i]);
 	}
-	int import = !strcmp(what, "import");
+	int import = !strcmp(what, "import"), pattern = !strcmp(what, "pattern");
 	kms_init();
 	struct buf b[NBUF];
 	for (int i = 0; i < NBUF; i++)
@@ -181,9 +206,11 @@ int main(int argc, char **argv)
 	printf("dumb buffers: %ux%u pitch %u size %llu fourcc %.4s, dma-buf fds %d %d %d\n", W, H, b[0].pitch,
 	       (unsigned long long)b[0].size, (char *)&fourcc, b[0].fd, b[1].fd, b[2].fd);
 
-	egl_init(import ? 16 : W, import ? 16 : H);
-	printf("EGL_EXTENSIONS: %s\n", eglQueryString(dpy, EGL_EXTENSIONS));
-	gl_scene_init();
+	if (!pattern) {
+		egl_init(import ? 16 : W, import ? 16 : H);
+		printf("EGL_EXTENSIONS: %s\n", eglQueryString(dpy, EGL_EXTENSIONS));
+		gl_scene_init();
+	}
 
 	if (import) {
 		PFNEGLCREATEIMAGEKHRPROC createImage = (void *)eglGetProcAddress("eglCreateImageKHR");
@@ -239,7 +266,9 @@ int main(int argc, char **argv)
 	int cur = 1;
 	for (int f = 0; f < frames; f++) {
 		double a = now();
-		if (import) {
+		if (pattern) {
+			draw_pattern(&b[cur], f);
+		} else if (import) {
 			glBindFramebuffer(GL_FRAMEBUFFER, b[cur].fbo);
 			draw_frame(f);
 			glFinish();
@@ -267,9 +296,18 @@ int main(int argc, char **argv)
 	}
 	if (show) wait_flip();
 	double dt = now() - t0;
-	printf("%s: %d frames %.3f s -> %.1f fps (render+finish %.2f ms/frame%s%s)\n", what, frames, dt, frames / dt,
-	       tgpu / frames * 1e3, import ? "" : ", glReadPixels into dumb buffer ", "");
-	if (!import) printf("  readback %.2f ms/frame\n", tcopy / frames * 1e3);
+	int last = (cur + NBUF - 1) % NBUF;
+	if (dump) {
+		FILE *o = fopen(dump, "wb");
+		CHECK(o);
+		fwrite(b[last].map, 1, (size_t)b[last].pitch * H, o);
+		fclose(o);
+		printf("dumped buffer %d (%ux%u pitch %u) to %s\n", last, W, H, b[last].pitch, dump);
+	}
+	if (hold) sleep(hold);
+	printf("%s: %d frames %.3f s -> %.1f fps (draw %.2f ms/frame%s%s)\n", what, frames, dt, frames / dt,
+	       tgpu / frames * 1e3, import || pattern ? "" : ", glReadPixels into dumb buffer ", "");
+	if (!import && !pattern) printf("  readback %.2f ms/frame\n", tcopy / frames * 1e3);
 	if (show && saved) {
 		drmModeSetCrtc(drm, saved->crtc_id, saved->buffer_id, saved->x, saved->y, &conn_id, 1, &saved->mode);
 		drmModeFreeCrtc(saved);
