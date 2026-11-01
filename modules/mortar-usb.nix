@@ -326,9 +326,18 @@ in
       # SSH
       # ---------------------------------------------------------------
       services.openssh.enable = true;
-      services.openssh.settings.PermitRootLogin = lib.mkDefault "yes";
-      users.users.root.openssh.authorizedKeys.keys = [
-      ];
+      # Keys only. Root is allowed, but never with a password: the base
+      # config ships known passwords for the local console.
+      services.openssh.settings.PermitRootLogin = lib.mkDefault "prohibit-password";
+      services.openssh.settings.PasswordAuthentication = lib.mkForce false;
+      services.openssh.settings.KbdInteractiveAuthentication = lib.mkForce false;
+      # No keys live in this repo. Each user's keys are read from the FAT
+      # boot partition, so they can be added with any card reader:
+      #   <card>/ssh-keys/root   (one public key per line)
+      # The partition is mounted with umask 0077 (root-owned 0700/0600),
+      # which satisfies sshd's StrictModes checks. sshd reads these files
+      # with the target user's rights, so this works for root only.
+      services.openssh.authorizedKeysFiles = [ "/boot/ssh-keys/%u" ];
     }
 
     # -----------------------------------------------------------------
