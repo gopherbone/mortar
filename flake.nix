@@ -209,6 +209,7 @@
 
           # tools/showcase: frames of the real shell for the showcase video
           showcase-capture = pkgs.callPackage ./tools/showcase/capture.nix { };
+          showcase-capture-apps = pkgs.callPackage ./tools/showcase/capture.nix { part = "apps"; };
 
           default = self.packages.${system}.sd-image;
         }

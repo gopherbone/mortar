@@ -29,11 +29,54 @@
   jq,
   makeFontsConf,
   dejavu_fonts,
+  fetchurl,
+  mesa,
+  libretro,
+  # "shell": the shell's own screens; "apps": the apps that need GPU-ish
+  # clients (on Mesa's software GL here) and the emulator
+  part ? "shell",
 }:
 
 let
   mortar-shell = callPackage ../../pkgs/mortar-shell { };
   mortar-ai = callPackage ../../pkgs/mortar-ai { inherit mortar-shell; };
+  apps = part == "apps";
+  mortar-play = callPackage ../../pkgs/mortar-play { };
+  choochoo = callPackage ../../pkgs/choochootracker { };
+  pico8 = callPackage ../../pkgs/pico8 { }; # the user's own licensed copy
+
+  # Open homebrew for the emulator: µCity (GPLv3+, media CC BY-SA 4.0,
+  # AntonioND) and Libbet and the Magic Floor (zlib, Damian Yerrick).
+  ucity = fetchurl {
+    url = "https://github.com/AntonioND/ucity/releases/download/v1.3/ucity.gbc";
+    sha256 = "1q76iha0y8p6g8gfwbbk7vylsd9zzygl4albnm31vsmplwnfw8ll";
+  };
+  libbet = fetchurl {
+    url = "https://github.com/pinobatch/libbet/releases/download/v0.08/libbet.gb";
+    sha256 = "1agi7zx7cmdr8diq00z7vm9bi18yb1pfk719g3w7qa6864h421rn";
+  };
+  gambatte = "${libretro.gambatte}/lib/retroarch/cores/gambatte_libretro.so";
+  playConfig = writeText "mortar-play-showcase.json" (builtins.toJSON {
+    romDirs = [ "/build/play/roms" ];
+    biosDir = "/build/play/bios";
+    saveDir = "/build/play/saves";
+    stateDir = "/build/play/states";
+    dataDir = "/build/play";
+    systems = [
+      { id = "gb"; name = "Game Boy"; tag = "GB"; folders = [ "gb" ]; extensions = [ "gb" ]; core = gambatte; scaling = "integer"; order = 10;
+        options = { gambatte_gb_colorization = "auto"; gambatte_gb_bootloader = "disabled"; }; }
+      { id = "gbc"; name = "Game Boy Color"; tag = "GBC"; folders = [ "gbc" ]; extensions = [ "gbc" ]; core = gambatte; scaling = "integer"; order = 11;
+        options = { gambatte_gb_bootloader = "disabled"; gambatte_gbc_color_correction = "GBC only"; }; }
+    ];
+  });
+  # SDL apps on Mesa's software GL (llvmpipe) as Wayland clients
+  softGl = {
+    __EGL_VENDOR_LIBRARY_FILENAMES = "${mesa}/share/glvnd/egl_vendor.d/50_mesa.json";
+    LIBGL_DRIVERS_PATH = "${mesa}/lib/dri";
+    LIBGL_ALWAYS_SOFTWARE = "1";
+    GALLIUM_DRIVER = "llvmpipe";
+    SDL_AUDIO_DRIVER = "dummy";
+  };
 
   # Stand-in for `claude -p` (stream-json), after pkgs/mortar-ai/test.nix,
   # with a scripted, streamed reply.
@@ -98,6 +141,7 @@ let
     regular5=cba6f7
   '';
   bashrc = writeText "bashrc" ''
+    cd
     PS1='\[\e[38;5;149m\]\h\[\e[0m\] \w $ '
   '';
   standIn = [ "${weston}/bin/weston-simple-shm" ];
@@ -113,11 +157,14 @@ let
         { id = "claude-pad"; name = "Claude"; description = "A allows · B denies"; icon = "claude"; gamepad = "keyboard";
           command = [ "${lib.getExe mortar-ai}" "run" "--cwd" "/build/home/ai" ];
           env = { MORTAR_AI_CLAUDE = "${fakeClaude}"; MORTAR_AI_RUMBLE = "0"; }; }
-        { id = "play"; name = "Games"; description = "Emulators · libretro"; icon = "pad"; category = "games"; command = standIn; }
+        { id = "play"; name = "Games"; description = "Emulators · libretro"; icon = "pad"; category = "games"; gamepad = "keyboard";
+          command = if apps then [ (lib.getExe mortar-play) "--config" "${playConfig}" ] else standIn; env = { SDL_AUDIO_DRIVER = "dummy"; }; }
         { id = "games"; name = "PuzzleScript"; description = "Puzzle games, controller"; icon = "pad"; command = standIn; }
         { id = "m8"; name = "M8"; description = "Tracker on the top USB-C port"; icon = "usb"; command = standIn; }
-        { id = "choochoo"; name = "ChooChoo"; description = "Tracker · groovebox"; icon = "pad"; command = standIn; }
-        { id = "pico8"; name = "PICO-8"; description = "Fantasy console, Splore"; icon = "pad"; command = standIn; }
+        { id = "choochoo"; name = "ChooChoo"; description = "Tracker · groovebox"; icon = "pad"; gamepad = "keyboard";
+          command = if apps then [ (lib.getExe choochoo) ] else standIn; env = softGl; }
+        { id = "pico8"; name = "PICO-8"; description = "Fantasy console, Splore"; icon = "pad"; gamepad = "keyboard";
+          command = if apps then [ (lib.getExe pico8) "-splore" ] else standIn; env = softGl; }
       ];
       actions = {
         volumeGet = [ "${volume}" ];
@@ -126,81 +173,8 @@ let
     }
   );
 
-  # The filming script: shell, clips, frames.
-  run = writeShellScript "showcase-run" ''
-    log=$out/shell.log
-    MORTAR_SHELL_LOG=info,mortar_shell=debug NO_COLOR=1 \
-      mortar-shell run --backend headless --config ${config} --socket wayland-0 2> $log &
-    shell=$!
-    trap 'kill $shell 2>/dev/null || true' EXIT
-    for _ in $(seq 100); do [ -S $XDG_RUNTIME_DIR/mortar-shell.sock ] && break; sleep 0.1; done
-
-    ctl() { mortar-shell ctl "$@" >/dev/null; }
-    wait_for() {
-      for _ in $(seq 200); do
-        mortar-shell ctl state | jq -e "$1" >/dev/null && return 0
-        sleep 0.1
-      done
-      echo "TIMEOUT waiting for: $1" | tee -a $out/warnings
-    }
-    visible() { echo "[.apps[] | select(.id == \"$1\" and .visible)] | length == 1"; }
-
-    # -- frame capture ---------------------------------------------------
-    clipdir=/dev/null F=0 logpos=0
-    events() { # sounds and haptics the shell logged since the last call
-      local size
-      size=$(stat -c %s $log)
-      if [ $size -gt $logpos ]; then
-        tail -c +$((logpos + 1)) $log | head -c $((size - logpos)) \
-          | grep -oE '(sfx|haptic) [A-Za-z]+(\([0-9]+\))?' \
-          | while read -r k v; do printf '%s\t%s\t%s\n' $F $k "$v" >> $clipdir/events.tsv; done || true
-        logpos=$size
-      fi
-    }
-    clip() { clipdir=$out/clips/$1 F=0; mkdir -p $clipdir; : > $clipdir/events.tsv; events; echo "== clip $1"; }
-    note() { printf '%s\tnote\t%s\n' $F "$*" >> $clipdir/events.tsv; }
-    # UI time steps 1/30 s a frame (33, 33, 34 ms); real time is paced to
-    # match, so the clients (which run on the real clock) keep up.
-    next=0
-    frame() {
-      ctl time +$((F % 3 == 2 ? 34 : 33))
-      events
-      ctl screenshot $clipdir/$(printf %04d $F).png
-      F=$((F + 1))
-      local now=''${EPOCHREALTIME/./}
-      if [ $next -gt $now ]; then
-        sleep "$(printf '0.%06d' $((next - now)))"
-      else
-        next=$now
-      fi
-      next=$((next + 33333))
-    }
-    frames() { for _ in $(seq $1); do frame; done; }
-    press() { printf '%s\tpress\t%s\n' $F $1 >> $clipdir/events.tsv; ctl press $1; events; }
-    tap() { press $1; frames $2; } # press, then N frames
-    skip() { ctl time +$1; events; } # move UI time on, uncaptured
-    key() { ctl key $1; events; }
-    type_text() { # lowercase letters and spaces, $2 frames a character
-      local t="$1" c code i
-      for ((i = 0; i < ''${#t}; i++)); do
-        c=''${t:i:1}
-        case $c in
-          q) code=16;; w) code=17;; e) code=18;; r) code=19;; t) code=20;; y) code=21;; u) code=22;; i) code=23;; o) code=24;; p) code=25;;
-          a) code=30;; s) code=31;; d) code=32;; f) code=33;; g) code=34;; h) code=35;; j) code=36;; k) code=37;; l) code=38;;
-          z) code=44;; x) code=45;; c) code=46;; v) code=47;; b) code=48;; n) code=49;; m) code=50;; " ") code=57;; -) code=12;; .) code=52;;
-          *) echo "type_text: no key for '$c'"; exit 1;;
-        esac
-        printf '%s\tkey\t%s\n' $F "$c" >> $clipdir/events.tsv
-        key $code
-        frames $2
-      done
-    }
-
-    wait_for '.ui.booting == false'
-    wait_for '.home == true'
-    ctl time manual
-    skip 1500
-
+  scenes = if part == "shell" then shellScenes else appScenes;
+  shellScenes = ''
     clip boot
     ctl boot
     events
@@ -337,6 +311,145 @@ let
     frames 24
     tap b 12
 
+  '';
+  appScenes = ''
+    mkdir -p /build/play/roms/gb /build/play/roms/gbc /build/play/bios
+    cp ${ucity} /build/play/roms/gbc/ucity.gbc
+    cp ${libbet} /build/play/roms/gb/libbet.gb
+    chmod u+w /build/play/roms/*/*
+
+    clip launch-pico8   # MENU > Games > PICO-8: Splore
+    tap menu 14
+    tap right 10
+    tap right 12
+    tap down 8
+    tap down 12
+    press a
+    wait_for "$(visible pico8)"
+    frames 210
+    tap right 20
+    tap right 20
+    tap down 10
+    tap down 10
+    tap down 24
+
+    clip play   # MENU > Games > Games: mortar-play's library, then a game
+    tap menu 14
+    tap right 10
+    tap right 12
+    tap up 8
+    tap up 12
+    press a
+    wait_for "$(visible play)"
+    frames 45
+    tap a 30
+    tap down 14
+    tap up 14
+    tap a 240
+    tap a 60
+    tap a 90
+
+    clip choochoo   # MENU > Music > ChooChoo
+    tap menu 14
+    tap right 10
+    tap right 10
+    tap right 12
+    tap down 12
+    press a
+    wait_for "$(visible choochoo)"
+    frames 120
+    tap down 10
+    tap down 10
+    tap right 10
+    printf '%s\tkey\tspace\n' $F >> $clipdir/events.tsv
+    key 57
+    frames 150
+
+    clip running   # MENU > Running: every app live in the preview
+    tap menu 30
+    tap down 24
+    tap down 24
+    tap down 24
+    tap down 24
+    tap b 16
+  '';
+
+  # The filming script: shell, clips, frames.
+  run = writeShellScript "showcase-run" ''
+    log=$out/shell.log
+    MORTAR_SHELL_LOG=info,mortar_shell=debug NO_COLOR=1 \
+      mortar-shell run --backend headless --config ${config} --socket wayland-0 2> $log &
+    shell=$!
+    trap 'kill $shell 2>/dev/null || true' EXIT
+    for _ in $(seq 100); do [ -S $XDG_RUNTIME_DIR/mortar-shell.sock ] && break; sleep 0.1; done
+
+    ctl() { mortar-shell ctl "$@" >/dev/null; }
+    wait_for() {
+      for _ in $(seq 200); do
+        mortar-shell ctl state | jq -e "$1" >/dev/null && return 0
+        sleep 0.1
+      done
+      echo "TIMEOUT waiting for: $1" | tee -a $out/warnings
+    }
+    visible() { echo "[.apps[] | select(.id == \"$1\" and .visible)] | length == 1"; }
+
+    # -- frame capture ---------------------------------------------------
+    clipdir=/dev/null F=0 logpos=0
+    events() { # sounds and haptics the shell logged since the last call
+      local size
+      size=$(stat -c %s $log)
+      if [ $size -gt $logpos ]; then
+        tail -c +$((logpos + 1)) $log | head -c $((size - logpos)) \
+          | grep -oE '(sfx|haptic) [A-Za-z]+(\([0-9]+\))?' \
+          | while read -r k v; do printf '%s\t%s\t%s\n' $F $k "$v" >> $clipdir/events.tsv; done || true
+        logpos=$size
+      fi
+    }
+    clip() { clipdir=$out/clips/$1 F=0; mkdir -p $clipdir; : > $clipdir/events.tsv; events; echo "== clip $1"; }
+    note() { printf '%s\tnote\t%s\n' $F "$*" >> $clipdir/events.tsv; }
+    # UI time steps 1/30 s a frame (33, 33, 34 ms); real time is paced to
+    # match, so the clients (which run on the real clock) keep up.
+    next=0
+    frame() {
+      ctl time +$((F % 3 == 2 ? 34 : 33))
+      events
+      ctl screenshot $clipdir/$(printf %04d $F).png
+      F=$((F + 1))
+      local now=''${EPOCHREALTIME/./}
+      if [ $next -gt $now ]; then
+        sleep "$(printf '0.%06d' $((next - now)))"
+      else
+        next=$now
+      fi
+      next=$((next + 33333))
+    }
+    frames() { for _ in $(seq $1); do frame; done; }
+    press() { printf '%s\tpress\t%s\n' $F $1 >> $clipdir/events.tsv; ctl press $1; events; }
+    tap() { press $1; frames $2; } # press, then N frames
+    skip() { ctl time +$1; events; } # move UI time on, uncaptured
+    key() { ctl key $1; events; }
+    type_text() { # lowercase letters and spaces, $2 frames a character
+      local t="$1" c code i
+      for ((i = 0; i < ''${#t}; i++)); do
+        c=''${t:i:1}
+        case $c in
+          q) code=16;; w) code=17;; e) code=18;; r) code=19;; t) code=20;; y) code=21;; u) code=22;; i) code=23;; o) code=24;; p) code=25;;
+          a) code=30;; s) code=31;; d) code=32;; f) code=33;; g) code=34;; h) code=35;; j) code=36;; k) code=37;; l) code=38;;
+          z) code=44;; x) code=45;; c) code=46;; v) code=47;; b) code=48;; n) code=49;; m) code=50;; " ") code=57;; -) code=12;; .) code=52;;
+          *) echo "type_text: no key for '$c'"; exit 1;;
+        esac
+        printf '%s\tkey\t%s\n' $F "$c" >> $clipdir/events.tsv
+        key $code
+        frames $2
+      done
+    }
+
+    wait_for '.ui.booting == false'
+    wait_for '.home == true'
+    ctl time manual
+    skip 1500
+
+    ${scenes}
     ctl time real
     mortar-shell ctl state | jq . > $out/state.json
     ctl quit || true
@@ -345,7 +458,7 @@ let
     for d in $out/clips/*/; do echo "$(basename $d): $(ls $d | grep -c png) frames"; done | tee $out/clips.txt
   '';
 in
-runCommand "mortar-showcase-capture"
+runCommand "mortar-showcase-capture${lib.optionalString apps "-apps"}"
   {
     nativeBuildInputs = [ mortar-shell jq util-linux inetutils ];
     FONTCONFIG_FILE = makeFontsConf { fontDirectories = [ dejavu_fonts ]; };
