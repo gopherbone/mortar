@@ -121,7 +121,7 @@ let
     gamepad = "keyboard";
     singleInstance = false;
     order = 5;
-    command = [ "${lib.getExe cfg.terminal.package}" "--config" "${footIni}" ];
+    command = cfg.terminal.command;
     env = { };
   };
 
@@ -231,6 +231,13 @@ in
         type = types.ints.positive;
         default = 13;
         description = "Terminal font size (points; the panel is 1024x768 at about 200 dpi).";
+      };
+      command = mkOption {
+        type = types.listOf types.str;
+        readOnly = true;
+        default = [ "${lib.getExe cfg.terminal.package}" "--config" "${footIni}" ];
+        defaultText = lib.literalExpression ''[ "foot" "--config" "<Mortar foot.ini>" ]'';
+        description = "The terminal with the Mortar config, as an argv; append a command to run it in the terminal (other modules' launcher entries use this).";
       };
     };
 

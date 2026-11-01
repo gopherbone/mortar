@@ -77,10 +77,12 @@ modules/
   brick-firmware.nix      XR829/GPU firmware, iwd, Bluetooth address, stable Wi-Fi MAC
   brick-gpu.nix           pvrsrvkm + brick_dc_drm, GPU userspace, GPU tests
   mortar-apps.nix         built-in apps
+  mortar-ai.nix           Claude Code: tmux session, controller UI, Remote Control (off by default)
 pkgs/
   linux-trimui-brick.nix  jkingston's Linux 7.3 Brick tree, pinned, + patches/kernel/
   brick-dc-drm/           display-class driver: GPU frames → DRM atomic flips
   pvr-ddk-userspace.nix   stock EGL/GLES libs, patched for NixOS
+  mortar-ai/              controller UI for Claude Code + sign-in helper (Rust), see DESIGN.md
   trimui-brick-firmware.nix, m8c/, mortar-cli/ (Rust), mortar-gpu-tests/
 firmware/mainline/        U-Boot SPL + TF-A + U-Boot, with jkingston's patches
 image/build-image-mainline.nix   SD image (bootloader at 128 KiB, FAT /boot, ext4 /)
