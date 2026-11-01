@@ -105,6 +105,25 @@ buildLinux (
       CRYPTO_USER_API_HASH = yes;
       CRYPTO_HMAC = yes;
       CRYPTO_SHA256 = yes;
+
+      # iwd (Wi-Fi) refuses to start without these; list from iwd's README
+      # "kernel dependencies" plus what it reported missing on the Brick.
+      CRYPTO_USER_API_SKCIPHER = yes;
+      KEY_DH_OPERATIONS = yes;
+      CRYPTO_ECB = yes;
+      CRYPTO_CBC = yes;
+      CRYPTO_DES = yes;
+      CRYPTO_AES = yes;
+      CRYPTO_CMAC = yes;
+      CRYPTO_MD4 = yes;
+      CRYPTO_MD5 = yes;
+      CRYPTO_SHA1 = yes;
+      CRYPTO_SHA512 = yes;
+      ASYMMETRIC_KEY_TYPE = yes;
+      ASYMMETRIC_PUBLIC_KEY_SUBTYPE = yes;
+      X509_CERTIFICATE_PARSER = yes;
+      PKCS7_MESSAGE_PARSER = yes;
+      PKCS8_PRIVATE_KEY_PARSER = yes;
       AUTOFS_FS = yes;
       TMPFS = yes;
       TMPFS_POSIX_ACL = yes;
