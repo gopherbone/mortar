@@ -94,6 +94,7 @@ pkgs/
   mortar-setup/           setup file, pairing service, setup screens (Rust)
   mortar-pair/            the pairing protocol, shared with mortar-cli
   trimui-brick-firmware.nix, m8c/, mortar-cli/ (Rust), mortar-gpu-tests/
+  choochootracker/        ChooChooTracker (MIT tracker/groovebox), Mortar build + launcher
   mortar-play/            minimal preconfigured libretro frontend (Rust, see DESIGN.md)
 firmware/mainline/        U-Boot SPL + TF-A + U-Boot, with jkingston's patches
 image/build-image-mainline.nix   SD image (bootloader at 128 KiB, FAT /boot, ext4 /)
