@@ -6,8 +6,10 @@
 #   m8c           Dirtywave M8 / M8 Headless client. Plug the M8 into the
 #                 Brick's TOP USB-C port (USB host).
 #
-# Display: both are SDL3 apps on SDL's KMSDRM backend, which needs GBM and
-# EGL. The PowerVR userspace has neither (NULL WSEGL only, see
+# Display: the sessions start both through `mortar-sdl-run` (brick-gpu.nix),
+# which puts them on the PowerVR GPU (pkgs/sdl3-pvr). If that fails they
+# run on SDL's KMSDRM backend with Mesa's software GL, described here.
+# KMSDRM needs GBM and EGL. The PowerVR userspace has neither (NULL WSEGL only, see
 # brick-gpu.nix), so Mesa provides them in software: GBM's kms_swrast on
 # the sun4i display, llvmpipe for GL/GLES on the 4 A53 cores. SDL picks
 # card0 (the only card with a connector) on its own; no env is needed.

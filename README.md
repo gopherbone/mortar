@@ -25,7 +25,7 @@ Updates are built on your computer and pushed over SSH.
 | Display | JD9168 DSI panel, 1024×768, KMS console. |
 | GPU | PowerVR GE8300 with TrimUI's stock DDK 1.19 userspace. EGL window surfaces present on the panel through our display-class driver (`brick_dc_drm`), vsync-paced at 60 fps. GLES also renders into dma-bufs for KMS apps. |
 | Buttons | GPIO keys, power key. |
-| Apps | PuzzleScript, m8c (M8 tracker client; plug the M8 into the top port; its audio is routed to the codec). Greeter sessions. SDL3 on KMSDRM with Mesa's software GL (llvmpipe): fine for PuzzleScript, ~30 fps at ~2 cores for a busy M8 screen. |
+| Apps | PuzzleScript, m8c (M8 tracker client; plug the M8 into the top port; its audio is routed to the codec). Greeter sessions. SDL3 apps render on the GPU (`mortar-sdl-run`: SDL's vivante backend on the stock EGL; a busy M8 screen at ~10% CPU), falling back to Mesa's software GL (~2 cores). |
 | Debug | Each boot saves logs to `mortar-logs/` on the card's FAT partition. |
 
 Not yet: the controller-driven greeter and setup screens, charging

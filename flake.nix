@@ -59,14 +59,14 @@
                 description = "Puzzle games, controller";
                 icon = "pad";
                 order = 10;
-                command = "exec ${config.mortar.apps.puzzlescript.package}/bin/puzzlescript";
+                command = "exec ${config.mortar.gpu.sdlRun}/bin/mortar-sdl-run ${config.mortar.apps.puzzlescript.package}/bin/puzzlescript";
               };
               m8 = {
                 name = "M8";
                 description = "Tracker on the top USB-C port";
                 icon = "usb";
                 order = 20;
-                command = "exec ${config.mortar.apps.m8c.package}/bin/m8c-brick";
+                command = "exec ${config.mortar.gpu.sdlRun}/bin/mortar-sdl-run ${config.mortar.apps.m8c.package}/bin/m8c-brick";
               };
               terminal = {
                 name = "Terminal";

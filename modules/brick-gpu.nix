@@ -11,6 +11,12 @@
 #                   only, so apps pass a `struct fbdev_window` (SDL "mali"
 #                   backend, RetroArch mali_fbdev) or render into dma-bufs.
 #
+# SDL3 apps: `mortar-sdl-run APP...` runs an SDL3 app on the GPU through
+# pkgs/sdl3-pvr (SDL's vivante backend on the NULL WSEGL, GLES2 renderer,
+# zero-copy DC flips) and falls back to SDL's KMSDRM backend on Mesa's
+# software GL if the app fails to start that way. MORTAR_SDL=software
+# skips the GPU attempt. Only one GL app can own the DC at a time.
+#
 # Notes: a GPU fault can latch the GPU until reboot. A GL window app replaces
 # the console on screen while it runs; the console comes back when it exits.
 { config, lib, pkgs, ... }:
@@ -35,9 +41,43 @@ in
       defaultText = lib.literalExpression "pkgs.callPackage ../pkgs/pvr-ddk-userspace.nix { ... }";
       description = "Stock PowerVR userspace libraries.";
     };
+    sdl3 = lib.mkOption {
+      type = lib.types.package;
+      default = pkgs.callPackage ../pkgs/sdl3-pvr { pvr-ddk = cfg.package; };
+      defaultText = lib.literalExpression "pkgs.callPackage ../pkgs/sdl3-pvr { pvr-ddk = config.mortar.gpu.package; }";
+      description = "SDL3 with the PowerVR (vivante-style) video backend.";
+    };
+    sdlRun = lib.mkOption {
+      type = lib.types.package;
+      readOnly = true;
+      description = "`mortar-sdl-run`: start an SDL3 app on the GPU, falling back to software GL.";
+    };
   };
 
-  config = lib.mkIf cfg.enable {
+  config = lib.mkMerge [ {
+    mortar.gpu.sdlRun = pkgs.writeShellApplication {
+      name = "mortar-sdl-run";
+      runtimeInputs = [ pkgs.coreutils ];
+      text = ''
+        # usage: mortar-sdl-run APP [ARGS...]
+        if [ "''${MORTAR_SDL:-}" = software ] || ${if cfg.enable then "false" else "true"}; then
+          exec "$@"
+        fi
+        # An app that cannot get a GPU window exits within a second or two
+        # (e.g. the GPU is latched after a fault, or another GL app holds
+        # the DC). Then run it again on software GL.
+        start=$(date +%s)
+        status=0
+        ${lib.concatStringsSep " " (lib.mapAttrsToList (k: v: "${k}=${lib.escapeShellArg v}") cfg.sdl3.env)} \
+          "$@" || status=$?
+        if [ "$status" -ne 0 ] && [ $(( $(date +%s) - start )) -lt 5 ]; then
+          echo "mortar-sdl-run: GPU start failed ($status), using software GL" >&2
+          exec "$@"
+        fi
+        exit "$status"
+      '';
+    };
+  } (lib.mkIf cfg.enable {
     boot.extraModulePackages = [
       # must match the kernel's compiler (GCC 15, see trimui-brick.nix)
       (kp.callPackage ../pkgs/brick-dc-drm { stdenv = pkgs.gcc15Stdenv; })
@@ -50,6 +90,7 @@ in
     environment.systemPackages = [
       cfg.package
       (pkgs.callPackage ../pkgs/mortar-gpu-tests { pvr-ddk = cfg.package; })
+      cfg.sdlRun
     ];
-  };
+  }) ];
 }
