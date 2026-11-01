@@ -309,8 +309,9 @@ impl Shell {
             if !more.is_empty() {
                 self.handle_outs(more);
             }
+            // something was asked: the screen may change
+            self.needs_redraw = true;
         }
-        self.needs_redraw = true;
     }
 
     /// Settings that reach outside the UI (the toolkit theme for the

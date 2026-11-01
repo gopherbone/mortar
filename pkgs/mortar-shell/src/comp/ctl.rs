@@ -118,6 +118,15 @@ pub fn command(shell: &mut Shell, line: &str) -> Result<String, String> {
             shell.refocus();
             "ok".into()
         }
+        "gpushot" => {
+            // what the GPU UI renderer last put on screen (debugging)
+            let super::backend::Backend::Drm(d) = &mut shell.backend else { return Err("no GPU UI".into()) };
+            let g = d.gpu.as_mut().ok_or("no GPU UI")?;
+            let (w, h, px) = g.read_front().ok_or("no GPU frame on screen")?;
+            let pm = resvg::tiny_skia::Pixmap::from_vec(px, resvg::tiny_skia::IntSize::from_wh(w, h).ok_or("size")?).ok_or("pixmap")?;
+            super::ui::save_rgb_png(&pm, Path::new(arg))?;
+            "ok".into()
+        }
         "shot" => {
             shell.screenshot_combo();
             "ok".into()

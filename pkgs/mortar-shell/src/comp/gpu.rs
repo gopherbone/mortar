@@ -121,6 +121,25 @@ impl GpuUi {
         Ok(Buf { db: Some(db), fb, _fd: fd, target: Some(target) })
     }
 
+    /// The buffer on screen, as RGBA (debugging: `ctl gpushot`). Reads
+    /// write-combined memory, so it is slow (~50 ms).
+    pub fn read_front(&mut self) -> Option<(u32, u32, Vec<u8>)> {
+        let i = self.front.or(self.queued)?;
+        let db = self.bufs.get_mut(i)?.db.as_mut()?;
+        let (w, h) = db.size();
+        let pitch = db.pitch() as usize;
+        let m = self.drm.map_dumb_buffer(db).ok()?;
+        let src = m.as_ref();
+        let mut out = Vec::with_capacity((w * h * 4) as usize);
+        for y in 0..h as usize {
+            let row = &src[y * pitch..y * pitch + w as usize * 4];
+            for p in row.chunks_exact(4) {
+                out.extend_from_slice(&[p[2], p[1], p[0], 255]);
+            }
+        }
+        Some((w, h, out))
+    }
+
     /// A page flip of ours completed.
     pub fn flipped(&mut self) {
         if let Some(q) = self.queued.take() {

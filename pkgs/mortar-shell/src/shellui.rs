@@ -529,11 +529,14 @@ impl ShellUi {
 
     /// Advance UI time by `dt` seconds; returns what to do.
     pub fn step(&mut self, dt: f64, v: &View) -> Vec<Out> {
+        // timers run on real time; springs never jump more than 50 ms (a
+        // long stall must not fling them)
+        let real = dt.clamp(0.0, 5.0);
         let dt = dt.clamp(0.0, 0.05);
-        self.t += dt;
         if self.drifting() {
             self.drift_t += dt;
         }
+        self.t += real;
         self.sync_tiles(v);
         let p = self.params();
         {
@@ -1970,6 +1973,22 @@ mod tests {
         }
         assert!(actions(&ui.button(Button::A, false, &v)).is_empty());
         assert_eq!(actions(&ui.button(Button::A, false, &v)), vec![Out::PowerOff]);
+    }
+
+    #[test]
+    fn drawer_at_rest_is_not_full_pace() {
+        let sys = Sys::demo(None);
+        let l = launcher();
+        let v = view(&[], &l, &sys, None);
+        let mut ui = ShellUi::new(Prefs::default(), false);
+        ui.menu_key(&v);
+        ui.button(Button::R1, false, &v);
+        settle(&mut ui, &v);
+        assert_ne!(ui.pace(false), Pace::Full);
+        for _ in 0..(40 * 60) {
+            ui.step(1.0 / 60.0, &v);
+        }
+        assert_eq!(ui.pace(false), Pace::Idle);
     }
 
     #[test]
