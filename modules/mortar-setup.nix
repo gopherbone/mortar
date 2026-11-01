@@ -257,9 +257,11 @@ in
       };
 
       # The greeter waits for the setup screens to finish.
+      # (no start timeout: setup takes as long as it takes)
       systemd.services.greetd = mkIf greeterOn {
         after = [ "mortar-setup-ui.service" ];
         serviceConfig.ExecStartPre = [ "${exe} wait-ui" ];
+        serviceConfig.TimeoutStartSec = "infinity";
       };
     })
 
