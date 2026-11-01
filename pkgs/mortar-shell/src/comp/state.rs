@@ -104,6 +104,10 @@ pub struct Shell {
     pub pads: Pads,
     pub inputs: Inputs,
     pub inputs_removed: Vec<PathBuf>,
+    /// Opaque copies of visible app buffers (backend::opaque_copy).
+    pub opaque: std::collections::HashMap<smithay::reexports::wayland_server::backend::ObjectId, super::backend::OpaqueCopy>,
+    #[allow(dead_code)]
+    pub viewporter_state: smithay::wayland::viewporter::ViewporterState,
     repeater: Repeater,
     /// Pad buttons for keyboard-mode apps that are currently pressed as keys
     /// (released when the receiver changes).
@@ -164,6 +168,7 @@ impl Shell {
         let overlay_buf = opaque_buffer(size.0, size.1);
         let osk_buf = opaque_buffer(size.0, osk_h);
 
+        let viewporter_dh = dh.clone();
         Ok(Shell {
             dh,
             loop_handle,
@@ -194,6 +199,8 @@ impl Shell {
             pads: Pads::default(),
             inputs,
             inputs_removed: Vec::new(),
+            opaque: Default::default(),
+            viewporter_state: smithay::wayland::viewporter::ViewporterState::new::<Shell>(&viewporter_dh),
             repeater: Repeater::default(),
             held_keys: Vec::new(),
             logo_alone: false,
@@ -268,10 +275,14 @@ impl Shell {
                 let active = vis.as_ref() == Some(w);
                 tl.with_pending_state(|s| {
                     s.states.set(xdg_toplevel::State::Fullscreen);
+                    // suspended: not on screen (SDL3 turns it into
+                    // SDL_EVENT_WINDOW_OCCLUDED, so apps can idle)
                     if active {
                         s.states.set(xdg_toplevel::State::Activated);
+                        s.states.unset(xdg_toplevel::State::Suspended);
                     } else {
                         s.states.unset(xdg_toplevel::State::Activated);
+                        s.states.set(xdg_toplevel::State::Suspended);
                     }
                     s.size = Some(if keyboard && active { area } else { full });
                 });
@@ -1078,6 +1089,7 @@ impl XdgShellHandler for Shell {
     }
 
     fn toplevel_destroyed(&mut self, surface: ToplevelSurface) {
+        self.opaque.remove(&surface.wl_surface().id());
         let vis = self.visible_window().cloned();
         let mut was_visible = false;
         for a in &mut self.apps.list {
@@ -1144,3 +1156,4 @@ delegate_data_device!(Shell);
 delegate_seat!(Shell);
 delegate_output!(Shell);
 delegate_xdg_shell!(Shell);
+smithay::delegate_viewporter!(Shell);

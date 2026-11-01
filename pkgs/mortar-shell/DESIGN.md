@@ -181,6 +181,16 @@ Now: Smithay's pixman (CPU) renderer everywhere.
   all (the overlay is opaque), so there is no blending; blending over a
   write-combined scanout buffer would read it back, which is slow on the
   A133 (see the notes in pkgs/m8c and pkgs/puzzlescript).
+- The visible app's wl_shm buffer is copied (damaged rectangles only)
+  into an XRGB memory buffer and drawn with SRC. SDL apps on llvmpipe
+  commit ARGB buffers with junk alpha while declaring the surface opaque;
+  drawn as ARGB, the damage tracker skips clearing under the "opaque"
+  region and pixman blends, so stale swapchain contents showed through
+  (first device test: garbled M8 over the home screen, flashing as the
+  swapchain rotated) and blending read back write-combined memory (slow).
+  `MORTAR_SHELL_NO_OPAQUE_COPY=1` restores the generic path. Apps with
+  subsurfaces or popups, and dmabuf clients, use the generic path.
+- wp_viewporter is supported (SDL3 sizes fullscreen windows with it).
 - Output: DRM/KMS through Smithay's `DrmCompositor`, swapchain buffers from
   GBM (Mesa's kms_swrast on sun4i, i.e. dumb buffers that pixman maps). If
   libgbm cannot open the card (or `MORTAR_SHELL_ALLOCATOR=dumb`), plain KMS
@@ -274,12 +284,14 @@ shell through it; over SSH it gives remote screenshots and app control
 
 ## Open questions
 
-- Suspend: does SDL/m8c audio survive `systemctl suspend`, and should the
-  shell send `xdg_toplevel` `suspended` to background apps (SDL3 treats it
-  as occluded; it may then stop pacing on frame callbacks and spin)?
-- How do SDL3's Wayland backend and m8c behave at 2 frame callbacks per
-  second in the background (CPU use, audio buffer underruns)? Tune
-  `backgroundFps`, or 0 if SDL's own timeout is enough.
+- Background CPU: SDL3's Wayland swap waits at most 50 ms for a frame
+  callback, so a background SDL app still renders at ~20 fps whatever the
+  shell sends (measured: m8c ~100% CPU in the background with 0, 2, 10
+  or 30 callbacks/s; ~180% in front at 30 fps, same as on KMSDRM). The
+  shell sends `xdg_toplevel` `suspended` to background windows, which
+  SDL3 reports as SDL_EVENT_WINDOW_OCCLUDED; apps that idle on it (a small
+  m8c patch: skip rendering while occluded) would drop to near zero.
+- Suspend: does SDL/m8c audio survive `systemctl suspend`?
 - Does Mesa llvmpipe pick wl_shm or dmabuf here? (No render node, so
   presumably wl_shm.) Measure the per-frame copy at 60 fps.
 - Is `EVIOCGRAB` respected for the gpio-keys pad when another process

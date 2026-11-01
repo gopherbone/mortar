@@ -61,6 +61,9 @@ fn serve(shell: &mut Shell, s: UnixStream) {
 }
 
 fn find_app(shell: &Shell, arg: &str) -> Result<u32, String> {
+    if arg.is_empty() {
+        return shell.visible_app().ok_or("no app on screen".into());
+    }
     if let Ok(uid) = arg.parse::<u32>()
         && shell.apps.get(uid).is_some()
     {
@@ -143,6 +146,11 @@ fn state(shell: &Shell) -> String {
                 "uid": a.uid, "id": a.entry_id, "name": a.name, "pid": a.pid, "slot": a.slot,
                 "windows": a.windows.len(), "visible": Some(a.uid) == vis,
                 "closing": a.closing.is_some(), "gamepad": format!("{:?}", a.gamepad),
+                "geometry": a.windows.last().map(|w| { let g = w.geometry(); [g.loc.x, g.loc.y, g.size.w, g.size.h] }),
+                "buffer": a.windows.last().and_then(|w| w.toplevel()).and_then(|t| smithay::wayland::compositor::with_states(t.wl_surface(), |st| {
+                    st.data_map.get::<smithay::backend::renderer::utils::RendererSurfaceStateUserData>()
+                        .and_then(|d| d.lock().unwrap().view()).map(|v| [v.src.size.w as i32, v.src.size.h as i32, v.dst.w, v.dst.h])
+                })),
             })
         })
         .collect();
@@ -153,6 +161,7 @@ fn state(shell: &Shell) -> String {
         "home": shell.shell_screen() && !shell.overlay.visible,
         "visible": vis,
         "osk": shell.osk.visible,
+        "held": shell.router.held(),
         "apps": apps,
         "frames": shell.backend.frames(),
         "scanout_frames": shell.backend.scanout_frames(),

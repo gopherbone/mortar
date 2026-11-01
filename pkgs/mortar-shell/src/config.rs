@@ -80,10 +80,10 @@ fn d_reboot() -> Vec<String> {
     argv(&["systemctl", "reboot"])
 }
 fn d_volume_set() -> Vec<String> {
-    argv(&["amixer", "-q", "-c", "Codec", "sset", "DAC", "{step}"])
+    argv(&["amixer", "-M", "-q", "-c", "Codec", "sset", "DAC", "{step}"])
 }
 fn d_volume_get() -> Vec<String> {
-    argv(&["amixer", "-c", "Codec", "sget", "DAC"])
+    argv(&["amixer", "-M", "-c", "Codec", "sget", "DAC"])
 }
 
 impl Default for Actions {

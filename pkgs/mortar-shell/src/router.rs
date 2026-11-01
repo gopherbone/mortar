@@ -109,6 +109,11 @@ impl Router {
         out
     }
 
+    /// Physical buttons currently held (diagnostics).
+    pub fn held(&self) -> Vec<u16> {
+        self.held.iter().copied().collect()
+    }
+
     fn emit(&mut self, uid: u32, mode: GamepadMode, code: u16, value: i32, out: &mut Vec<Routed>) {
         let down = value != 0;
         match mode {
