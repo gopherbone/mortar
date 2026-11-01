@@ -50,15 +50,17 @@ On the greeter, choose **Mortar**. In the shell:
 | MENU | Running: your open windows, Home first, stacked full screen; MENU or B closes it |
 | MENU, then A | Flip back to the previous app |
 | In Running: ▲▼, A, X, Y | Scroll, switch to it, close it, options (switch, restart, close) |
+| In Running, on a game: Y | Game menu: save or load a state (◀▶ picks one of four slots, with pictures), reset, fast-forward, change disc, quit |
 | In Running: ▶ (R1) | The cross: Apps, Games, Music, Settings (R1: straight to Settings); ◀ from Apps or L1 goes back |
 | In the cross: ◀▶, ▲▼, A | Category, item, open |
+| Games | Continue, recently played, one row per system (A: its games, L1/R1 page, A plays), PICO-8, PuzzleScript, All systems. Every game is its own window in Running; a game you have not used for a while sleeps (saved) and wakes where it was |
 | Settings | Brightness and volume (A, then ◀▶, A when done), Mixer, Wi-Fi, Bluetooth, Sleep, More settings (sounds, motion, palette, time zone, remote access, log out), Restart and Power off (press A twice) |
 | Settings › Wi-Fi | On/off, the network you are on (details, forget), networks nearby (A joins; a password keyboard for new secured ones) |
 | Settings › Bluetooth | On/off, your devices (A connects or disconnects, X forgets), Pair new device |
 | Mixer (Music or Settings) | A fader per app, Master and UI sounds: ◀▶ channel, ▲▼ level, A mute |
 | VOL+ / VOL− | Volume (the shell owns these keys) |
 | VOL+ and VOL− together | Screenshot, saved to `~/Pictures/Screenshots` |
-| SELECT + MENU (or F1) | In Games: the game menu (save/load state, reset, quit) |
+| SELECT + MENU (or F1) | In a game: its own menu (save/load state, reset, quit) |
 | START | In Terminal: on-screen keyboard |
 
 Copy games over SSH, e.g. `scp game.gba brick:/var/lib/mortar-play/roms/gba/`

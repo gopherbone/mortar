@@ -10,19 +10,22 @@ time are made in `modules/mortar-play.nix`.
 
 ```
 pkgs/mortar-play/
-  src/main.rs          CLI: library UI (default) | run SYSTEM [ROM] | selftest | make-test-rom
+  src/main.rs          CLI: library UI (default) | run SYSTEM [ROM] | list --json | selftest | make-test-rom
   src/app.rs           screens, launching, game loop (pacing, fast-forward, pause), in-game menu
   src/session.rs       a running game: core + SRAM autosave, state slots, resume state, thumbnails
   src/lr/              libretro: ffi.rs (API subset), core.rs (dlopen + callbacks), options.rs
   src/video.rs         core frame -> XRGB8888, rotation, layout (aspect/integer/...), CPU scaler
   src/audio.rs         cubic resampler + dynamic rate control, outputs, WAV/analysis for tests
   src/input.rs         Brick buttons -> RetroPad map, hotkey chords, SDL button mapping
-  src/library.rs       ROM folders, display names, cue/m3u de-duplication, zip/7z, recents
+  src/library.rs       ROM folders, display names, cue/m3u de-duplication, zip/7z, recents,
+                       the library as JSON for mortar-shell (`list --json`)
+  src/control.rs       control socket for mortar-shell's game panel, the "Saved" toast
   src/ui.rs            screens drawn with the mortar-ui toolkit (home, games, menu, messages)
   src/platform/        sdl.rs (SDL3 window/audio/pads), wayland.rs (wl_shm client), headless
   src/selftest.rs      headless core test with a JSON report (CI and on-device speed numbers)
   src/testrom.rs       a tiny NES program assembled in Rust (tests need no third-party ROM)
   test.nix             integration test (passthru.tests.integration)
+  test-shell.nix       inside mortar-shell, games as apps (passthru.tests.shell)
 modules/mortar-play.nix  curated systems, presets, dirs, launcher entries
 ```
 
@@ -165,6 +168,46 @@ their own, F2 on PlayStation and arcade (configurable).
 - `selftest` checks that serialize -> run 30 frames -> unserialize -> run
   30 frames gives identical pictures.
 
+## Inside mortar-shell: one game, one app
+
+The shell runs every game as its own app, `mortar-play run SYSTEM ROM`
+(mortar-shell/DESIGN.md, "Games"), so the frontend's own library is only
+the "All systems" entry. What the frontend does for that:
+
+- `mortar-play list --json` prints the library: every system (id, name,
+  tag, order, no-content, count) with its games (path, cleaned name, first
+  tag as `region`, whether a resume state exists and its picture), the six
+  most recent games, and `watch`: the folders whose modification times
+  change when the answer would (ROM folders and their sub-folders, the
+  state folders, the data folder with recent.json). The shell runs it off
+  its event loop and only when one of those changed.
+- **Control socket** (src/control.rs), opened when running under the shell
+  (`MORTAR_APP` set): `$XDG_RUNTIME_DIR/mortar-play-<pid>.sock`, 0600, one
+  JSON request line and one reply line per connection, polled once per
+  loop iteration (a frame while playing, ~16 ms while paused or hidden):
+  `list_states` (four slots with age and thumbnail path, the auto state,
+  discs, fast-forward), `save_state` / `load_state` (slot 1-4 or "auto";
+  loading leaves the in-game menu), `reset`, `fast_forward` (true, false
+  or "toggle": runs at `fastForwardSpeed` until switched off, held R2 still
+  works), `change_disc` ("next"), `quit` (writes `auto` and SRAM, replies
+  `{"saved": …}`, exits; `"quiet": true` for the shell's hibernation).
+  Replies are `{"ok": true, …}` or `{"ok": false, "error": …}`.
+- **"Saved" toast.** When a game ends with its resume state written (menu
+  quit, the shell closing the window, SIGTERM, `quit`) the frontend sends
+  `toast {"title":"Saved","sub":"Pocket King · GBC"}` to the shell's
+  socket ($MORTAR_SHELL_SOCKET or $XDG_RUNTIME_DIR/mortar-shell.sock),
+  unless the quit was quiet.
+- Waking a game the shell put to sleep is just `run` again: auto resume
+  loads `auto`.
+
+Measured in the sandbox test (aarch64, NES test program, fceumm): a game
+process is about 50 MB RSS (52 MB and 50 MB for two), of which ~6 MB are
+its two 1024x768 shm buffers (shared with the shell) and the rest SDL3,
+the core, fonts and the UI canvas. Heavier cores add their own: expect
+roughly 55-70 MB for mgba / snes9x / genesis-plus-gx, 80-120 MB for
+pcsx-rearmed with a disc (its RAM, VRAM, SPU and dynarec cache). With
+`maxGames` = 3 that is ~150-300 MB of games before the oldest sleeps.
+
 ## UI
 
 mortar-ui toolkit and theme (style v2, Pond: flat blocks, ink outlines,
@@ -271,4 +314,14 @@ parallel-n64 in GLES2 mode):
   SRAM file), 2048 without content, and the whole UI driven by a script on
   the headless display (home, list, play, menu, save, quit with resume
   state, resume picture, empty-folder screen). Screenshots stay in `$out`.
+- `passthru.tests.shell` (aarch64-linux, in the sandbox): the frontend
+  inside mortar-shell on its headless backend: the wl_shm presenter,
+  pausing under the shell's MENU, the in-game menu, closing with the resume
+  state; then games as apps with two copies of the built-in test program:
+  `list --json`, MENU > Games and the NES page, a game started from it
+  (its title), the game panel (save to slot 1, its picture, load it), the
+  save before suspend (`ctl save-games`), the screenshot combo, a second
+  game putting the first to sleep (`maxGames` = 1), waking it, starting it
+  again (switches, no second copy), X with the "Saved" toast. Screenshots
+  and each game's RSS (`rss.txt`) in `$out`.
 - On the Mac: `./dev.sh` (SDL window, keyboard) with locally built cores.

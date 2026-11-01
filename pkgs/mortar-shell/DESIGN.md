@@ -20,6 +20,10 @@ pkgs/mortar-shell/
   src/cross.rs       the MENU: Running page, the cross, glass (a child
                      module of shellui)
   src/menupages.rs   the MENU's glass pages: Wi-Fi, Bluetooth, Mixer
+  src/gamepages.rs   the MENU's games: the Games category, a system's page,
+                     the game panel (a child module of shellui)
+  src/games.rs       games as apps: library data, titles, the game socket
+                     protocol, the hibernation policy (pure, unit-tested)
   src/patterns.rs    the cross's background patterns (mosaics: zig-zags, Life, a scope, Truchet tiles)
   src/mixer.rs       PipeWire output streams from pw-dump (the Mixer)
   src/radio.rs       Wi-Fi / Bluetooth on/off (rfkill)
@@ -41,6 +45,8 @@ pkgs/mortar-shell/
     pads.rs          per-app uinput gamepads
     ctl.rs           control socket
     bg.rs            MENU page backends off the loop (mortar-setupd, pw-dump/wpctl)
+    gamectl.rs       games off the loop: library and pictures, game sockets,
+                     hibernation, the save before suspend
     suggest.rs       OSK suggestion socket (zsh)
     scanout.rs       direct scanout of client dmabufs (PRIME import)
     ui.rs            the compositor side of the UI: view, actions, CPU
@@ -93,6 +99,74 @@ on black.
   next app in MRU order is shown, or the home screen.
 - Log out (settings screen) ends the shell; greetd returns to the greeter
   and all apps get SIGTERM.
+
+## Games (mortar-play)
+
+Every game is its own app (pkgs/mortar-play, `mortar.shell.games`, set by
+modules/mortar-play.nix), so games sit in Running next to the M8 and the
+terminal, each titled with its cleaned name and system ("Pocket King ·
+GBC").
+
+- **Launching.** Besides the static launcher entries the UI can ask for
+  `Out::LaunchGame(GameRef)`: the compositor makes an entry on the fly
+  (`games.run` + SYSTEM + ROM, i.e. `mortar-play run`, gamepad `forward`,
+  the Games illustration and accent) and launches it like any other. Its id
+  is `game:SYSTEM:PATH`, so single-instance works as for entries: starting
+  a game that runs switches to it (zooming from the row), one that sleeps
+  is woken. The app keeps the entry it was started from (`App::spec`), which
+  waking uses. `ctl game SYSTEM [ROM]` does the same over the socket.
+- **Library.** MENU > Games: Continue (the last game, its resume picture
+  beside the row), up to five more recently played games, one row per
+  system with games (the count), a no-content core such as 2048 as a row
+  that starts it, then the other game entries (PICO-8, PuzzleScript) and
+  "All systems" (the `games.library` entry: mortar-play's own library, as
+  before). A on a system opens a glass page: its games, cleaned names, the
+  region on the right, a RESUME tag where a resume state exists, the
+  selected game's picture right of the list, 8 a page (L1/R1 page), A
+  plays. The data is `mortar-play list --json` (mortar-play's own
+  library.rs: the same scan, names, cue/m3u hiding and recents), run by the
+  `games-lib` thread at most every 2 s while the MENU shows and only when
+  one of the folders it names (`watch`: ROM folders and their
+  sub-folders, state folders, the recents file's folder) has a new
+  modification time; the event loop never scans or decodes. Pictures (the
+  resume and slot thumbnails, 320 px PNGs) are decoded by the same thread
+  when a screen wants them (`ShellUi::wanted_pics`) into `Src::Pic`
+  images, at most 16 kept; the GPU renderer uploads each id once and frees
+  it when no frame shows it.
+- **Game panel.** Y on a game in Running (the hint bar says "Y Game menu")
+  opens a glass panel over its window: Save state and Load state (◀▶ pick
+  one of four slots; each shows its picture and age), Reset, Fast-forward
+  (on/off, until switched off), Change disc (multi-disc games only), Quit.
+  Load and Reset zoom into the game. Requests go to the game's control
+  socket, `$XDG_RUNTIME_DIR/mortar-play-<pid>.sock` (one JSON line each
+  way: `list_states`, `save_state`, `load_state`, `reset`, `fast_forward`,
+  `change_disc`, `quit`), found by mapping the pid in its name to an app
+  through pid ancestry, as windows are; a `games-ctl` thread sends them and
+  the answers come back as toasts ("Saved to slot 2", "Disc 2 of 3") and a
+  fresh slot list. SELECT+MENU still opens the game's own menu.
+- **Hibernation.** Every 2 s with games open: if more than
+  `mortar.shell.maxGames` (3) are awake, or MemAvailable is below
+  `games.hibernateBelowMb` (180), the least recently used game that is
+  neither in front nor starting (no window yet, or younger than 8 s) is put
+  to sleep: the shell keeps its last frame (the buffer at half size, ~0.75
+  MB) as a picture and asks it to `quit` quietly; it writes its `auto`
+  state and exits. The app stays in Running (`App::asleep`; `alive()` keeps
+  it) marked "asleep · saved" with that picture. A (or Wake in its panel)
+  starts it again with the same uid and place: mortar-play resumes from
+  `auto`, and the launch zoom shows the picture until the first frame, so
+  the restart does not show. One game goes to sleep at a time; a process
+  that does not quit gets the usual SIGTERM after 3 s.
+- **Sleep safety.** Before `actions.sleep` the shell asks every awake game
+  to save `auto` (in parallel, at most ~500 ms in all), so a battery that
+  dies in suspend costs nothing.
+- **Saved toast.** A game that quits with its state written (Quit, X in
+  Running, its own menu, SIGTERM) sends `toast` to the shell's socket:
+  "Saved · Pocket King · GBC". Hibernation quits quietly. X on a running
+  game leaves the "Closed" toast to that.
+- **Mixer.** A game's PipeWire stream belongs to its app by pid ancestry
+  like any app's, so every game has its own channel.
+- **Screenshots** (VOL+ and VOL−) with an app in front capture just the
+  app's frame (and the keyboard strip): no toast or OSD over it.
 
 ## Screens
 
@@ -179,7 +253,7 @@ blocks with 1 px ink outlines, isometric illustrations.
   - Apps: every launcher entry. Games, Music: the entries with that
     `category` (the module's `category` or `categories.<id>`, else
     guessed: M8 and trackers are music, PICO-8, PuzzleScript and
-    emulators games); Music starts with the Mixer. A launches (zooming
+    emulators games; Games also lists the library, see "Games (mortar-play)"); Music starts with the Mixer. A launches (zooming
     from the row's icon); a running single-instance entry switches to its
     app instead.
   - Settings (the old Quick and Power): Brightness and Volume (A enters
@@ -775,10 +849,10 @@ records the shell's RSS (`rss_kib` in state.json).
 ## Control socket
 
 `$XDG_RUNTIME_DIR/mortar-shell.sock` (0600), one line per connection:
-`state` (JSON; `overlay`, `category` ("Running" on the Running page),
+`state` (JSON; `overlay`, `category` ("Running" on the Running page), `game_panel`, `game_page`, `games` (library summary, panel states), per app `game` / `asleep`,
 `menu_page` (wifi, bluetooth, mixer) and `settings` say what of the MENU
 shows), `press|down|up BUTTON`, `key CODE`, `launch ID`,
-`focus ID`, `close ID`, `home`, `screenshot PATH`, `shot` (the screenshot
+`focus ID`, `close ID`, `game SYSTEM [ROM]`, `hibernate UID`, `save-games`, `home`, `screenshot PATH`, `shot` (the screenshot
 combo), `toast JSON`, `boot` (replay), `time manual|real|+MS`, `prefs`,
 `quit`. Tests drive the
 shell through it; over SSH it gives remote screenshots and app control
@@ -803,6 +877,11 @@ shell through it; over SSH it gives remote screenshots and app control
   fontconfig, and the backlight udev rule.
 
 ## Tests
+
+(Games: games.rs and gamepages.rs unit tests cover the library rows,
+titles, launching and switching, paging, the panel's requests and the
+hibernation policy; mortar-play's `tests.shell` drives the whole flow in
+the shell, see pkgs/mortar-play/DESIGN.md.)
 
 - Unit tests (`cargo test`, also on macOS): config parsing, pid ancestry,
   MRU, button routing (MENU chord, releases on retarget, keyboard mode),

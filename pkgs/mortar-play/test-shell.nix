@@ -2,8 +2,15 @@
 # mortar-play inside mortar-shell (headless backend, in the sandbox): the
 # wl_shm presenter, pause while the shell's overlay is up, keys through
 # wl_keyboard, and a clean quit with the resume state when the shell closes
-# the app. Screenshots of the composited output in $out. (No /dev/uinput in
-# the sandbox, so the gamepad path is covered by the device test.)
+# the app. Then games as apps: MENU > Games (the library from `list
+# --json`), a system's page, a game started as its own app, its game panel
+# (save to a slot, load it), a second game putting the first to sleep
+# (maxGames = 1), waking it (it resumes), starting a running game again
+# (switches), the save before suspend, the screenshot combo, quitting with
+# the "Saved" toast. Only the built-in test ROM (`make-test-rom`), twice.
+# Screenshots of the composited output in $out, the games' memory in
+# $out/rss.txt. (No /dev/uinput in the sandbox, so the gamepad path is
+# covered by the device test.)
 {
   lib,
   runCommand,
@@ -45,6 +52,14 @@ let
         env = { MORTAR_PLAY_LOG = "warn"; };
       }
     ];
+    games = {
+      list = [ "${lib.getExe mortar-play}" "--config" "@ROOT@/play.json" "list" "--json" ];
+      run = [ "${lib.getExe mortar-play}" "--config" "@ROOT@/play.json" "run" ];
+      library = "play";
+      maxGames = 1;
+      hibernateBelowMb = 0;
+    };
+    ui = { screenshotDir = "@ROOT@/shots"; bootAnimation = false; };
     actions = {
       volumeGet = [ "echo" "[50%]" ];
       volumeSet = [ "true" ];
@@ -63,6 +78,7 @@ runCommand "mortar-play-shell-test"
     sed "s|@ROOT@|$R|g" ${playConfig} > $R/play.json
     sed "s|@ROOT@|$R|g" ${shellConfig} > $R/shell.json
     mortar-play make-test-rom $R/roms/nes/mortar-test.nes
+    mortar-play make-test-rom "$R/roms/nes/Second Test (World).nes"
     fail() { echo "FAIL: $*" | tee -a $out/result; }
 
     MORTAR_SHELL_LOG=info mortar-shell run --backend headless --config $R/shell.json --socket wayland-test 2> $out/shell.log &
@@ -119,6 +135,103 @@ runCommand "mortar-play-shell-test"
     wait_for '[.apps[] | select(.id == "play")] | length == 0'
     log_has "bye"
     test -s $R/states/nes/mortar-test.state.auto || fail "no resume state after close"
+
+    echo "== games as apps: the library in MENU > Games"
+    mortar-play --config $R/play.json list --json > $out/list.json
+    jq -e '.systems[0].count == 2 and .recent[0].resume == true' $out/list.json >/dev/null || fail "list --json"
+    ctl press menu
+    wait_for '.overlay == true'
+    ctl press right; ctl press right
+    wait_for '.category == "Games" and (.games.systems | length) == 1'
+    sleep 0.5
+    shot 10-games
+    echo "== Continue, then the NES row: its page"
+    ctl press down
+    ctl press a
+    wait_for '.game_page == "nes"'
+    sleep 0.6
+    shot 11-games-nes
+    echo "== A: the first game starts as its own app, titled from the library"
+    ctl press a
+    wait_for '[.apps[] | select(.game and .visible and .windows == 1)] | length == 1'
+    A=$(ctl state | jq '[.apps[] | select(.game)][0].uid')
+    ctl state | jq -e "[.apps[] | select(.uid == $A)][0].name == \"mortar-test · NES\"" >/dev/null || fail "game title"
+    log_has "control socket"
+    sleep 1.5
+    shot 12-game
+
+    echo "== Y in Running: the game panel; save to slot 1, load it"
+    ctl press menu
+    wait_for '.category == "Running"'
+    ctl press y
+    wait_for ".game_panel == $A and .games.status[\"$A\"] != null"
+    sleep 0.5
+    shot 13-game-panel
+    ctl press a
+    for _ in $(seq 50); do [ -s $R/states/nes/mortar-test.state.0 ] && break; sleep 0.1; done
+    test -s $R/states/nes/mortar-test.state.0 || fail "slot 1 not written"
+    test -s $R/states/nes/mortar-test.state.0.png || fail "slot 1 picture"
+    wait_for ".games.status[\"$A\"].slots[0] == true"
+    sleep 0.5
+    shot 14-saved
+    ctl press down
+    ctl press a
+    log_has "state loaded"
+    wait_for '.overlay == false'
+    wait_for "[.apps[] | select(.uid == $A and .visible)] | length == 1"
+
+    echo "== the save before suspend"
+    before=$(stat -c %Y $R/states/nes/mortar-test.state.auto)
+    sleep 1.1
+    ctl save-games
+    log_has "saved games before suspend"
+    [ "$(stat -c %Y $R/states/nes/mortar-test.state.auto)" != "$before" ] || fail "auto state not written before suspend"
+
+    echo "== the screenshot combo with a game in front: just its frame"
+    ctl shot
+    for _ in $(seq 30); do ls $R/shots/*.png >/dev/null 2>&1 && break; sleep 0.1; done
+    ls $R/shots/*.png >/dev/null 2>&1 || fail "no screenshot"
+    cp $R/shots/*.png $out/15-combo.png 2>/dev/null || true
+
+    echo "== memory per game"
+    for p in $(ctl state | jq '.apps[] | select(.game) | .pid'); do
+      echo "game pid $p: $(grep VmRSS /proc/$p/status)" >> $out/rss.txt
+    done
+
+    echo "== a second game (maxGames = 1): the first goes to sleep"
+    sleep 8  # past "starting"
+    ctl game nes "$R/roms/nes/Second Test (World).nes"
+    wait_for '[.apps[] | select(.game and .visible and .windows == 1)] | length == 1'
+    wait_for "[.apps[] | select(.uid == $A and .sleeping)] | length == 1"
+    log_has "putting a game to sleep"
+    ctl press menu
+    wait_for '.category == "Running"'
+    sleep 0.6
+    shot 16-asleep
+    for p in $(ctl state | jq '.apps[] | select(.game and .pid != null and (.sleeping | not)) | .pid'); do
+      echo "second game pid $p: $(grep VmRSS /proc/$p/status)" >> $out/rss.txt
+    done
+
+    echo "== A on the sleeping game: it wakes and resumes"
+    ctl press a
+    wait_for "[.apps[] | select(.uid == $A and .visible and .windows == 1)] | length == 1"
+    log_has "game woken"
+    sleep 1
+    shot 17-woken
+
+    echo "== starting a running game again switches to it"
+    n=$(ctl game nes $R/roms/nes/mortar-test.nes)
+    [ "$n" = "$A" ] || fail "a second copy of a running game ($n, $A)"
+
+    echo "== X in Running: it quits, saved"
+    ctl press menu
+    wait_for '.category == "Running"'
+    ctl press up  # the game in front (MENU opens on the one before)
+    ctl press x
+    log_has "toast from an app.*Saved"
+    sleep 0.3
+    shot 18-saved-toast
+    wait_for "[.apps[] | select(.uid == $A)] | length == 0"
 
     ctl quit
     wait $shell || true
