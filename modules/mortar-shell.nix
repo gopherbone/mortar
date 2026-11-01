@@ -117,10 +117,41 @@ let
   argv = c: if builtins.isString c then [ "${pkgs.runtimeShell}" "-c" c ] else c;
 
   footIni = pkgs.writeText "mortar-foot.ini" ''
-    # Mortar terminal: Geist Mono on the night surface of the Mortar theme.
+    # Mortar terminal: Geist Mono in the Pond palette. [colors-light] is
+    # the day ground with ink text (the regular ANSI colours are deep
+    # versions of the accents so they read on it; the bright ones are the
+    # accents themselves, for blocks such as the zsh prompt's lime key
+    # cap); [colors-dark] the night surface. Which one: mortarTerminal.
     font=Geist Mono:size=${toString cfg.terminal.fontSize}
-    pad=14x12
+    pad=16x12 center
+    initial-color-theme=dark
+    [cursor]
+    style=block
+    blink=no
+    [colors-light]
+    background=e1ebf7
+    foreground=1d1d1d
+    cursor=1d1d1d cef058
+    selection-background=cba6f7
+    selection-foreground=1d1d1d
+    regular0=1d1d1d
+    regular1=c4452a
+    regular2=4d7a12
+    regular3=946200
+    regular4=2f5fb3
+    regular5=7a3fc4
+    regular6=1d7a6e
+    regular7=bfcbd8
+    bright0=7d8799
+    bright1=ff9f67
+    bright2=cef058
+    bright3=ffd330
+    bright4=8fb4ff
+    bright5=cba6f7
+    bright6=7fd6c8
+    bright7=ffffff
     [colors-dark]
+    cursor=1d1d1d cef058
     background=1d1d1d
     foreground=e1ebf7
     selection-background=cef058
@@ -143,6 +174,17 @@ let
     bright7=ffffff
   '';
 
+  # foot with the Mortar config. Entries with MORTAR_FOLLOW_PALETTE in their
+  # env (the Terminal) start in the shell's Settings > Palette (MORTAR_PALETTE,
+  # set by the shell) and follow it when it changes (the shell sends foot
+  # SIGUSR1/SIGUSR2); the others stay on the night surface (Claude Code's
+  # TUI is themed for it).
+  mortarTerminal = pkgs.writeShellScript "mortar-terminal" ''
+    theme=dark
+    if [ -n "''${MORTAR_FOLLOW_PALETTE-}" ] && [ "''${MORTAR_PALETTE-}" = day ]; then theme=light; fi
+    exec ${lib.getExe cfg.terminal.package} --config ${footIni} -o initial-color-theme="$theme" "$@"
+  '';
+
   terminalApp = {
     name = "Terminal";
     description = "foot · START for keyboard";
@@ -153,7 +195,7 @@ let
     singleInstance = true;
     order = 5;
     command = cfg.terminal.command;
-    env = { };
+    env.MORTAR_FOLLOW_PALETTE = "1";
     art = "term";
     category = "apps";
   };
@@ -326,8 +368,8 @@ in
       command = mkOption {
         type = types.listOf types.str;
         readOnly = true;
-        default = [ "${lib.getExe cfg.terminal.package}" "--config" "${footIni}" ];
-        defaultText = lib.literalExpression ''[ "foot" "--config" "<Mortar foot.ini>" ]'';
+        default = [ "${mortarTerminal}" ];
+        defaultText = lib.literalExpression ''[ "<foot --config Mortar foot.ini>" ]'';
         description = "The terminal with the Mortar config, as an argv; append a command to run it in the terminal (other modules' launcher entries use this).";
       };
     };

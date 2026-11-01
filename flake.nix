@@ -123,6 +123,7 @@
             };
           }
           ./modules/mortar-user.nix
+          ./modules/mortar-zsh.nix
           # SD image: mainline SPL + TF-A + U-Boot at 128 KiB, FAT /boot
           # with extlinux generations, ext4 root.
           (import ./image/build-image-mainline.nix { })
