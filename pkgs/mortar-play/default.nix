@@ -25,6 +25,8 @@ let
 
     src = lib.fileset.toSource {
       root = ../.;
+      # test*.nix and dev.sh stay out of the source, so editing them doesn't
+      # rebuild the frontend
       fileset = lib.fileset.unions [
         ./Cargo.toml
         ./Cargo.lock
@@ -48,6 +50,17 @@ let
       tests.integration-run = callPackage ./test.nix { mortar-play = play; };
       tests.integration = runCommand "mortar-play-integration-check" { } ''
         r=${play.tests.integration-run}
+        cat $r/result
+        grep -qx PASS $r/result
+        ln -s $r $out
+      '';
+      # inside mortar-shell (Linux only)
+      tests.shell-run = callPackage ./test-shell.nix {
+        mortar-play = play;
+        mortar-shell = callPackage ../mortar-shell { };
+      };
+      tests.shell = runCommand "mortar-play-shell-check" { } ''
+        r=${play.tests.shell-run}
         cat $r/result
         grep -qx PASS $r/result
         ln -s $r $out

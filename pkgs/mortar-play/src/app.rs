@@ -293,6 +293,9 @@ impl App {
             PEvent::Visible(v) => {
                 if v != self.visible {
                     self.visible = v;
+                    if self.session.is_some() {
+                        eprintln!("mortar-play: {}", if v { "visible again, resuming" } else { "hidden, paused" });
+                    }
                     let playing = matches!(self.screen, Screen::Playing);
                     self.mixer.out.set_paused(!v || !playing);
                     self.pacer.reset();
@@ -349,7 +352,7 @@ impl App {
             self.sys_read = Instant::now();
             self.dirty = true;
         }
-        if self.dirty && self.visible {
+        if self.dirty {
             self.draw();
         }
         if !self.headless {

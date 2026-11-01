@@ -51,6 +51,8 @@ struct State {
     configured: bool,
     size: (u32, u32),
     activated: Option<bool>,
+    /// We have been on screen (activated) at least once.
+    shown: bool,
     bufs: Vec<Buf>,
     events: Vec<PEvent>,
 }
@@ -274,13 +276,18 @@ impl Dispatch<xdg_toplevel::XdgToplevel, ()> for State {
                     .chunks_exact(4)
                     .map(|c| u32::from_ne_bytes([c[0], c[1], c[2], c[3]]))
                     .any(|v| matches!(xdg_toplevel::State::try_from(v), Ok(xdg_toplevel::State::Activated)));
-                if s.activated != Some(active) {
-                    s.activated = Some(active);
+                // The shell shows an app once its first buffer arrives, so the
+                // first configures say "not active": that is not a reason to
+                // stop drawing. Only a deactivation after we were shown is.
+                let was = s.activated.unwrap_or(false);
+                if active != was && (active || s.shown) {
                     s.events.push(PEvent::Visible(active));
                     if !active {
                         s.events.push(PEvent::ReleaseAll);
                     }
                 }
+                s.shown |= active;
+                s.activated = Some(active);
             }
             xdg_toplevel::Event::Close => s.events.push(PEvent::Quit),
             _ => {}
