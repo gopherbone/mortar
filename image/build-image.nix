@@ -10,7 +10,8 @@
 #                     /extlinux/extlinux.conf
 #                     /nixos/<hash>-Image
 #                     /nixos/<hash>-initrd
-#                     /dtbs/allwinner/sun50i-a133-liontron-h-a133l.dtb (patched)
+#                     /dtbs/<hardware.deviceTree.name> (patched), defaulting to
+#                       allwinner/sun50i-a133-liontron-h-a133l.dtb
 #   Sector 327680:  Partition 2 — ext4 "NIXOS_ROOT" (rest of card)
 #                     NixOS root filesystem
 #
@@ -41,6 +42,16 @@ let
     then config.hardware.deviceTree.package
     else kernel;
 
+  # DTB path relative to the dtbs root, e.g. "allwinner/foo.dtb".
+  # Taken from hardware.deviceTree.name when the config sets it (the mainline
+  # variant does); otherwise the original Liontron DTB, so the `trimui-brick`
+  # configuration builds exactly the same image as before.
+  dtbName =
+    if config.hardware.deviceTree.name != null
+    then config.hardware.deviceTree.name
+    else "allwinner/sun50i-a133-liontron-h-a133l.dtb";
+  dtbDir = builtins.dirOf dtbName;
+
   kernelParams = lib.concatStringsSep " " config.boot.kernelParams;
   closureInfo  = pkgs.closureInfo { rootPaths = [ toplevel ]; };
 
@@ -57,7 +68,7 @@ let
       MENU LABEL NixOS - Default
       LINUX /nixos/${kernelName}-Image
       INITRD /nixos/${initrdName}-initrd
-      FDT /dtbs/allwinner/sun50i-a133-liontron-h-a133l.dtb
+      FDT /dtbs/${dtbName}
       APPEND init=${toplevel}/init ${kernelParams}
   '';
 
@@ -94,8 +105,8 @@ in pkgs.runCommand "nixos-trimui-brick-sd" {
   # Find DTB — overlay output omits dtbs/ prefix, kernel keeps it
   DTB_FILE=""
   for candidate in \
-    "${dtbSource}/dtbs/allwinner/sun50i-a133-liontron-h-a133l.dtb" \
-    "${dtbSource}/allwinner/sun50i-a133-liontron-h-a133l.dtb"; do
+    "${dtbSource}/dtbs/${dtbName}" \
+    "${dtbSource}/${dtbName}"; do
     if [ -f "$candidate" ]; then
       DTB_FILE="$candidate"
       break
@@ -143,7 +154,7 @@ EOF
   mmd -i $bootImg ::/extlinux
   mmd -i $bootImg ::/nixos
   mmd -i $bootImg ::/dtbs
-  mmd -i $bootImg ::/dtbs/allwinner
+  mmd -i $bootImg ::/dtbs/${dtbDir}
 
   # Copy extlinux.conf
   mcopy -i $bootImg ${extlinuxConf} ::/extlinux/extlinux.conf
@@ -157,7 +168,7 @@ EOF
   # Copy DTB (from patched device tree package)
   mcopy -i $bootImg \
     $DTB_FILE \
-    ::/dtbs/allwinner/sun50i-a133-liontron-h-a133l.dtb
+    ::/dtbs/${dtbName}
 
   # Write boot partition to image
   dd if=$bootImg of=$img \
