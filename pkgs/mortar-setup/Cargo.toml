@@ -1,0 +1,35 @@
+[package]
+name = "mortar-setup"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-2.0-or-later"
+description = "First-boot setup, pairing and remote-access settings for Mortar on the TrimUI Brick"
+publish = false
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+
+# The library alone (control-socket client, setup screens) is what
+# mortar-shell embeds: build it with `default-features = false`.
+# "daemon" adds the Brick-side services (setup file, pairing server, iwd),
+# "app" the binary with its own display backends.
+[features]
+default = ["daemon", "app"]
+daemon = ["dep:zbus", "dep:toml_edit"]
+app = ["daemon", "mortar-ui/backend"]
+
+[[bin]]
+name = "mortar-setup"
+path = "src/main.rs"
+required-features = ["app"]
+
+[dependencies]
+mortar-ui = { path = "../mortar-ui", default-features = false }
+mortar-pair = { path = "../mortar-pair" }
+libc = "0.2.191"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+sha2 = "0.10.9"
+toml_edit = { version = "0.22", optional = true }
+zbus = { version = "5", optional = true }
