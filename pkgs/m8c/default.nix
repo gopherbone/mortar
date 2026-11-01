@@ -108,6 +108,11 @@ let
       if [ ! -e "$dir/config.ini" ]; then
         install -m 0644 ${config} "$dir/config.ini"
       fi
+      # Under PipeWire, ALSA's `default` advertises up to 64 channels and
+      # SDL rejects that spec ("src_spec->channels is invalid"), so m8c
+      # opened no output and the M8 was silent. Ask for plain stereo.
+      export SDL_AUDIO_CHANNELS="''${SDL_AUDIO_CHANNELS:-2}"
+      export SDL_AUDIO_FREQUENCY="''${SDL_AUDIO_FREQUENCY:-44100}"
       exec ${lib.getExe m8c'} "$@"
     '';
   };

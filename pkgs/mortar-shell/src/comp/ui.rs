@@ -538,13 +538,25 @@ impl Shell {
                 self.muted = m;
             }
         }
-        let v = (self.volume.unwrap_or(50) as i32 + d).clamp(0, 100) as u8;
+        let old = self.volume.unwrap_or(50);
+        let v = (old as i32 + d).clamp(0, 100) as u8;
         self.set_volume(v);
         if !self.sui.menu_open() {
             self.sui.osd(OsdKind::Volume, v, self.muted);
         }
         self.play_sfx(Sfx::Vol(v));
-        self.play_haptic(Haptic::Tick);
+        // Holding a key repeats fast: a buzz per repeat felt like a rattle.
+        // Tick when the level moves (at most every 150 ms) and bump once
+        // when it hits 0 or 100; stay quiet while held at the limit.
+        let now = std::time::Instant::now();
+        let due = self.volume_haptic_at.is_none_or(|t| now.duration_since(t).as_millis() >= 150);
+        if v != old && (v == 0 || v == 100) {
+            self.play_haptic(Haptic::Double);
+            self.volume_haptic_at = Some(now);
+        } else if v != old && due {
+            self.play_haptic(Haptic::Tick);
+            self.volume_haptic_at = Some(now);
+        }
         self.needs_redraw = true;
     }
 

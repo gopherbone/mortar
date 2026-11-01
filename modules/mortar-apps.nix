@@ -131,6 +131,14 @@ in
     # Mesa: GBM + EGL + llvmpipe for SDL's KMSDRM backend (see above).
     hardware.graphics.enable = true;
 
+    # SDL apps through PipeWire's ALSA `default` (up to 64 channels
+    # advertised) get an invalid spec when they open the default device
+    # without one; stereo at 44.1 kHz is what the codec plays anyway.
+    environment.sessionVariables = lib.mkIf cfg.audio.pipewire {
+      SDL_AUDIO_CHANNELS = "2";
+      SDL_AUDIO_FREQUENCY = "44100";
+    };
+
     # services.graphical-desktop (pulled in by greetd) turns PipeWire on
     # by default; this decides.
     services.pipewire = lib.mkMerge [

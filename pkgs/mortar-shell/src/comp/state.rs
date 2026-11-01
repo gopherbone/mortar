@@ -200,6 +200,8 @@ pub struct Shell {
     pub muted: bool,
     /// Sets and reads the volume off the event loop.
     pub volume_worker: super::ui::VolumeWorker,
+    /// Last volume-step haptic: held keys tick at most every 150 ms.
+    pub volume_haptic_at: Option<std::time::Instant>,
     last_bg_tick: Instant,
     /// Settings > Updates (mortar-update's status file).
     pub update: super::ui::UpdateWatch,
@@ -332,6 +334,7 @@ impl Shell {
             volume: None,
             muted: false,
             volume_worker,
+            volume_haptic_at: None,
             last_bg_tick: Instant::now(),
             update: Default::default(),
         };
