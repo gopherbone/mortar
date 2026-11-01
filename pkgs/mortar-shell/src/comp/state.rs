@@ -618,6 +618,7 @@ impl Shell {
                         let argv: Vec<String> = self.cfg.actions.volume_set.iter().map(|a| a.replace("{step}", &s)).collect();
                         run_quiet(&argv);
                         self.volume = self.read_volume();
+                        self.sui.hide_osd();
                         self.screenshot_combo();
                     } else {
                         self.change_volume(step);

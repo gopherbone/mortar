@@ -720,6 +720,14 @@ impl ShellUi {
         self.dirty = true;
     }
 
+    /// Drop the OSD at once (the screenshot chord's first volume key
+    /// started it; it must not be in the picture).
+    pub fn hide_osd(&mut self) {
+        if self.osd.take().is_some() {
+            self.dirty = true;
+        }
+    }
+
     pub fn show_toast(&mut self, t: Toast) {
         // info toasts replace what is up; achievements wait their turn
         if let Some(cur) = &self.toast
