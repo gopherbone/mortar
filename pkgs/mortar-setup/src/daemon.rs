@@ -169,6 +169,7 @@ impl Daemon {
         }
         let dir = self.cfg.paths.sshd_dir();
         let f = dir.join("password-login.conf");
+        let existed = f.exists();
         let r = if want {
             let local = &self.cfg.usb_address;
             fs::create_dir_all(&dir).and_then(|_| {
@@ -194,10 +195,9 @@ impl Daemon {
             eprintln!("{}: {e}", f.display());
             return;
         }
-        let first = inner.sshd_conf.is_none();
         inner.sshd_conf = Some(want);
-        // at startup sshd may not be running yet (it reads the file itself)
-        if !self.cfg.sshd_reload.is_empty() && (!first || want) {
+        // sshd reads the include when it (re)loads its config
+        if !self.cfg.sshd_reload.is_empty() && existed != want {
             let argv: Vec<&str> = self.cfg.sshd_reload.iter().map(String::as_str).collect();
             sys::spawn(&argv);
         }

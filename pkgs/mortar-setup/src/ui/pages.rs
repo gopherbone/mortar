@@ -339,9 +339,9 @@ impl Page for UsbPair {
                 Nav::Stay
             }
             Button::B => {
-                if cx.mode == Mode::Settings {
-                    cx.act(Request::EndPairing);
-                }
+                // leaving the screen ends a code nobody can see (the daemon
+                // keeps one on offer while there are no keys)
+                cx.act(Request::EndPairing);
                 Nav::Pop
             }
             _ => Nav::Stay,
