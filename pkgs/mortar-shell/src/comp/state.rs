@@ -147,6 +147,8 @@ pub struct Shell {
     /// CLOCK_BOOTTIME - CLOCK_MONOTONIC at the last check: it grows by the
     /// time spent suspended, which is how a resume is noticed.
     boot_offset: f64,
+    /// /sys/power/suspend_stats/success, sampled while dark.
+    suspend_count: Option<u64>,
     /// Resumes from suspend seen since start (ctl status).
     pub resumes: u32,
     /// Right after a resume: the press that woke the Brick (the power key)
@@ -293,6 +295,7 @@ impl Shell {
             suspend_at: None,
             suspend_child: None,
             boot_offset: boot_offset(),
+            suspend_count: None,
             resumes: 0,
             resume_grace: None,
             power_swallow: false,
@@ -931,15 +934,30 @@ impl Shell {
         }
     }
 
-    /// The time spent suspended shows up as a jump between CLOCK_BOOTTIME
-    /// and CLOCK_MONOTONIC (UI time, `Instant`, does not move meanwhile).
-    /// On resume: wake the screen, swallow the waking press, redraw and
-    /// give every app a frame callback (they stopped while dark).
+    /// A resume shows up as a jump between CLOCK_BOOTTIME and
+    /// CLOCK_MONOTONIC (deep suspend; UI time, `Instant`, does not move
+    /// meanwhile) or, while dark, as a new count in
+    /// /sys/power/suspend_stats/success (s2idle on the Brick keeps
+    /// CLOCK_MONOTONIC running). On resume: wake the screen, swallow the
+    /// waking press, redraw and give every app a frame callback (they
+    /// stopped while dark).
     fn check_resume(&mut self) {
         let off = boot_offset();
         let slept = off - self.boot_offset;
         self.boot_offset = off;
-        if slept < 0.5 {
+        let mut resumed = slept >= 0.5;
+        if self.dark {
+            let n = std::fs::read_to_string("/sys/power/suspend_stats/success")
+                .ok()
+                .and_then(|s| s.trim().parse::<u64>().ok());
+            if n.is_some() && self.suspend_count.is_some() && n != self.suspend_count {
+                resumed = true;
+            }
+            self.suspend_count = n;
+        } else {
+            self.suspend_count = None;
+        }
+        if !resumed {
             return;
         }
         self.resumes += 1;
