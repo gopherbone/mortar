@@ -2,7 +2,10 @@
 //! `mortar`: build Mortar on this computer and put it on a Brick over SSH.
 //!
 //! Shells out to `nix` and `ssh` (both expected on PATH) so it works the same
-//! on macOS and Linux. No dependencies beyond std.
+//! on macOS and Linux. `mortar pair` speaks the pairing protocol
+//! (pkgs/mortar-pair) itself.
+
+mod pair;
 
 use std::env;
 use std::process::{exit, Command, Stdio};
@@ -19,6 +22,10 @@ mortar generations [--host HOST]  list the Brick's system generations
 mortar reboot [--host HOST]       reboot and wait until SSH answers again
 mortar attention [--host HOST]    buzz the Brick so whoever holds it looks
 mortar ssh [--host HOST] [-- CMD...]
+mortar pair [--host HOST] [--key FILE.pub] [--name ALIAS] [--code CODE] [--no-ssh-config]
+    Put this computer's SSH key on a Brick using the code on its screen
+    (over the USB cable), check its host key, and add `Host ALIAS`
+    (default: brick) to ~/.ssh/config so `ssh brick` works.
 
 Defaults: HOST=$MORTAR_HOST or mortar.local, CONFIG=brick-mainline,
 flake=$MORTAR_FLAKE or the current directory.";
@@ -66,6 +73,23 @@ fn parse(args: &[String]) -> Opts {
                 o.rest = it.cloned().collect();
                 break;
             }
+            other => die(&format!("unknown option: {other}")),
+        }
+    }
+    o
+}
+
+fn parse_pair(args: &[String]) -> pair::Opts {
+    let mut o = pair::Opts { host: env::var("MORTAR_HOST").ok(), key: None, name: "brick".into(), code: None, ssh_config: true };
+    let mut it = args.iter();
+    let val = |it: &mut std::slice::Iter<String>, n: &str| it.next().cloned().unwrap_or_else(|| die(&format!("{n} needs a value")));
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--host" => o.host = Some(val(&mut it, a)),
+            "--key" => o.key = Some(val(&mut it, a).into()),
+            "--name" => o.name = val(&mut it, a),
+            "--code" => o.code = Some(val(&mut it, a)),
+            "--no-ssh-config" => o.ssh_config = false,
             other => die(&format!("unknown option: {other}")),
         }
     }
@@ -173,6 +197,10 @@ fn main() {
         Some((c, r)) => (c.as_str(), r),
         None => ("help", &[][..]),
     };
+    if cmd == "pair" {
+        pair::run(&parse_pair(rest));
+        return;
+    }
     let o = parse(rest);
     match cmd {
         "deploy" => deploy(&o),
