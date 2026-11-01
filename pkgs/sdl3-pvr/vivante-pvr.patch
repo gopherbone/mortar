@@ -1,0 +1,47 @@
+--- a/src/video/vivante/SDL_vivantevideo.c	2026-11-01 00:56:52
++++ b/src/video/vivante/SDL_vivantevideo.c	2026-11-01 00:56:52
+@@ -41,6 +41,15 @@
+     SDL_free(device);
+ }
+ 
++/* PowerVR NULL WSEGL: GLES only, so default GL requests (e.g. a window
++   created with SDL_WINDOW_OPENGL before any renderer) to ES 2.0. */
++static void VIVANTE_GLES_DefaultProfileConfig(SDL_VideoDevice *_this, int *mask, int *major, int *minor)
++{
++    *mask = SDL_GL_CONTEXT_PROFILE_ES;
++    *major = 2;
++    *minor = 0;
++}
++
+ static SDL_VideoDevice *VIVANTE_Create(void)
+ {
+     SDL_VideoDevice *device;
+@@ -79,6 +88,7 @@
+     device->DestroyWindow = VIVANTE_DestroyWindow;
+ 
+ #ifdef SDL_VIDEO_OPENGL_EGL
++    device->GL_DefaultProfileConfig = VIVANTE_GLES_DefaultProfileConfig;
+     device->GL_LoadLibrary = VIVANTE_GLES_LoadLibrary;
+     device->GL_GetProcAddress = VIVANTE_GLES_GetProcAddress;
+     device->GL_UnloadLibrary = VIVANTE_GLES_UnloadLibrary;
+@@ -174,7 +184,7 @@
+         return SDL_SetError("vdkInitialize() failed");
+     }
+ #else
+-    videodata->egl_handle = SDL_LoadObject("libEGL.so.1");
++    videodata->egl_handle = SDL_LoadObject("@fbwin@");
+     if (!videodata->egl_handle) {
+         videodata->egl_handle = SDL_LoadObject("libEGL.so");
+         if (!videodata->egl_handle) {
+@@ -264,9 +274,8 @@
+ #else
+     data->native_window = videodata->fbCreateWindow(displaydata->native_display, window->x, window->y, window->w, window->h);
+ #endif
+-    if (!data->native_window) {
+-        return SDL_SetError("VIVANTE: Can't create native window");
+-    }
++    /* NULL is a valid native window: the PowerVR NULL WSEGL takes no
++       other (it refuses a struct fbdev_window pointer). */
+     SDL_SetPointerProperty(props, SDL_PROP_WINDOW_VIVANTE_WINDOW_POINTER, data->native_window);
+ 
+ #ifdef SDL_VIDEO_OPENGL_EGL
