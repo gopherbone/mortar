@@ -31,7 +31,7 @@ over SSH.
 | Setup | First-boot setup: a `mortar.toml` file on the card, setup screens on the panel (Wi-Fi list, on-screen keyboard, WPS), and `mortar pair` from your computer (docs/setup-file.md, docs/pairing.md). |
 | Wi-Fi, Bluetooth | XR829: 2.4 GHz station mode via iwd; BlueZ. |
 | Display | JD9168 DSI panel, 1024×768. |
-| Updates | `nix run .#mortar -- deploy`: build, copy, switch. Every generation stays in the boot menu. |
+| Updates | Over Wi-Fi: CI builds each push and publishes it to a private binary cache; the Brick downloads, stages and asks you to restart (docs/updates.md). Or `nix run .#mortar -- deploy` over USB. Every generation stays in the boot menu. |
 | Battery | Charger set up like stock (4.2 V, 960 mA, 128 mA termination, NTC/JEITA windows); the AXP2202 fuel gauge runs TrimUI's battery model. Charging/full shown in the status bars; warnings at 15 % and 5 %; clean power-off at 3 %. USB input: 500 mA from a computer, 2.5 A from a charger. `mortar-power status`. |
 | Debug | Each boot saves logs to `mortar-logs/` on the card's FAT partition. |
 
@@ -93,8 +93,14 @@ nix run .#mortar -- rollback
 nix run .#mortar -- generations
 ```
 
-PICO-8 is commercial: add your own Raspberry Pi zip to the Nix store once with
-`nix-store --add-fixed sha256 pico-8_0.2.7_raspi.zip` (see pkgs/pico8).
+PICO-8 is commercial, so it is not part of the system: add your own Raspberry
+Pi zip to your computer's Nix store once with
+`nix-store --add-fixed sha256 pico-8_0.2.7_raspi.zip` (see pkgs/pico8), then
+`nix run .#mortar -- pico8` installs it into its own profile on the Brick,
+where over-the-air updates leave it alone.
+
+Over-the-air updates (GitHub Actions + a private Cloudflare R2 bucket, or
+`mortar publish` from your computer) are set up once: docs/updates.md.
 
 The image and closure contain **non-redistributable** files: TrimUI blobs
 (SCP power-management firmware, XR829 and GPU firmware, GPU userspace,
@@ -120,6 +126,7 @@ modules/
   mortar-ai.nix           Claude Code: tmux session, controller UI, Remote Control
   mortar-setup.nix        first-boot setup: mortar.toml, pairing, setup screens
   mortar-power.nix        battery policy: USB input current, low-battery warnings, power-off
+  mortar-update.nix       over-the-air updates from a private binary cache
 pkgs/
   linux-trimui-brick.nix  jkingston's Linux 7.3 Brick tree, pinned, + patches/kernel/
   brick-dc-drm/           display-class driver: GPU frames → DRM atomic flips
@@ -132,13 +139,16 @@ pkgs/
   mortar-ai/              controller UI for Claude Code + sign-in helper (Rust), see DESIGN.md
   mortar-setup/           setup file, pairing service, setup screens (Rust)
   mortar-pair/            the pairing protocol, shared with mortar-cli
-  mortar-cli/             the `mortar` command: deploy, pair, attention, … (Rust)
+  mortar-cli/             the `mortar` command: deploy, pair, publish, pico8, … (Rust)
+  mortar-update/          over-the-air updates on the Brick + the manifest format (Rust)
   mortar-rumble/          rumble motor helper (Rust)
   m8c/, pico8/, trimui-brick-firmware.nix, mortar-gpu-tests/
   choochootracker/        ChooChooTracker (MIT tracker/groovebox), Mortar build + launcher
 firmware/mainline/        U-Boot SPL + TF-A + U-Boot, with jkingston's patches
 image/build-image-mainline.nix   SD image (bootloader at 128 KiB, FAT /boot, ext4 /)
-docs/                     mortar.md, firmware.md, setup-file.md, pairing.md
+docs/                     mortar.md, firmware.md, setup-file.md, pairing.md, updates.md
+tests/mortar-update.nix   VM test: publish, download, stage, roll back (checks.*.mortar-update)
+.github/workflows/        CI: build on push and publish for over-the-air updates
 ```
 
 PuzzleScript comes from a separate flake input (`puzzlescript`). The

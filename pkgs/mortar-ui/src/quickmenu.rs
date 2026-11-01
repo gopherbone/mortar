@@ -57,7 +57,7 @@ impl QuickMenu {
         let user = current_user();
         let all: Vec<_> = match ctx.cfg.profiles.iter().find(|p| Some(&p.user) == user.as_ref()) {
             Some(p) => ctx.cfg.sessions_for(p),
-            None => ctx.cfg.sessions.iter().collect(),
+            None => ctx.cfg.sessions.iter().filter(|s| s.available()).collect(),
         };
         all.into_iter().filter(|s| Some(&s.id) != self.session.as_ref()).collect()
     }

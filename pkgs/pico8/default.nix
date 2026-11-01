@@ -6,6 +6,11 @@
 #
 #   nix-store --add-fixed sha256 pico-8_0.2.7_raspi.zip
 #
+# It is not part of the system closure (CI never sees the zip, the update
+# cache never holds PICO-8): `mortar pico8` builds this on your computer
+# (flake output packages.aarch64-linux.pico8) and installs it into its own
+# profile on the Brick, /nix/var/nix/profiles/pico8 (modules/mortar-apps.nix).
+#
 # Uses the 64-bit build (pico8_64: aarch64, needs only libSDL2 + libc),
 # linked against nixpkgs' SDL2 (sdl2-compat on SDL3), so it gets the same
 # display paths as Mortar's SDL3 apps (mortar-sdl-run: GPU or software GL;

@@ -1,0 +1,29 @@
+[package]
+name = "mortar-update"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-2.0-or-later"
+description = "Over-the-air updates for Mortar: check a private Nix binary cache, download, stage the next boot"
+publish = false
+
+[profile.release]
+opt-level = "s"
+strip = true
+
+# The library (manifest format, S3 access through curl, store URLs) is
+# shared with the `mortar` CLI (`mortar publish`), which builds it with
+# `default-features = false`. "device" adds the Brick-side binary.
+[features]
+default = ["device"]
+device = ["dep:toml_edit", "dep:libc"]
+
+[[bin]]
+name = "mortar-update"
+path = "src/main.rs"
+required-features = ["device"]
+
+[dependencies]
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+toml_edit = { version = "0.22", optional = true }
+libc = { version = "0.2.191", optional = true }

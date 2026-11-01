@@ -197,6 +197,8 @@ pub struct Shell {
     sys_at: Instant,
     pub volume: Option<u8>,
     last_bg_tick: Instant,
+    /// Settings > Updates (mortar-update's status file).
+    pub update: super::ui::UpdateWatch,
 }
 
 impl Shell {
@@ -324,6 +326,7 @@ impl Shell {
             sys_at: Instant::now(),
             volume: None,
             last_bg_tick: Instant::now(),
+            update: Default::default(),
         };
         shell.apply_prefs();
         shell.refresh_timezone();
@@ -448,6 +451,9 @@ impl Shell {
 
     pub fn launch(&mut self, id: &str) -> Result<u32, String> {
         let e = self.cfg.app(id).cloned().ok_or(format!("unknown app '{id}'"))?;
+        if !e.available() {
+            return Err(format!("{} is not installed", e.name));
+        }
         if e.single_instance
             && let Some(a) = self.apps.by_entry(id)
         {
@@ -603,6 +609,7 @@ impl Shell {
         self.suspend_tick();
         self.idle_tick();
         self.page_poll();
+        self.update_poll();
         // status while a shell screen shows
         if self.shell_screen() && self.sys_at.elapsed() > Duration::from_secs(2) {
             if self.status_refresh() {

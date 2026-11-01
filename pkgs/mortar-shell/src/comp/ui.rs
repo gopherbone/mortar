@@ -160,6 +160,7 @@ impl Shell {
             .cfg
             .apps
             .iter()
+            .filter(|e| e.available())
             .map(|e| {
                 let art = self.art_for(Some(&e.id), &e.name, e.icon);
                 LauncherInfo {
@@ -186,6 +187,7 @@ impl Shell {
         let host = self.host.clone();
         let timezone = self.timezone.clone();
         let osk_h = if self.osk.visible { self.osk_height() as f32 } else { 0.0 };
+        let update = self.update.view.clone();
         let v = View {
             running: &running,
             launcher: &launcher,
@@ -197,6 +199,7 @@ impl Shell {
             host: &host,
             timezone: &timezone,
             radios: self.radios,
+            update: update.as_ref(),
         };
         f(&mut self.sui, &v)
     }
@@ -352,6 +355,24 @@ impl Shell {
                 Out::Prefs => {
                     crate::config::save_prefs(&self.sui.prefs);
                     self.apply_prefs();
+                }
+                Out::UpdateCheck => {
+                    if let Some(u) = &self.cfg.update {
+                        super::state::run_detached(&u.check.clone());
+                        // say how it ended when the status settles
+                        self.update.asked = true;
+                    }
+                }
+                Out::UpdateAuto(on) => {
+                    if let Some(u) = &self.cfg.update {
+                        let argv: Vec<String> = u.auto.iter().map(|a| a.replace("{on}", if on { "on" } else { "off" })).collect();
+                        super::state::run_detached(&argv);
+                        // shown at once; the status file follows
+                        if let Some(v) = &mut self.update.view {
+                            v.auto_check = on;
+                        }
+                        self.ui_dirty = true;
+                    }
                 }
             }
             let more = self.sui.take_out();
@@ -612,6 +633,49 @@ impl Shell {
         Ok(())
     }
 
+    /// Re-read mortar-update's status when it changes (a stat every few
+    /// seconds): toast once when an update is staged, and the outcome of a
+    /// Check now.
+    pub fn update_poll(&mut self) {
+        let Some(path) = self.cfg.update.as_ref().map(|u| u.status.clone()) else { return };
+        if self.update.at.is_some_and(|t| t.elapsed() < Duration::from_secs(3)) {
+            return;
+        }
+        self.update.at = Some(Instant::now());
+        let mtime = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
+        if mtime == self.update.mtime && self.update.view.is_some() {
+            return;
+        }
+        self.update.mtime = mtime;
+        let st = std::fs::read_to_string(&path).ok().and_then(|s| crate::config::UpdateStatus::parse(&s)).unwrap_or_default();
+        self.update.view = Some(st.view());
+        let mut toast = None;
+        if st.ready() {
+            let top = st.available.as_ref().map(|a| a.toplevel.clone()).unwrap_or_default();
+            if self.update.toasted.as_deref() != Some(top.as_str()) {
+                self.update.toasted = Some(top);
+                let mut t = Toast::info("Update ready — restart to apply");
+                t.sub = st.available.as_ref().and_then(|a| a.changelog.first().cloned()).unwrap_or_else(|| "Settings › Updates".into());
+                t.secs = 5.0;
+                t.haptic = Some(Haptic::Double);
+                toast = Some(t);
+            }
+            self.update.asked = false;
+        } else if self.update.asked && !st.busy() && !st.state.is_empty() && st.state != "idle" {
+            self.update.asked = false;
+            let mut t = Toast::info(format!("Updates: {}", st.message));
+            t.sub = st.detail.chars().take(80).collect();
+            toast = Some(t);
+        }
+        if let Some(t) = toast {
+            self.sui.show_toast(t);
+            let outs = self.sui.take_out();
+            self.handle_outs(outs);
+        }
+        self.ui_dirty = true;
+        self.needs_redraw = true;
+    }
+
     pub fn status_refresh(&mut self) -> bool {
         let new = Sys::read();
         let radios = read_radios();
@@ -620,6 +684,18 @@ impl Shell {
         self.radios = radios;
         changed
     }
+}
+
+/// What the shell knows about mortar-update.
+#[derive(Default)]
+pub struct UpdateWatch {
+    pub view: Option<crate::shellui::UpdateView>,
+    mtime: Option<std::time::SystemTime>,
+    at: Option<Instant>,
+    /// The staged update already announced.
+    toasted: Option<String>,
+    /// Check now was pressed: toast the result.
+    asked: bool,
 }
 
 fn stamp() -> String {

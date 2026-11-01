@@ -23,6 +23,10 @@ password_login = true            # see below
 
 [usb]
 network = true                   # the Brick is a USB network adapter
+
+[update]                         # over-the-air updates (docs/updates.md)
+access_key_id = "…"              # the read-only R2 token
+secret_access_key = "…"          # stored on the Brick, then blanked here
 ```
 
 Every key is optional; blank strings are ignored. A file with nothing set
@@ -39,6 +43,8 @@ screen.
 | `ssh-keys/*.pub` | Any `.pub` file in the `ssh-keys/` folder next to `mortar.toml` is added the same way. `ssh-keys/root` itself is the file sshd reads. |
 | `ssh.password_login` | `true` (default): while the pairing code is on the Brick's screen it is also root's SSH password over the USB cable (only), so plain `ssh root@mortar.local` or `ssh-copy-id` work. It turns itself off when the first key arrives. `false`: only keys and `mortar pair`. |
 | `usb.network` | `false` turns the USB network off (the USB serial console stays). |
+| `update.access_key_id`, `update.secret_access_key` | Read-only bucket credentials for over-the-air updates (needs `mortar.update.enable`). `mortar-update-init` moves them to `/var/lib/mortar-update/credentials` (root only) at boot, before `mortar-setup-apply` runs, and blanks the secret in the file. |
+| `update.auto_check` | `false`: Settings > Auto-check daily starts off. |
 
 ## What happens at boot
 

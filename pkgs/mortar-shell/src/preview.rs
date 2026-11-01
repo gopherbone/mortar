@@ -147,6 +147,7 @@ pub fn run(o: &Opts) -> Result<(), String> {
     let mut current = if over_app { Some(2) } else { None };
     let run_ref: &[RunningInfo] = if s == "home-empty" { &none } else { &running };
     let host = "brick";
+    let update = crate::shellui::UpdateView { message: "Restart to update".into(), ready: true, busy: false, auto_check: true };
     let mk = |current: Option<u32>, osk_h: f32| View {
         running: run_ref,
         launcher: &launcher,
@@ -158,6 +159,7 @@ pub fn run(o: &Opts) -> Result<(), String> {
         host,
         timezone: "Europe/Lisbon",
         radios: Radios { wifi: Some(true), bluetooth: Some(false) },
+        update: Some(&update),
     };
     let dt = 1.0 / 120.0;
     let settle = |ui: &mut ShellUi, v: &View, secs: f64| {

@@ -7,6 +7,13 @@
 #                 Brick's TOP USB-C port (USB host).
 #   choochootracker  multi-engine tracker / groovebox ("ChooChoo"); see
 #                 pkgs/choochootracker for controls, data dir and MIDI.
+#   pico8         PICO-8 is commercial, so it is never part of the system
+#                 closure (which CI builds and the update cache holds). It
+#                 lives in its own Nix profile on the Brick,
+#                 /nix/var/nix/profiles/pico8, put there from a computer
+#                 with `mortar pico8` (built from your own zip, see
+#                 pkgs/pico8). Over-the-air updates leave that profile
+#                 alone; the PICO-8 entries hide while it is missing.
 #
 # Display: the sessions start both through `mortar-sdl-run` (brick-gpu.nix),
 # which puts them on the PowerVR GPU (pkgs/sdl3-pvr). If that fails they
@@ -44,12 +51,27 @@ in
       };
     };
     pico8 = {
-      enable = lib.mkEnableOption "PICO-8 (needs your licensed zip in the Nix store, see pkgs/pico8)";
+      enable = lib.mkEnableOption "PICO-8 entries, shown once `mortar pico8` has installed it (see pkgs/pico8)";
       package = lib.mkOption {
         type = lib.types.package;
         default = pkgs.callPackage ../pkgs/pico8 { };
         defaultText = lib.literalExpression "pkgs.callPackage ../pkgs/pico8 { }";
-        description = "PICO-8 built from the user-supplied Raspberry Pi zip.";
+        description = ''
+          PICO-8 built from the user-supplied Raspberry Pi zip. Not part of
+          the system: `mortar pico8` builds this (flake output
+          `packages.aarch64-linux.pico8`) and installs it into `profile`.
+        '';
+      };
+      profile = lib.mkOption {
+        type = lib.types.str;
+        default = "/nix/var/nix/profiles/pico8";
+        description = "The Nix profile PICO-8 is installed into (a GC root of its own, untouched by system updates).";
+      };
+      bin = lib.mkOption {
+        type = lib.types.str;
+        readOnly = true;
+        default = "${cfg.pico8.profile}/bin/pico8";
+        description = "PICO-8 inside the profile (for launcher entries; use it with `requires`).";
       };
     };
     choochootracker = {
@@ -77,8 +99,10 @@ in
       lib.optional (cfg.puzzlescript.enable && cfg.puzzlescript.package != null) cfg.puzzlescript.package
       ++ lib.optional cfg.m8c.enable cfg.m8c.package
       ++ lib.optional cfg.choochootracker.enable cfg.choochootracker.package
-      ++ lib.optional cfg.pico8.enable cfg.pico8.package
       ++ [ pkgs.alsa-utils ];
+
+    # `pico8` on PATH once installed (the profile is not in the closure)
+    environment.profiles = lib.mkIf cfg.pico8.enable (lib.mkAfter [ cfg.pico8.profile ]);
 
     # ALSA sequencer: /dev/snd/seq exists only once snd-seq is loaded; MIDI
     # apps (ChooChooTracker) list USB MIDI ports through it.

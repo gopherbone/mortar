@@ -25,3 +25,9 @@ password_login = true
 [usb]
 # The Brick shows up on your computer as a network adapter (10.55.0.1).
 network = true
+
+[update]
+# Over-the-air updates: the read-only bucket token (docs/updates.md).
+# The secret is moved onto the Brick at boot, then removed from this file.
+access_key_id = ""
+secret_access_key = ""

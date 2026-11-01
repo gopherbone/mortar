@@ -88,12 +88,15 @@
                 order = 22;
                 command = "exec ${config.mortar.gpu.sdlRun}/bin/mortar-sdl-run ${config.mortar.apps.choochootracker.package}/bin/choochootracker";
               };
+              # PICO-8 is not in the system closure: `mortar pico8` installs
+              # it into its own profile; the entry hides until then.
               pico8 = {
                 name = "PICO-8";
                 description = "Fantasy console, Splore";
                 icon = "pad";
                 order = 25;
-                command = "exec ${config.mortar.gpu.sdlRun}/bin/mortar-sdl-run ${config.mortar.apps.pico8.package}/bin/pico8 -splore";
+                requires = config.mortar.apps.pico8.bin;
+                command = "exec ${config.mortar.gpu.sdlRun}/bin/mortar-sdl-run ${config.mortar.apps.pico8.bin} -splore";
               };
               terminal = {
                 name = "Terminal";
@@ -105,6 +108,20 @@
             };
           })
           ./modules/mortar-base.nix
+          # Over-the-air updates from a private binary cache (docs/updates.md).
+          # Nothing here is secret: bucket, endpoint, the public signing key.
+          # Fill these in, set enable = true and `mortar deploy` once; after
+          # that CI (or `mortar publish`) updates the Brick over Wi-Fi.
+          # `mortar publish` reads these values too.
+          ./modules/mortar-update.nix
+          {
+            mortar.update = {
+              enable = false;
+              bucket = "mortar-cache";
+              endpoint = "https://ACCOUNT_ID.r2.cloudflarestorage.com";
+              publicKey = "mortar-1:REPLACE_WITH_PUBLIC_KEY";
+            };
+          }
           # SD image: mainline SPL + TF-A + U-Boot at 128 KiB, FAT /boot
           # with extlinux generations, ext4 root.
           (import ./image/build-image-mainline.nix { })
@@ -181,6 +198,9 @@
           # Mortar kernel (always aarch64-linux, from the NixOS config)
           linux-trimui-brick = mainlineConfig.boot.kernelPackages.kernel;
           mortar-toplevel = mainlineConfig.system.build.toplevel;
+          # Not in the system: `mortar pico8` builds this and installs it
+          # into /nix/var/nix/profiles/pico8 on the Brick.
+          pico8 = mainlineConfig.mortar.apps.pico8.package;
 
           # Mainline boot chain + SD image (fully mainline SPL/TF-A/U-Boot)
           u-boot-mainline = mainlineConfig.system.build.mortarBootloader;
@@ -199,6 +219,12 @@
           mortar = { type = "app"; program = "${mortar}/bin/mortar"; };
           default = self.apps.${system}.mortar;
         });
+
+      # VM tests: `nix build .#checks.aarch64-linux.mortar-update`
+      checks = forAllSystems (system: {
+        # over-the-air updates end to end (MinIO as the bucket)
+        mortar-update = import ./tests/mortar-update.nix { pkgs = nixpkgs.legacyPackages.${system}; };
+      });
 
       devShells = forAllSystems (system:
         let pkgs = import nixpkgs { inherit system; };

@@ -7,6 +7,8 @@ license = "GPL-2.0-or-later"
 
 [dependencies]
 mortar-pair = { path = "../mortar-pair" }
+mortar-update = { path = "../mortar-update", default-features = false }
+serde_json = "1.0.140"
 
 [profile.release]
 opt-level = "s"

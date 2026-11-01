@@ -101,6 +101,12 @@ let
           default = 100;
           description = "Sort key (then id) on the launcher.";
         };
+        requires = mkOption {
+          type = types.nullOr types.str;
+          default = null;
+          example = "/nix/var/nix/profiles/pico8/bin/pico8";
+          description = "Only offer it while this path exists (an app installed outside the system, e.g. PICO-8).";
+        };
       };
     }
   );
@@ -154,7 +160,7 @@ let
 
   fromGreeter = lib.mapAttrs (
     id: s: {
-      inherit (s) name description icon env order;
+      inherit (s) name description icon env order requires;
       art = null;
       category = null;
       command = s.command;
@@ -193,6 +199,7 @@ let
         }
         // lib.optionalAttrs (a.art or null != null) { inherit (a) art; }
         // lib.optionalAttrs (category != null) { inherit category; }
+        // lib.optionalAttrs (a.requires or null != null) { inherit (a) requires; }
       ) sorted;
       ui = {
         inherit (cfg.ui) renderer motion reduceMotion sounds soundVolume haptics bootAnimation screenshotDir cardFps msaa audioDevice suspend suspendGraceMs idleMinutes;
@@ -210,6 +217,8 @@ let
       env = { MORTAR_SDL = if cfg.gpuApps then "wayland-gpu" else "software"; } // cfg.environment;
       # MENU > Quick > Settings… > Wi-Fi networks / Remote access (modules/mortar-setup.nix)
       setupSocket = if config.mortar ? setup && config.mortar.setup.enable then "/run/mortar-setup/control.sock" else null;
+      # Settings > Updates (modules/mortar-update.nix)
+      update = if config.mortar ? update && config.mortar.update.enable then config.mortar.update.shell else null;
     }
   );
 

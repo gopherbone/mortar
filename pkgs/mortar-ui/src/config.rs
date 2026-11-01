@@ -75,6 +75,16 @@ pub struct Session {
     pub env: BTreeMap<String, String>,
     #[serde(default)]
     pub needs_wifi: bool,
+    /// Only offered while this path exists (an app installed outside the
+    /// system, e.g. PICO-8 in its own Nix profile).
+    #[serde(default)]
+    pub requires: Option<std::path::PathBuf>,
+}
+
+impl Session {
+    pub fn available(&self) -> bool {
+        self.requires.as_ref().is_none_or(|p| p.exists())
+    }
 }
 
 fn default_icon() -> Icon {
@@ -119,7 +129,7 @@ impl Config {
     pub fn sessions_for(&self, p: &Profile) -> Vec<&Session> {
         self.sessions
             .iter()
-            .filter(|s| p.sessions.as_ref().is_none_or(|ids| ids.contains(&s.id)))
+            .filter(|s| s.available() && p.sessions.as_ref().is_none_or(|ids| ids.contains(&s.id)))
             .collect()
     }
 }

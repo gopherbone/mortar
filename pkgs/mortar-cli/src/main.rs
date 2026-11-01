@@ -3,9 +3,11 @@
 //!
 //! Shells out to `nix` and `ssh` (both expected on PATH) so it works the same
 //! on macOS and Linux. `mortar pair` speaks the pairing protocol
-//! (pkgs/mortar-pair) itself.
+//! (pkgs/mortar-pair) itself. `mortar publish` pushes a build to the
+//! over-the-air update bucket (docs/updates.md).
 
 mod pair;
+mod publish;
 
 use std::env;
 use std::process::{exit, Command, Stdio};
@@ -22,6 +24,22 @@ mortar generations [--host HOST]  list the Brick's system generations
 mortar reboot [--host HOST]       reboot and wait until SSH answers again
 mortar attention [--host HOST]    buzz the Brick so whoever holds it looks
 mortar ssh [--host HOST] [-- CMD...]
+mortar pico8 [--host HOST] [--remove]
+    Build PICO-8 from your own zip (pkgs/pico8) and install it into its own
+    profile on the Brick (/nix/var/nix/profiles/pico8). It is never part of
+    the system, so over-the-air updates neither ship nor remove it.
+mortar publish [--config NAME] [--path STORE_PATH] [--channel C] [--key FILE]
+               [--credentials FILE] [--force] [--dry-run]
+               [--endpoint URL --bucket NAME [--region R]]
+    Over-the-air updates without CI: build, push the closure signed to the
+    private bucket (mortar.update in the flake, or --endpoint/--bucket),
+    then write the channel manifest (docs/updates.md). Key:
+    ~/.config/mortar/signing-key; bucket credentials:
+    $AWS_ACCESS_KEY_ID/$AWS_SECRET_ACCESS_KEY or ~/.config/mortar/r2-write.
+mortar update [--host HOST]       check for an update on the Brick now
+mortar update-creds [--host HOST] [--key-id ID]
+    Give the Brick its read-only bucket credentials (asks for the secret,
+    or $MORTAR_UPDATE_SECRET), over SSH.
 mortar pair [--host HOST] [--key FILE.pub] [--name ALIAS] [--code CODE] [--no-ssh-config]
     Put this computer's SSH key on a Brick using the code on its screen
     (over the USB cable), check its host key, and add `Host ALIAS`
@@ -38,6 +56,8 @@ struct Opts {
     flake: String,
     boot_only: bool,
     reboot: bool,
+    remove: bool,
+    key_id: Option<String>,
     rest: Vec<String>,
 }
 
@@ -57,6 +77,8 @@ fn parse(args: &[String]) -> Opts {
         flake: env::var("MORTAR_FLAKE").unwrap_or_else(|_| ".".into()),
         boot_only: false,
         reboot: false,
+        remove: false,
+        key_id: None,
         rest: Vec::new(),
     };
     let mut it = args.iter();
@@ -65,6 +87,8 @@ fn parse(args: &[String]) -> Opts {
             "--host" => o.host = it.next().cloned().unwrap_or_else(|| die("--host needs a value")),
             "--config" => o.config = it.next().cloned().unwrap_or_else(|| die("--config needs a value")),
             "--boot" => o.boot_only = true,
+            "--remove" => o.remove = true,
+            "--key-id" => o.key_id = Some(it.next().cloned().unwrap_or_else(|| die("--key-id needs a value"))),
             "--reboot" => {
                 o.reboot = true;
                 o.boot_only = true;
@@ -165,11 +189,47 @@ fn reboot(host: &str) {
     remote(host, "echo \"running: $(readlink /run/current-system)\"; systemctl is-system-running || true");
 }
 
-fn deploy(o: &Opts) {
-    say(&format!("Building {}", o.config));
-    let attr = format!("{}#nixosConfigurations.{}.config.system.build.toplevel", o.flake, o.config);
+fn parse_publish(args: &[String]) -> publish::Opts {
+    let mut o = publish::Opts {
+        flake: env::var("MORTAR_FLAKE").unwrap_or_else(|_| ".".into()),
+        config: "brick-mainline".into(),
+        path: None,
+        channel: None,
+        endpoint: None,
+        bucket: None,
+        region: None,
+        key: None,
+        creds: None,
+        publisher: env::var("MORTAR_PUBLISHER").unwrap_or_else(|_| "mortar publish".into()),
+        force: false,
+        dry_run: false,
+    };
+    let mut it = args.iter();
+    let val = |it: &mut std::slice::Iter<String>, n: &str| it.next().cloned().unwrap_or_else(|| die(&format!("{n} needs a value")));
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--config" => o.config = val(&mut it, a),
+            "--flake" => o.flake = val(&mut it, a),
+            "--path" => o.path = Some(val(&mut it, a)),
+            "--channel" => o.channel = Some(val(&mut it, a)),
+            "--endpoint" => o.endpoint = Some(val(&mut it, a)),
+            "--bucket" => o.bucket = Some(val(&mut it, a)),
+            "--region" => o.region = Some(val(&mut it, a)),
+            "--key" => o.key = Some(val(&mut it, a).into()),
+            "--credentials" => o.creds = Some(val(&mut it, a).into()),
+            "--publisher" => o.publisher = val(&mut it, a),
+            "--force" => o.force = true,
+            "--dry-run" => o.dry_run = true,
+            other => die(&format!("unknown option: {other}")),
+        }
+    }
+    o
+}
+
+/// `nix build` an installable here; the store path.
+fn build(installable: &str) -> String {
     let out = Command::new("nix")
-        .args(["build", "--no-link", "--print-out-paths", &attr])
+        .args(["build", "--no-link", "--print-out-paths", installable])
         .stderr(Stdio::inherit())
         .output()
         .unwrap_or_else(|e| die(&format!("nix: {e}")));
@@ -177,9 +237,45 @@ fn deploy(o: &Opts) {
         die("build failed");
     }
     let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if !path.starts_with("/nix/store/") {
+    if !path.starts_with("/nix/store/") || path.contains('\n') {
         die(&format!("unexpected build output: {path}"));
     }
+    path
+}
+
+/// Build the system (aarch64-linux; on a Mac through its Linux builder).
+fn build_toplevel(flake: &str, config: &str) -> String {
+    say(&format!("Building {config}"));
+    build(&format!("{flake}#nixosConfigurations.{config}.config.system.build.toplevel"))
+}
+
+const PICO8_PROFILE: &str = "/nix/var/nix/profiles/pico8";
+
+/// PICO-8 lives in its own profile on the Brick, outside the system closure
+/// (it is commercial: never built by CI or put in the update cache).
+fn pico8(o: &Opts) {
+    if o.remove {
+        say(&format!("Removing PICO-8 from {}", o.host));
+        if !remote(&o.host, &format!("rm -f {PICO8_PROFILE} {PICO8_PROFILE}-*-link && echo removed")) {
+            die("could not remove the profile");
+        }
+        return;
+    }
+    say("Building PICO-8 (needs your zip in the Nix store, see pkgs/pico8)");
+    let path = build(&format!("{}#packages.aarch64-linux.pico8", o.flake));
+    say(&format!("Copying to {}", o.host));
+    run(
+        Command::new("nix").args(["copy", "--no-check-sigs", "--to", &format!("ssh-ng://root@{}", o.host), &path]),
+        "nix copy",
+    );
+    if !remote(&o.host, &format!("nix-env -p {PICO8_PROFILE} --set {p} && ls -l {PICO8_PROFILE}/bin/pico8", p = sq(&path))) {
+        die("could not set the pico8 profile");
+    }
+    say("PICO-8 installed; it shows in the greeter and the shell's launcher");
+}
+
+fn deploy(o: &Opts) {
+    let path = build_toplevel(&o.flake, &o.config);
 
     say(&format!("Copying to {}", o.host));
     // The Brick doesn't trust this computer's signing key; the closure was
@@ -218,6 +314,10 @@ fn main() {
         pair::run(&parse_pair(rest));
         return;
     }
+    if cmd == "publish" {
+        publish::publish(&parse_publish(rest));
+        return;
+    }
     let o = parse(rest);
     match cmd {
         "deploy" => deploy(&o),
@@ -235,6 +335,9 @@ fn main() {
             remote(&o.host, &format!("nix-env -p {PROFILE} --list-generations"));
         }
         "reboot" => reboot(&o.host),
+        "pico8" => pico8(&o),
+        "update" => publish::update_now(&o.host),
+        "update-creds" => publish::update_creds(&o.host, o.key_id.clone()),
         "attention" => {
             if !remote(&o.host, "mortar-rumble 300 2") {
                 die("could not buzz the Brick");

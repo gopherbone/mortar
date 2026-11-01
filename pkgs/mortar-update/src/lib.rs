@@ -1,0 +1,23 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+//! Mortar over-the-air updates: what the publisher (`mortar publish`, CI)
+//! and the Brick (`mortar-update`) agree on.
+//!
+//! - A private S3-compatible bucket (Cloudflare R2) is a Nix binary cache:
+//!   `nix copy --to 's3://BUCKET?endpoint=…&region=auto'` puts the system
+//!   closure there, signed with the publisher's Nix key.
+//! - `channels/<channel>.json` in the same bucket names the newest system
+//!   ([`Manifest`]). It is written last, after the closure is complete.
+//! - The Brick reads the manifest, copies the closure with read-only
+//!   credentials (Nix checks the signatures against `trusted-public-keys`)
+//!   and makes it the next boot entry.
+//!
+//! Plain objects go through `curl --aws-sigv4`, so no S3 SDK is linked;
+//! credentials reach curl on stdin, never on the command line. See
+//! docs/updates.md.
+
+pub mod manifest;
+pub mod s3;
+pub mod time;
+
+pub use manifest::Manifest;
+pub use s3::{Bucket, Credentials, FetchError};

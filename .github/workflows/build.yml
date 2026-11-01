@@ -1,0 +1,156 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Build Mortar and publish it for over-the-air updates (docs/updates.md).
+#
+# On every push to `mortar`: build the system for aarch64-linux, push its
+# closure, signed, to the private R2 bucket (a Nix binary cache), then
+# point channels/mortar.json at it. Bricks pick it up from there.
+#
+# The closure holds non-redistributable files (TrimUI blobs, unfree cores),
+# so: this repository and the bucket stay private, and nothing built here
+# is uploaded as a workflow artifact. PICO-8 is never part of the system
+# (it lives in its own profile on the Brick, put there by `mortar pico8`).
+#
+# Secrets (Settings > Secrets and variables > Actions):
+#   R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY  R2 token with write access to the bucket
+#   NIX_SIGNING_KEY                         `nix key generate-secret` output
+#   PUZZLESCRIPT_DEPLOY_KEY                 read-only deploy key of gopherbone/puzzlescript_pd
+# Bucket, endpoint and public key come from mortar.update in flake.nix.
+#
+# Runners: GitHub's arm64 Linux runners (ubuntu-24.04-arm) work for private
+# repositories and bill per minute against the plan's included usage.
+# Fallbacks (Run workflow > runner): `x86-qemu` (x86 runner, aarch64
+# builds emulated: much slower) or `self-hosted` (your own runner with the
+# label `mortar`, e.g. the Mac with its linux-builder). Without CI at all:
+# `mortar publish` from the Mac.
+name: Build and publish
+
+on:
+  push:
+    branches: [mortar]
+  workflow_dispatch:
+    inputs:
+      runner:
+        description: Where to build
+        type: choice
+        options: [arm, x86-qemu, self-hosted]
+        default: arm
+      publish:
+        description: Publish to the update channel
+        type: boolean
+        default: true
+
+# A newer push supersedes a running build. Cancelling never leaves a
+# half-published channel: the manifest is written last.
+concurrency:
+  group: mortar-build
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ${{ fromJSON(inputs.runner == 'x86-qemu' && '"ubuntu-24.04"' || inputs.runner == 'self-hosted' && '["self-hosted","mortar"]' || '"ubuntu-24.04-arm"') }}
+    timeout-minutes: 360
+    env:
+      CONFIG: brick-mainline
+    steps:
+      - name: Free disk space
+        if: runner.environment == 'github-hosted'
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache \
+            /usr/local/share/boost /usr/local/.ghcup /usr/share/swift || true
+          df -h /
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the changelog is the commits since the last publish
+
+      # flake input `puzzlescript` is git+ssh://git@github.com/gopherbone/puzzlescript_pd
+      - name: SSH key for the PuzzleScript input
+        uses: webfactory/ssh-agent@v0.9.1
+        with:
+          ssh-private-key: ${{ secrets.PUZZLESCRIPT_DEPLOY_KEY }}
+
+      - name: Emulate aarch64 (x86 fallback)
+        if: inputs.runner == 'x86-qemu'
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Install Nix
+        if: runner.environment == 'github-hosted'
+        uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+            max-jobs = auto
+            cores = 0
+            fallback = true
+
+      - name: Bucket settings
+        id: bucket
+        run: |
+          nix eval --json ".#nixosConfigurations.$CONFIG.config.mortar.update" \
+            --apply 'u: { inherit (u) enable bucket endpoint region publicKey; }' > "$RUNNER_TEMP/update.json"
+          jq -r '"enable=\(.enable)",
+                 "store=s3://\(.bucket)?endpoint=\(.endpoint | sub("/+$"; ""))&region=\(.region)",
+                 "public_key=\(.publicKey)"' "$RUNNER_TEMP/update.json" >> "$GITHUB_OUTPUT"
+
+      # The bucket is also a substituter, so unchanged paths (the kernel,
+      # GPU userspace, Rust apps) are downloaded instead of rebuilt. The
+      # daemon does the substituting, so it gets the credentials.
+      - name: Configure Nix
+        if: runner.environment == 'github-hosted'
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          STORE: ${{ steps.bucket.outputs.store }}
+          PUBLIC_KEY: ${{ steps.bucket.outputs.public_key }}
+          ENABLED: ${{ steps.bucket.outputs.enable }}
+          QEMU: ${{ inputs.runner == 'x86-qemu' }}
+        run: |
+          if [ "$QEMU" = true ]; then
+            echo "extra-platforms = aarch64-linux" | sudo tee -a /etc/nix/nix.conf
+          fi
+          if [ "$ENABLED" = true ] && [ -n "$R2_ACCESS_KEY_ID" ]; then
+            printf 'AWS_ACCESS_KEY_ID=%s\nAWS_SECRET_ACCESS_KEY=%s\n' "$R2_ACCESS_KEY_ID" "$R2_SECRET_ACCESS_KEY" \
+              | sudo install -m 600 /dev/stdin /etc/nix/r2.env
+            sudo mkdir -p /etc/systemd/system/nix-daemon.service.d
+            printf '[Service]\nEnvironmentFile=/etc/nix/r2.env\n' \
+              | sudo tee /etc/systemd/system/nix-daemon.service.d/r2.conf > /dev/null
+            { echo "extra-substituters = $STORE"; echo "extra-trusted-public-keys = $PUBLIC_KEY"; } \
+              | sudo tee -a /etc/nix/nix.conf
+          fi
+          sudo systemctl daemon-reload
+          sudo systemctl restart nix-daemon
+
+      - name: Build
+        id: build
+        run: |
+          top=$(nix build --no-link --print-out-paths ".#nixosConfigurations.$CONFIG.config.system.build.toplevel")
+          echo "toplevel=$top" >> "$GITHUB_OUTPUT"
+          echo "built $top"
+          # PICO-8 must never be in the published closure
+          if nix-store --query --requisites "$top" | grep -i -- '-pico-8'; then
+            echo "::error::PICO-8 is in the system closure"; exit 1
+          fi
+          du -sh $(nix-store --query --requisites "$top") 2>/dev/null | sort -h | tail -5 || true
+
+      - name: Publish
+        if: github.event_name == 'push' || inputs.publish
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          NIX_SIGNING_KEY: ${{ secrets.NIX_SIGNING_KEY }}
+          MORTAR_PUBLISHER: github-actions
+          TOPLEVEL: ${{ steps.build.outputs.toplevel }}
+        run: |
+          if [ -z "$AWS_ACCESS_KEY_ID" ] || [ -z "$NIX_SIGNING_KEY" ]; then
+            echo "::error::R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY / NIX_SIGNING_KEY secrets are missing (docs/updates.md)"
+            exit 1
+          fi
+          key="$RUNNER_TEMP/signing-key"
+          trap 'rm -f "$key"' EXIT
+          (umask 077; printf '%s\n' "$NIX_SIGNING_KEY" > "$key")
+          nix run ".#mortar" -- publish --config "$CONFIG" --path "$TOPLEVEL" --key "$key"

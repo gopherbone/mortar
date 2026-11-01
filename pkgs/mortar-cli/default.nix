@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 # `mortar` CLI: build Mortar here and deploy it to a Brick over SSH; pair a
 # computer with a Brick (`mortar pair`, protocol in ../mortar-pair).
-{ lib, rustPlatform, makeWrapper, openssh }:
+{ lib, rustPlatform, makeWrapper, openssh, curl }:
 
 rustPlatform.buildRustPackage {
   pname = "mortar";
@@ -14,6 +14,8 @@ rustPlatform.buildRustPackage {
       ./src
       ../mortar-pair/Cargo.toml
       ../mortar-pair/src
+      ../mortar-update/Cargo.toml
+      ../mortar-update/src
     ];
   };
   sourceRoot = "source/mortar-cli";
@@ -21,9 +23,10 @@ rustPlatform.buildRustPackage {
 
   nativeBuildInputs = [ makeWrapper ];
   # `nix` is taken from the user's PATH on purpose (their own install and
-  # its builder configuration); ssh (and ssh-keygen) come with the package.
+  # its builder configuration); ssh (and ssh-keygen) and curl (`mortar
+  # publish`: the manifest, signed with --aws-sigv4) come with the package.
   postInstall = ''
-    wrapProgram $out/bin/mortar --suffix PATH : ${lib.makeBinPath [ openssh ]}
+    wrapProgram $out/bin/mortar --suffix PATH : ${lib.makeBinPath [ openssh curl ]}
   '';
 
   meta = {

@@ -64,6 +64,12 @@ let
           default = false;
           description = "Mark the session as needing Wi-Fi; starting it offline asks for a second press.";
         };
+        requires = mkOption {
+          type = types.nullOr types.str;
+          default = null;
+          example = "/nix/var/nix/profiles/pico8/bin/pico8";
+          description = "Only offer it while this path exists (an app installed outside the system, e.g. PICO-8).";
+        };
         order = mkOption {
           type = types.int;
           default = 100;
@@ -129,7 +135,7 @@ let
         auth = if p.pin then "pin" else "none";
       }) profiles;
       sessions = map (s: {
-        inherit (s) id name description icon env needsWifi;
+        inherit (s) id name description icon env needsWifi requires;
         # greetd joins cmd with spaces and runs it with `sh -c "exec <cmd>"`,
         # so every word must already be shell-quoted. (Unquoted, a string
         # command "exec foo" became `bash -c exec foo`: a no-op session.)

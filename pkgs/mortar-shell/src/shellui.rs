@@ -118,6 +118,20 @@ pub struct View<'a> {
     /// The current time zone ("Europe/Lisbon", "UTC").
     pub timezone: &'a str,
     pub radios: Radios,
+    /// Over-the-air updates (None: mortar.update is off).
+    pub update: Option<&'a UpdateView>,
+}
+
+/// Settings > Updates, from mortar-update's status file.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct UpdateView {
+    /// Short status for the row ("Up to date", "Restart to update").
+    pub message: String,
+    /// Staged: restarting applies it.
+    pub ready: bool,
+    /// A check or download is running.
+    pub busy: bool,
+    pub auto_check: bool,
 }
 
 impl View<'_> {
@@ -155,6 +169,10 @@ pub enum Out {
     Haptic(Haptic),
     /// Settings changed (save and apply).
     Prefs,
+    /// Settings > Updates: check now.
+    UpdateCheck,
+    /// Settings > Auto-check daily.
+    UpdateAuto(bool),
 }
 
 /// Rows of the settings screen (MENU > Quick > Settings…). Volume,
@@ -169,15 +187,23 @@ enum Setting {
     TimeZone,
     Wifi,
     Remote,
+    Updates,
+    AutoUpdate,
     SleepMode,
     IdleSleep,
     Logout,
 }
 
-const SETTINGS: [Setting; 11] = {
+/// The rows; Updates and Auto-check daily only with mortar.update.
+fn settings(v: &View) -> Vec<Setting> {
     use Setting::*;
-    [Sounds, Haptics, Motion, ReduceMotion, Palette, TimeZone, Wifi, Remote, SleepMode, IdleSleep, Logout]
-};
+    let mut s = vec![Sounds, Haptics, Motion, ReduceMotion, Palette, TimeZone, Wifi, Remote];
+    if v.update.is_some() {
+        s.extend([Updates, AutoUpdate]);
+    }
+    s.extend([SleepMode, IdleSleep, Logout]);
+    s
+}
 
 /// The settings screen: a list that slides in from the right.
 struct SettingsPanel {
@@ -1250,12 +1276,14 @@ impl ShellUi {
         self.fx(Sfx::DrawerUp, Some(Haptic::Tick));
     }
 
-    fn settings_button(&mut self, b: Button, repeat: bool, _v: &View) {
+    fn settings_button(&mut self, b: Button, repeat: bool, v: &View) {
+        let items = settings(v);
         let Some(p) = &mut self.settings else { return };
         if p.closing {
             return;
         }
-        let n = SETTINGS.len();
+        let n = items.len();
+        p.sel = p.sel.min(n - 1);
         match b {
             Button::Up | Button::Down => {
                 let old = p.sel;
@@ -1275,7 +1303,7 @@ impl ShellUi {
             }
             _ => {}
         }
-        let it = SETTINGS[p.sel];
+        let it = items[p.sel];
         let horiz = matches!(b, Button::Left | Button::Right);
         let mut changed = true;
         match (it, b) {
@@ -1302,6 +1330,29 @@ impl ShellUi {
             (Setting::Wifi | Setting::Remote, Button::A | Button::Right) if !repeat => {
                 changed = false;
                 self.out.push(Out::OpenSetup { wifi: it == Setting::Wifi });
+            }
+            (Setting::AutoUpdate, _) if (horiz || b == Button::A) && !repeat => {
+                changed = false;
+                if let Some(u) = v.update {
+                    self.out.push(Out::UpdateAuto(!u.auto_check));
+                    self.fx(Sfx::Tab, Some(Haptic::Tick));
+                }
+            }
+            (Setting::Updates, Button::A) if !repeat => {
+                changed = false;
+                match v.update {
+                    Some(u) if u.ready => {
+                        if self.confirmed(it, "restart and update") {
+                            self.out.push(Out::Reboot);
+                        }
+                    }
+                    Some(u) if u.busy => self.show_toast(Toast::info(u.message.clone())),
+                    Some(_) => {
+                        self.out.push(Out::UpdateCheck);
+                        self.show_toast(Toast::info("Checking for updates…"));
+                    }
+                    None => {}
+                }
             }
             (Setting::Logout, Button::A) if !repeat => {
                 changed = false;
@@ -1737,11 +1788,12 @@ impl ShellUi {
     fn draw_settings(&self, b: &mut B, pal: &Pal, v: &View, p: &SettingsPanel) {
         b.push(Xf::translate(p.x.x, 0.0));
         b.block(0.0, 0.0, W + 2.0, H, pal.ground, pal.ink);
-        let n = SETTINGS.len();
+        let items = settings(v);
+        let n = items.len();
         let sel = p.sel.min(n - 1);
         let onoff = |on: bool| (vec!["On", "Off"], if on { 0 } else { 1 });
         b.clip(Some([0.0, 119.0, W, H - 64.0 - 119.0]));
-        for (i, it) in SETTINGS.iter().enumerate() {
+        for (i, it) in items.iter().enumerate() {
             let y = 136.0 + i as f32 * 76.0 - p.scroll.x;
             if y > H || y + 76.0 < 100.0 {
                 continue;
@@ -1778,6 +1830,16 @@ impl ShellUi {
                         "Off ›".into()
                     }),
                 ),
+                Setting::Updates => (
+                    "Updates",
+                    Err(match v.update {
+                        Some(u) if u.ready => format!("{} ›", u.message),
+                        Some(u) if u.busy => u.message.clone(),
+                        Some(u) => format!("{} · Check now ›", u.message),
+                        None => String::new(),
+                    }),
+                ),
+                Setting::AutoUpdate => ("Auto-check daily", Ok(onoff(v.update.is_some_and(|u| u.auto_check)))),
                 Setting::Logout => ("Log out", Err("Closes all apps".into())),
             };
             let lab = ts(Face::Body400, 24.0, fg);
@@ -1821,11 +1883,13 @@ impl ShellUi {
         b.text_right(W - 40.0, 26.0, &format!("{} / {}", sel + 1, n), &sub);
         let title = ts(Face::SerifItalic, 54.0, pal.ink).line_height(1.0);
         b.text(40.0, 50.0, "Settings", &title);
-        let last = match SETTINGS[sel] {
-            Setting::TimeZone | Setting::Wifi | Setting::Remote | Setting::Logout => ("A", "Open"),
+        let last = match items[sel] {
+            Setting::TimeZone | Setting::Wifi | Setting::Remote => ("A", "Open"),
+            Setting::Updates if v.update.is_some_and(|u| u.ready) => ("A", "Restart"),
+            Setting::Updates => ("A", "Check now"),
+            Setting::Logout => ("A", "Log out"),
             _ => ("◀▶", "Change"),
         };
-        let last = if SETTINGS[sel] == Setting::Logout { ("A", "Log out") } else { last };
         hints(b, pal, H - 64.0, &[("▲▼", "Choose"), last, ("B", "Back"), ("MENU", "Close")]);
         b.pop();
     }
@@ -2072,6 +2136,7 @@ mod tests {
             host: "brick",
             timezone: "Europe/Lisbon",
             radios: Radios { wifi: Some(true), bluetooth: None },
+            update: None,
         }
     }
     fn settle(ui: &mut ShellUi, v: &View) -> Vec<Out> {
@@ -2359,6 +2424,34 @@ mod tests {
     }
 
     #[test]
+    fn settings_updates() {
+        let sys = Sys::demo(None);
+        let l = launcher();
+        let mut u = UpdateView { message: "Up to date".into(), ready: false, busy: false, auto_check: true };
+        let mut ui = ShellUi::new(Prefs::default(), false);
+        {
+            let v = View { update: Some(&u), ..view(&[], &l, &sys, None) };
+            to_settings(&mut ui, &v);
+            let rows = settings(&v);
+            let row = rows.iter().position(|s| *s == Setting::Updates).unwrap();
+            assert_eq!(rows[row + 1], Setting::AutoUpdate);
+            press(&mut ui, &v, &vec![Button::Down; row]);
+            assert_eq!(press(&mut ui, &v, &[Button::A]), vec![Out::UpdateCheck]);
+            assert_eq!(press(&mut ui, &v, &[Button::Down, Button::Right]), vec![Out::UpdateAuto(false)]);
+            press(&mut ui, &v, &[Button::Up]);
+        }
+        // staged: A twice restarts
+        u.ready = true;
+        u.message = "Restart to update".into();
+        let v = View { update: Some(&u), ..view(&[], &l, &sys, None) };
+        assert!(press(&mut ui, &v, &[Button::A]).is_empty());
+        assert_eq!(press(&mut ui, &v, &[Button::A]), vec![Out::Reboot]);
+        // no update module: no rows
+        let v0 = view(&[], &l, &sys, None);
+        assert!(!settings(&v0).contains(&Setting::Updates));
+    }
+
+    #[test]
     fn menu_at_rest_is_not_full_pace() {
         let sys = Sys::demo(None);
         let l = launcher();
@@ -2381,7 +2474,7 @@ mod tests {
         let v = view(&[], &l, &sys, None);
         let mut ui = ShellUi::new(Prefs::default(), false);
         to_settings(&mut ui, &v);
-        let tz_row = SETTINGS.iter().position(|s| *s == Setting::TimeZone).unwrap();
+        let tz_row = settings(&v).iter().position(|s| *s == Setting::TimeZone).unwrap();
         for _ in 0..tz_row {
             ui.button(Button::Down, false, &v);
         }

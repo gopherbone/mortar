@@ -48,6 +48,16 @@ pub struct AppEntry {
     /// from the illustration and name).
     #[serde(default)]
     pub category: Option<Category>,
+    /// Only offered while this path exists (e.g. PICO-8 in its own Nix
+    /// profile, installed by `mortar pico8`).
+    #[serde(default)]
+    pub requires: Option<std::path::PathBuf>,
+}
+
+impl AppEntry {
+    pub fn available(&self) -> bool {
+        self.requires.as_ref().is_none_or(|p| p.exists())
+    }
 }
 
 /// A launcher entry's place in the MENU: every entry is under Apps; games
@@ -167,6 +177,58 @@ pub struct Config {
     /// The shell's own screens: renderer, motion, sounds, haptics.
     #[serde(default)]
     pub ui: UiConfig,
+    /// Over-the-air updates (modules/mortar-update.nix): Settings > Updates.
+    #[serde(default)]
+    pub update: Option<UpdateConfig>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UpdateConfig {
+    /// mortar-update's status file (JSON).
+    pub status: std::path::PathBuf,
+    /// Start a check (it runs in the background).
+    pub check: Vec<String>,
+    /// Auto-check daily; "{on}" is replaced by "on" or "off".
+    pub auto: Vec<String>,
+}
+
+/// The parts of mortar-update's status file the shell uses.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct UpdateStatus {
+    pub state: String,
+    pub message: String,
+    pub detail: String,
+    pub auto_check: bool,
+    pub available: Option<UpdateAvailable>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct UpdateAvailable {
+    pub toplevel: String,
+    pub changelog: Vec<String>,
+}
+
+impl UpdateStatus {
+    pub fn parse(s: &str) -> Option<UpdateStatus> {
+        serde_json::from_str(s).ok()
+    }
+    pub fn ready(&self) -> bool {
+        self.state == "ready"
+    }
+    pub fn busy(&self) -> bool {
+        matches!(self.state.as_str(), "checking" | "downloading" | "installing")
+    }
+    pub fn view(&self) -> crate::shellui::UpdateView {
+        crate::shellui::UpdateView {
+            message: if self.message.is_empty() { "Check now".into() } else { self.message.clone() },
+            ready: self.ready(),
+            busy: self.busy(),
+            auto_check: self.auto_check,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
@@ -414,6 +476,27 @@ mod tests {
         assert_eq!(Category::guess(Art::Generic, "choochoo", "ChooChoo"), Category::Music);
         assert_eq!(Category::guess(Art::Puzzle, "games", "PuzzleScript"), Category::Games);
         assert_eq!(Category::guess(Art::Term, "terminal", "Terminal"), Category::Apps);
+    }
+
+    #[test]
+    fn update_section() {
+        let c: Config = serde_json::from_str(
+            r#"{"update":{"status":"/run/mortar-update/status.json","check":["systemctl","start","mortar-update.service"],"auto":["x","{on}"]},
+                "apps":[{"id":"pico8","name":"PICO-8","command":["pico8"],"requires":"/nonexistent/pico8"},{"id":"t","name":"T","command":["t"]}]}"#,
+        )
+        .unwrap();
+        assert_eq!(c.update.unwrap().auto[1], "{on}");
+        assert!(!c.apps[0].available());
+        assert!(c.apps[1].available());
+        let st = UpdateStatus::parse(
+            r#"{"state":"ready","message":"Restart to update","detail":"USB MIDI","autoCheck":true,"checkedAt":5,
+                "available":{"toplevel":"/nix/store/x","changelog":["USB MIDI"],"schema":1},"running":"/nix/store/y"}"#,
+        )
+        .unwrap();
+        let v = st.view();
+        assert!(v.ready && !v.busy && v.auto_check);
+        assert_eq!(st.available.unwrap().toplevel, "/nix/store/x");
+        assert!(UpdateStatus::parse(r#"{"state":"downloading"}"#).unwrap().busy());
     }
 
     #[test]
