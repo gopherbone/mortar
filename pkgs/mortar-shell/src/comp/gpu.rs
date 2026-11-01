@@ -83,10 +83,13 @@ pub struct GpuUi {
     /// frames (it needs a glFinish of its own).
     pub lava_ms: f32,
     lava_frames: u64,
+    lava_at: Option<Instant>,
 }
 
 /// Every this many lava frames, the field pass is timed.
 const LAVA_SAMPLE: u64 = 30;
+/// The lava field is computed at most this often (~30 Hz).
+const LAVA_EVERY: std::time::Duration = std::time::Duration::from_millis(32);
 
 impl GpuUi {
     pub fn new(drm: &DrmDeviceFd, size: (i32, i32), dir: &Path, msaa: u32) -> Result<GpuUi, String> {
@@ -110,6 +113,7 @@ impl GpuUi {
             lava: None,
             lava_ms: 0.0,
             lava_frames: 0,
+            lava_at: None,
         };
         for _ in 0..2 {
             match me.alloc(size) {
@@ -387,7 +391,8 @@ impl GpuUi {
         }
     }
 
-    /// The lava lamp's field for this frame (one pass into a 160x192 FBO);
+    /// The lava lamp's field (one pass into a 54x128 FBO), redone at most
+    /// every LAVA_EVERY (the wax is slow; frames in between reuse it);
     /// freed when the lamp is not shown, so a closed MENU costs nothing.
     fn prepare_lava(&mut self, scene: &Scene) {
         let prims = match scene.lava() {
@@ -396,6 +401,7 @@ impl GpuUi {
                 if let Some(f) = self.lava.take() {
                     self.gl.drop_fbo(f);
                 }
+                self.lava_at = None;
                 return;
             }
         };
@@ -408,6 +414,10 @@ impl GpuUi {
                 }
             }
         }
+        if self.lava_at.is_some_and(|t| t.elapsed() < LAVA_EVERY) {
+            return;
+        }
+        self.lava_at = Some(Instant::now());
         let Some(f) = self.lava.take() else { return };
         self.lava_frames += 1;
         let timed = self.lava_frames % LAVA_SAMPLE == 1;

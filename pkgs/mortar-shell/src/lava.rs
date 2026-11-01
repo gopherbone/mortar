@@ -12,25 +12,37 @@
 //! drag and buoyancy.
 //!
 //! Drawing: the pieces are not polygons but a signed distance field
-//! (`Prims::dist`, the smooth union of every piece, pool and column), which
-//! a renderer evaluates at quarter resolution over the lamp's region and
-//! thresholds at full resolution: the fill, a 3 px ink edge and a 12 px
-//! hard ink shadow. The GL renderer runs the same maths in a shader
-//! (comp/gl.rs `FS_LAVA_FIELD`); raster.rs calls `dist` on the CPU.
+//! (`Prims::dist`, a metaball-style union of every piece, pool and
+//! column), which a renderer evaluates at 1/6 resolution over the lamp's
+//! narrow region at the right edge and thresholds at full resolution: the
+//! fill and a 2 px ink edge. The GL renderer runs the same maths in a
+//! shader (comp/gl.rs `FS_LAVA_FIELD`); raster.rs calls `dist` on the CPU.
+//!
+//! The physics runs in the mockup's coordinates (a 340 px column centred
+//! at x 800); `prims` maps it into the lamp: SCALE across, centred on CX,
+//! so the lamp stays a quiet strip by the right edge, clear of the rows'
+//! text.
 
 /// The region the field covers, in lamp space (the cross page's own
 /// coordinates): x from LX0, LW wide, the full screen height.
-pub const LX0: f32 = 440.0;
-pub const LW: f32 = 640.0;
+pub const LX0: f32 = 722.0;
+pub const LW: f32 = 324.0;
 pub const LH: f32 = 768.0;
-/// The field's resolution: a quarter of the screen's.
-pub const FW: usize = (LW / 4.0) as usize;
-pub const FH: usize = (LH / 4.0) as usize;
-/// Ink edge and shadow offset, px.
-pub const EDGE: f32 = 3.0;
-pub const SHADOW: f32 = 12.0;
-/// Smooth-union radius: how far apart two pieces start to merge.
-pub const MERGE: f32 = 32.0;
+/// Field texel size, px: a sixth of the screen's resolution.
+pub const CELL: f32 = 6.0;
+pub const FW: usize = (LW / CELL) as usize;
+pub const FH: usize = (LH / CELL) as usize;
+/// Ink edge, px.
+pub const EDGE: f32 = 2.0;
+/// Metaball union softness (px): gaps narrower than ~1.4x this close up.
+pub const MERGE: f32 = 12.0;
+/// Each primitive's distance is clamped to +-CLAMP before the union.
+const CLAMP: f32 = 60.0;
+/// The mockup's lamp mapped into ours: x' = CX + (x - 800) * SCALE.
+pub const CX: f32 = 884.0;
+pub const SCALE: f32 = 0.62;
+/// Pool heights relative to the mockup's.
+const POOL_H: f32 = 0.8;
 
 /// Wax pieces: (x offset as a fraction of 260 px, phase, radius).
 const BLOBS: [(f32, f32, f32); 5] = [(0.0, 0.0, 50.0), (0.32, 1.7, 38.0), (-0.3, 3.1, 44.0), (0.12, 4.4, 30.0), (-0.12, 5.6, 34.0)];
@@ -186,6 +198,8 @@ impl Lamp {
         let cx = self.cx.x + self.sx.x;
         let t = self.t;
         let mut p = Prims::default();
+        // the mockup's lamp, narrowed into ours by the right edge
+        let m = |x: f32| CX + (x - 800.0) * SCALE;
         for (i, o) in self.blobs.iter().enumerate() {
             let vs = (o.vy.abs() / 90.0).min(0.5);
             let lean = (o.vx / 200.0).clamp(-0.35, 0.35);
@@ -201,9 +215,9 @@ impl Lamp {
             };
             let ph = [o.ph + t * 0.3, -o.ph * 1.7 + t * 0.2, t * 0.45 + i as f32];
             p.blobs[i] = BlobPrim {
-                x: o.x,
+                x: m(o.x),
                 y: o.y,
-                r: o.r,
+                r: o.r * SCALE,
                 lean,
                 upper: half(false),
                 lower: half(true),
@@ -213,16 +227,16 @@ impl Lamp {
         // the pools: a heavy mound along the bottom, a layer hanging from
         // the top; each swells under a piece that is near it
         let pool = |y_base: f32, w: f32, hgt: f32, up: f32| PoolPrim {
-            x0: cx - w / 2.0,
-            w,
-            hgt,
+            x0: m(cx - w / 2.0),
+            w: w * SCALE,
+            hgt: hgt * POOL_H,
             y_base,
             up,
             phase: t * 0.35 + y_base,
             bumps: std::array::from_fn(|i| {
                 let o = &self.blobs[i];
                 let near = (1.0 - (o.y - y_base).abs() / 260.0).max(0.0);
-                (o.x, 1.0 / (o.r * 1.4), near * o.r * 0.9)
+                (m(o.x), 1.0 / (o.r * SCALE * 1.4), near * o.r * SCALE * 0.9)
             }),
         };
         p.pools = [pool(790.0, 360.0, 130.0, 1.0), pool(-24.0, 320.0, 118.0, -1.0)];
@@ -238,7 +252,7 @@ impl Lamp {
             p.necks[i] = if wn < 2.0 {
                 NeckPrim::default()
             } else {
-                NeckPrim { bx: o.x, by: o.y, ax: o.x + (cx - o.x) * 0.25, ay: anchor, w0: wn, waist: wn * (0.35 + 0.65 * mid) }
+                NeckPrim { bx: m(o.x), by: o.y, ax: m(o.x + (cx - o.x) * 0.25), ay: anchor, w0: wn * SCALE, waist: wn * SCALE * (0.35 + 0.65 * mid) }
             };
         }
         p
@@ -290,11 +304,6 @@ pub struct Prims {
     pub necks: [NeckPrim; 5],
 }
 
-/// Polynomial smooth minimum (iq): a union with rounded joins of radius k.
-pub fn smin(a: f32, b: f32, k: f32) -> f32 {
-    let h = (0.5 + 0.5 * (b - a) / k).clamp(0.0, 1.0);
-    b + (a - b) * h - k * h * (1.0 - h)
-}
 
 impl BlobPrim {
     /// Signed distance (approximate, exact enough near the edge).
@@ -353,35 +362,42 @@ impl NeckPrim {
         let r = base + (self.waist - base) * 4.0 * t * (1.0 - t);
         // the threshold eats thin columns: they pinch off before they
         // vanish (the mockup's blur does the same)
-        let r = r - 3.0;
+        let r = r - 2.0;
         ((px - cx).powi(2) + (py - cy).powi(2)).sqrt() - r
     }
 }
 
 impl Prims {
     /// Signed distance to the wax (negative inside), px.
+    ///
+    /// The union is exponential (metaball-like, -k ln sum e^(-d/k)): every
+    /// piece pulls on every other at once, so small gaps enclosed between
+    /// three shapes fill in instead of leaving pinholes, which a pairwise
+    /// smooth minimum did.
     pub fn dist(&self, px: f32, py: f32) -> f32 {
-        let mut d = self.pools[0].dist(px, py);
-        d = smin(d, self.pools[1].dist(px, py), MERGE);
+        let mut s = 0.0;
+        let mut add = |d: f32| s += (-d.clamp(-CLAMP, CLAMP) / MERGE).exp();
+        add(self.pools[0].dist(px, py));
+        add(self.pools[1].dist(px, py));
         for b in &self.blobs {
-            d = smin(d, b.dist(px, py), MERGE);
+            add(b.dist(px, py));
         }
         for n in &self.necks {
             if n.w0 > 0.0 {
-                d = smin(d, n.dist(px, py), MERGE * 0.6);
+                add(n.dist(px, py));
             }
         }
-        d
+        -MERGE * s.ln()
     }
 
-    /// The field over the lamp region at quarter resolution, row by row
+    /// The field over the lamp region at CELL px per texel, row by row
     /// (texel centres), for the CPU renderer.
     pub fn field(&self) -> Vec<f32> {
         let mut v = Vec::with_capacity(FW * FH);
         for j in 0..FH {
-            let y = (j as f32 + 0.5) * 4.0;
+            let y = (j as f32 + 0.5) * CELL;
             for i in 0..FW {
-                v.push(self.dist(LX0 + (i as f32 + 0.5) * 4.0, y));
+                v.push(self.dist(LX0 + (i as f32 + 0.5) * CELL, y));
             }
         }
         v
@@ -429,11 +445,13 @@ mod tests {
     fn field_has_inside_and_outside() {
         let l = Lamp::new(APPS);
         let p = l.prims();
-        let b = &l.blobs[0];
-        assert!(p.dist(b.x, b.y) < -20.0, "inside a piece");
-        assert!(p.dist(b.x, 766.0) < 0.0, "the bottom pool");
-        assert!(p.dist(800.0, 2.0) < 0.0, "the top layer");
-        assert!(p.dist(LX0 + 4.0, 384.0) > 20.0, "outside the lamp");
+        let b = &p.blobs[0];
+        assert!(p.dist(b.x, b.y) < -12.0, "inside a piece");
+        assert!(p.dist(CX, 766.0) < 0.0, "the bottom pool");
+        assert!(p.dist(CX, 2.0) < 0.0, "the top layer");
+        assert!(p.dist(LX0 + 4.0, 384.0) > 10.0, "outside the lamp");
+        // the lamp keeps to the right edge, clear of the rows' text
+        assert!((0..=128).all(|j| p.dist(700.0, j as f32 * 6.0) > EDGE), "nothing left of x 700");
         // the edge of a lone piece is about where its radius says
         let o = BlobPrim { x: 0.0, y: 0.0, r: 40.0, lean: 0.0, upper: [1.0, 1.0, 0.0], lower: [1.0, 1.0, 0.0], harm: [(1.0, 0.0); 3] };
         assert!(o.dist(50.0, 0.0) > 5.0 && o.dist(50.0, 0.0) < 15.0);

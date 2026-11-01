@@ -236,13 +236,15 @@ void main() { vec4 c = texture2D(u_tex, v_uv) * 0.2042;
   c += (texture2D(u_tex, v_uv + u_step * 3.2940) + texture2D(u_tex, v_uv - u_step * 3.2940)) * 0.0939;
   gl_FragColor = c; }";
 
-/// The lava lamp (lava.rs), pass 1: its signed distance field at quarter
+/// The lava lamp (lava.rs), pass 1: its signed distance field at 1/6
 /// resolution over the lamp region (`u_org` + uv x `u_reg`), the same maths
 /// as `lava::Prims::dist`: two pools with swells under nearby pieces, five
-/// wobbling, stretched, leaning pieces, five tapered columns, smooth union.
-/// highp: positions are hundreds of px and get squared. Stored as two
-/// bytes (r: high, g: low) of d/128 + 0.5, so bilinear filtering still
-/// interpolates the distance exactly (it is linear in both bytes).
+/// wobbling, stretched, leaning pieces, five tapered columns, joined by an
+/// exponential (metaball) union, -k ln sum e^(-d/k), each distance clamped
+/// to +-60 first. highp: positions are hundreds of px and get squared.
+/// Stored as two bytes (r: high, g: low) of d/128 + 0.5, so bilinear
+/// filtering still interpolates the distance exactly (it is linear in both
+/// bytes).
 const FS_LAVA_FIELD: &str = "#ifdef GL_FRAGMENT_PRECISION_HIGH
 precision highp float;
 #else
@@ -251,10 +253,10 @@ precision mediump float;
 uniform vec4 u_b[20]; uniform vec4 u_p[4]; uniform vec4 u_bump[5]; uniform vec4 u_n[10];
 uniform vec2 u_org; uniform vec2 u_reg; uniform float u_merge;
 varying vec2 v_uv;
-float smin(float a, float b, float k) { float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0); return b + (a - b) * h - k * h * (1.0 - h); }
+float ex(float d) { return exp(-clamp(d, -60.0, 60.0) / u_merge); }
 void main() {
   vec2 p = u_org + v_uv * u_reg;
-  float d = 1e4;
+  float s = 0.0;
   for (int k = 0; k < 2; k++) {
     vec4 a = u_p[k * 2]; vec4 b = u_p[k * 2 + 1];
     float u = clamp((p.x - a.x) * a.y, 0.0, 1.0);
@@ -262,8 +264,7 @@ void main() {
     float bump = 0.0;
     for (int i = 0; i < 5; i++) { vec4 q = u_bump[i]; float t = (q.x - p.x) * q.y; bump += exp(-t * t) * (k == 0 ? q.z : q.w); }
     float hh = a.z * env * (1.0 + 0.12 * sin(u * 7.0 + b.y)) + bump * env;
-    float dd = (a.w - b.x * hh - p.y) * b.x;
-    d = (k == 0) ? dd : smin(d, dd, u_merge);
+    s += ex((a.w - b.x * hh - p.y) * b.x);
   }
   for (int i = 0; i < 5; i++) {
     vec4 c = u_b[i * 4]; vec4 up = u_b[i * 4 + 1]; vec4 lo = u_b[i * 4 + 2]; vec4 hm = u_b[i * 4 + 3];
@@ -282,7 +283,7 @@ void main() {
     float wob = 0.1 * (s3 * hm.x + c3 * hm.y) + 0.07 * (s2 * hm.z + c2 * hm.w) + 0.03 * (s5 * up.w + c5 * lo.w);
     float f = l - c.z * (1.0 + wob);
     vec2 g = vec2(co / (sc.x * tf), si / sc.y);
-    d = smin(d, f / max(length(g), 0.001), u_merge);
+    s += ex(f / max(length(g), 0.001));
   }
   for (int i = 0; i < 5; i++) {
     vec4 n = u_n[i * 2]; vec4 w = u_n[i * 2 + 1];
@@ -290,25 +291,26 @@ void main() {
       vec2 ba = n.zw - n.xy;
       float t = clamp(dot(p - n.xy, ba) / max(dot(ba, ba), 0.001), 0.0, 1.0);
       float base = w.x + 0.6 * w.x * t;
-      float r = base + (w.y - base) * 4.0 * t * (1.0 - t) - 3.0;
-      d = smin(d, length(p - n.xy - ba * t) - r, u_merge * 0.6);
+      float r = base + (w.y - base) * 4.0 * t * (1.0 - t) - 2.0;
+      s += ex(length(p - n.xy - ba * t) - r);
     }
   }
+  float d = -u_merge * log(s);
   float v = clamp(d / 128.0 + 0.5, 0.0, 1.0) * 255.0;
   float hi = floor(v);
   gl_FragColor = vec4(hi / 255.0, v - hi, 0.0, 1.0);
 }";
 
 /// The lava lamp, pass 2: the field (bilinear) thresholded at full
-/// resolution: the fill inside, an ink edge 3 px out, the ink shadow
-/// offset 12 px (`u_step`, in uv). `u_soft`: half-width of the edge blend.
-const FS_LAVA: &str = "precision mediump float; uniform sampler2D u_tex; uniform vec2 u_step;
+/// resolution: the fill inside, a 2 px ink edge outside it, no shadow.
+/// `u_soft`: half-width of the edge blend.
+const FS_LAVA: &str = "precision mediump float; uniform sampler2D u_tex;
 uniform vec4 u_fill; uniform vec4 u_ink; uniform float u_soft; varying vec2 v_uv; varying vec4 v_col;
-float dec(vec2 uv) { vec4 t = texture2D(u_tex, uv); return ((t.r * 255.0 + t.g) / 255.0 - 0.5) * 128.0; }
 void main() {
-  float d = dec(v_uv); float ds = dec(v_uv - u_step);
+  vec4 t = texture2D(u_tex, v_uv);
+  float d = ((t.r * 255.0 + t.g) / 255.0 - 0.5) * 128.0;
   float f = 1.0 - smoothstep(-u_soft, u_soft, d);
-  float e = max(1.0 - smoothstep(3.0 - u_soft, 3.0 + u_soft, d), 1.0 - smoothstep(3.0 - u_soft, 3.0 + u_soft, ds));
+  float e = 1.0 - smoothstep(2.0 - u_soft, 2.0 + u_soft, d);
   gl_FragColor = (u_fill * f + u_ink * e * (1.0 - f)) * v_col.a;
 }";
 
@@ -326,7 +328,6 @@ struct LavaProgs {
     f_size: GLint,
     d_size: GLint,
     d_tex: GLint,
-    d_step: GLint,
     d_fill: GLint,
     d_ink: GLint,
     d_soft: GLint,
@@ -631,7 +632,6 @@ impl Gl {
             f_size: f.size,
             d_size: d.size,
             d_tex: d.tex,
-            d_step: d.step,
             d_fill: u(d.id, c"u_fill"),
             d_ink: u(d.id, c"u_ink"),
             d_soft: u(d.id, c"u_soft"),
@@ -723,10 +723,10 @@ impl Gl {
 
     /// Composite the lava from its field texture (inside `render`).
     fn lava_draw(&mut self, l: &crate::scene::LavaDraw, field: GLuint, tw: f32, th: f32) {
-        use crate::lava::{LH, LW, LX0, SHADOW};
+        use crate::lava::{LH, LW, LX0};
         self.flush();
         let Some(lp) = &self.lava else { return };
-        let (prog, size, tex, step, fill, ink, soft) = (lp.draw, lp.d_size, lp.d_tex, lp.d_step, lp.d_fill, lp.d_ink, lp.d_soft);
+        let (prog, size, tex, fill, ink, soft) = (lp.draw, lp.d_size, lp.d_tex, lp.d_fill, lp.d_ink, lp.d_soft);
         self.quad(LX0 + l.dx, 0.0, LX0 + l.dx + LW, LH, l.alpha);
         let (f, k) = (pm(l.fill), pm(l.ink));
         let g = &self.gl;
@@ -737,7 +737,6 @@ impl Gl {
             (g.glActiveTexture)(GL_TEXTURE0);
             (g.glBindTexture)(GL_TEXTURE_2D, field);
             (g.glUniform1i)(tex, 0);
-            (g.glUniform2f)(step, SHADOW / LW, SHADOW / LH);
             (g.glUniform4f)(fill, f[0], f[1], f[2], f[3]);
             (g.glUniform4f)(ink, k[0], k[1], k[2], k[3]);
             (g.glUniform1f)(soft, l.soft.max(0.5));

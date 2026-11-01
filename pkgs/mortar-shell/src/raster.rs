@@ -199,11 +199,10 @@ pub fn draw_image(pm: &mut Pixmap, img: &Pixmap, quad: &[(f32, f32); 4], uv: &[f
     }
 }
 
-/// The lava lamp from its quarter-resolution field (as comp/gl.rs
-/// FS_LAVA): bilinear distance, fill inside, an ink edge EDGE px out, the
-/// ink shadow SHADOW px down and right.
+/// The lava lamp from its 1/6-resolution field (as comp/gl.rs
+/// FS_LAVA): bilinear distance, fill inside, an ink edge EDGE px out.
 fn draw_lava(pm: &mut Pixmap, field: &[f32], l: &crate::scene::LavaDraw, clip: Option<[f32; 4]>) {
-    use crate::lava::{EDGE, FH, FW, LH, LW, LX0, SHADOW};
+    use crate::lava::{CELL, EDGE, FH, FW, LH, LW, LX0};
     let (pw, ph) = (pm.width() as i32, pm.height() as i32);
     let x0 = LX0 + l.dx;
     let (mut cx0, mut cy0, mut cx1, mut cy1) = (x0.floor() as i32, 0, (x0 + LW).ceil() as i32, LH as i32);
@@ -215,8 +214,8 @@ fn draw_lava(pm: &mut Pixmap, field: &[f32], l: &crate::scene::LavaDraw, clip: O
     }
     let (cx0, cy0, cx1, cy1) = (cx0.max(0), cy0.max(0), cx1.min(pw), cy1.min(ph));
     let sample = |x: f32, y: f32| -> f32 {
-        let fx = (x / 4.0 - 0.5).clamp(0.0, FW as f32 - 1.0);
-        let fy = (y / 4.0 - 0.5).clamp(0.0, FH as f32 - 1.0);
+        let fx = (x / CELL - 0.5).clamp(0.0, FW as f32 - 1.0);
+        let fy = (y / CELL - 0.5).clamp(0.0, FH as f32 - 1.0);
         let (i, j) = (fx.floor() as usize, fy.floor() as usize);
         let (i1, j1) = ((i + 1).min(FW - 1), (j + 1).min(FH - 1));
         let (tx, ty) = (fx - i as f32, fy - j as f32);
@@ -234,17 +233,15 @@ fn draw_lava(pm: &mut Pixmap, field: &[f32], l: &crate::scene::LavaDraw, clip: O
     let data = pm.data_mut();
     for y in cy0..cy1 {
         for x in cx0..cx1 {
-            let (lx, ly) = (x as f32 + 0.5 - x0, y as f32 + 0.5);
-            let d = sample(lx, ly);
-            let ds = sample(lx - SHADOW, ly - SHADOW);
-            if d > EDGE + aa && ds > EDGE + aa {
+            let d = sample(x as f32 + 0.5 - x0, y as f32 + 0.5);
+            if d > EDGE + aa {
                 continue;
             }
             let f = 1.0 - ss(-aa, aa, d);
-            let ia = (1.0 - ss(EDGE - aa, EDGE + aa, d)).max(1.0 - ss(EDGE - aa, EDGE + aa, ds));
+            let e = 1.0 - ss(EDGE - aa, EDGE + aa, d);
             let mut c = [0f32; 4];
             for k in 0..4 {
-                c[k] = (fill[k] * f + ink[k] * ia * (1.0 - f)) * l.alpha;
+                c[k] = (fill[k] * f + ink[k] * e * (1.0 - f)) * l.alpha;
             }
             if c[3] <= 0.0 {
                 continue;
