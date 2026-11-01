@@ -602,8 +602,19 @@ static struct wbuf *get_back(struct wsurf *s)
 			if (!b->busy && (!best || b->frame > best->frame))
 				best = b;
 		}
-		if (best)
+		if (best) {
+			/* CMA is scarce (64 MB for everything): give back buffers
+			   that sat unused for a while (e.g. the app went to the
+			   background, where the compositor holds only one) */
+			for (int i = 0; i < NBUF_MAX; i++) {
+				struct wbuf *b = &s->buf[i];
+				if (b != best && b->wl && !b->busy && b->frame && b->frame + 60 < s->frames) {
+					dbg("buffer %d idle, freed", i);
+					buf_free(s, b);
+				}
+			}
 			return best;
+		}
 		if (!polled) {
 			/* a release may be waiting in the socket: don't allocate for nothing */
 			polled = true;
