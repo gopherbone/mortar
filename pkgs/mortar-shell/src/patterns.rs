@@ -1,44 +1,50 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-//! The MENU's cross page background: a quiet animated pattern per
-//! category in a strip at the right edge, made of the home screen's flat
-//! shapes (flat fills mixed toward the ground, thin ink edges, no
-//! gradients), like little screensavers:
+//! The MENU's cross page background: an animated mosaic per category in a
+//! strip at the right edge (clear of the list), like little screensavers.
+//! Everything is solid tiles in full palette colours on a grid, with small
+//! even gaps (grout) between them: no hairlines, no fades, no
+//! translucency.
 //!
-//! - Apps: zig-zag lines of marching ants drifting slowly on the
-//!   diagonal: ink dashes running along a soft yellow line, neighbouring
-//!   lines marching opposite ways, each line drawing itself in from the
-//!   left and then erasing, out of step with its neighbours.
-//! - Games: Conway's Game of Life on 24 px cells, stepped 4 times a
-//!   second, each cell growing in and shrinking out; reseeded with a
-//!   glider when it settles.
-//! - Music: an oscilloscope: a Lissajous trace with a fading tail, its
-//!   frequency ratio drifting slowly (generative: the shell has no cheap
-//!   way to read the audio's level).
-//! - Settings: Truchet tiles: quarter-circle arcs on a grid, the tiles
-//!   turning 90 degrees as a wave travels down the diagonal, so the curves
-//!   keep re-routing.
+//! - Apps: thick zig-zag bands that inch across, one grid step at a time
+//!   with a short eased hop (each tile a moment after the one ahead, like
+//!   a caterpillar), bands in alternating colours and directions, out of
+//!   phase.
+//! - Games: Conway's Game of Life on 28 px tiles, stepped 4 times a
+//!   second, each tile growing in and shrinking out; newborn tiles yellow,
+//!   older ones lime; a glider drops in when it dies out or repeats.
+//! - Music: an oscilloscope as a mosaic: a Lissajous path quantised to a
+//!   grid of square tiles, the head in ink, the newest stretch orange, the
+//!   older stretch lavender stepping off tile by tile; the ratio drifts.
+//! - Settings: Truchet tiles, the classic two-colour mosaic: each tile a
+//!   pink square with lavender quarter discs at two opposite corners; a
+//!   wave travels down the diagonal and turns each tile 90 degrees with an
+//!   eased step, so the curves re-route.
 //!
-//! ▲▼ nudges it (`nudge`): a burst of marching speed, one Life generation,
-//! the scope's next ratio, the Truchet wave pushed along. Nothing runs while the cross is not on screen; Reduce
-//! motion keeps it still. Everything is drawn with the UI's ordinary
-//! polygons and strokes, so it costs a few hundred small fills a frame.
+//! ▲▼ nudges it (`nudge`): the inchworms hurry, one Life generation, the
+//! scope's next ratio, the Truchet wave pushed along. Nothing runs while
+//! the cross is not on screen; Reduce motion keeps it still. All of it is
+//! a few hundred solid quads a frame.
 
 use crate::art::Pal;
 use crate::motion::Spring;
 use crate::scene::{Xf, B, P};
 use mortar_ui::gfx::Color;
 
-/// The strip: x from STRIP_X to the right edge, the full height (the
-/// selected row's band ends left of it).
-pub const STRIP_X: f32 = 744.0;
+/// The strip: x from STRIP_X to the right edge, the full height (clear of
+/// the selected row's band and of every category's icon and name).
+pub const STRIP_X: f32 = 772.0;
 pub const STRIP_W: f32 = 1024.0 - STRIP_X;
 const STRIP_H: f32 = 768.0;
 
-/// Marching ants: dash and gap (px), speed (px/s), draw-and-erase cycle (s).
-const ANT_ON: f32 = 9.0;
-const ANT_OFF: f32 = 7.0;
-const ANT_SPEED: f32 = 22.0;
-const ANT_CYCLE: f32 = 7.0;
+/// The mosaic grid: a GRID px pitch, GROUT px between tiles.
+const GRID: f32 = 28.0;
+const GROUT: f32 = 4.0;
+/// Grid rows start this far down (27 rows of 28 fill 756 of the 768).
+const Y0: f32 = 6.0;
+
+/// The inchworm step: a hop every STEP s, taking HOP s of it.
+const STEP: f32 = 0.9;
+const HOP: f32 = 0.32;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
@@ -48,28 +54,33 @@ pub enum Kind {
     Truchet,
 }
 
-/// A pattern colour: the accent mixed 35% toward the ground, so the menu's
-/// text stays dominant.
-pub fn soft(c: Color, ground: Color) -> Color {
-    let m = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * 0.35).round() as u8;
-    Color(m(c.0, ground.0), m(c.1, ground.1), m(c.2, ground.2), 255)
+fn ease(x: f32) -> f32 {
+    let x = x.clamp(0.0, 1.0);
+    x * x * (3.0 - 2.0 * x)
 }
 
-fn with_a(c: Color, a: f32) -> Color {
-    Color(c.0, c.1, c.2, (a.clamp(0.0, 1.0) * c.3 as f32).round() as u8)
+/// One mosaic tile in grid cell (col, row), scaled by `s` (0..1) about its
+/// centre; `dx` moves it sideways (px).
+fn tile(b: &mut B, col: f32, row: f32, s: f32, dx: f32, c: Color) {
+    let size = (GRID - GROUT) * s;
+    if size < 1.0 {
+        return;
+    }
+    let (cx, cy) = (col * GRID + GRID / 2.0 + dx, Y0 + row * GRID + GRID / 2.0);
+    b.rect(cx - size / 2.0, cy - size / 2.0, size, size, c);
 }
 
 // ------------------------------------------------------------------ life ----
 
-const LW: usize = 12;
-const LH: usize = 32;
-const CELL: f32 = 24.0;
+const LW: usize = 9;
+const LH: usize = 27;
 
 /// Conway's Game of Life on a small torus, with a shown size per cell that
-/// eases towards alive or dead.
+/// eases towards alive or dead, and each cell's age (newborns stand out).
 #[derive(Clone, Debug)]
 pub struct Life {
     cells: Vec<bool>,
+    age: Vec<u16>,
     shown: Vec<f32>,
     hist: Vec<u64>,
     rng: u32,
@@ -78,13 +89,13 @@ pub struct Life {
 
 impl Life {
     pub fn new() -> Life {
-        let mut l = Life { cells: vec![false; LW * LH], shown: vec![0.0; LW * LH], hist: Vec::new(), rng: 0x6d72_7461, generation: 0 };
+        let mut l = Life { cells: vec![false; LW * LH], age: vec![0; LW * LH], shown: vec![0.0; LW * LH], hist: Vec::new(), rng: 0x6d72_7461, generation: 0 };
         // an R-pentomino (long-lived) and two gliders
         for (x, y) in [(5, 6), (6, 6), (4, 7), (5, 7), (5, 8)] {
             l.set(x, y, true);
         }
-        l.glider(1, 16);
-        l.glider(7, 24);
+        l.glider(1, 15);
+        l.glider(6, 21);
         // start on an interesting frame (also what Reduce motion shows)
         for _ in 0..12 {
             l.step();
@@ -138,6 +149,9 @@ impl Life {
                 next[y * LW + x] = matches!((on, n), (true, 2) | (_, 3));
             }
         }
+        for (a, on) in self.age.iter_mut().zip(&next) {
+            *a = if *on { a.saturating_add(1) } else { 0 };
+        }
         self.cells = next;
         self.generation += 1;
         let h = self.cells.iter().enumerate().fold(0xcbf2_9ce4_8422_2325u64, |h, (i, c)| if *c { (h ^ i as u64).wrapping_mul(0x100_0000_01b3) } else { h });
@@ -176,13 +190,13 @@ impl Default for Life {
 pub struct Patterns {
     /// Pattern time (seconds; still with Reduce motion).
     pub t: f32,
+    /// The inchworms' clock: runs faster for a moment after a nudge.
+    pub inch_t: f32,
     /// The scope's frequency ratio (shown, easing to `ratio_to`).
     ratio: f32,
     ratio_to: f32,
-    /// How far the zig-zags' ants have marched (px); faster after a nudge.
-    pub march: f32,
     boost: f32,
-    /// A scroll offset (px) that ▲▼ push, eased.
+    /// The Truchet wave's push from ▲▼ (px along the diagonal), eased.
     pub nudge: Spring,
     pub life: Life,
     life_acc: f32,
@@ -199,15 +213,15 @@ impl Patterns {
         let mut nudge = Spring::new(0.0);
         nudge.k_mul = 0.4;
         // a nice still frame for Reduce motion: some time in
-        Patterns { t: 7.0, ratio: 2.0, ratio_to: 2.0, march: 0.0, boost: 0.0, nudge, life: Life::new(), life_acc: 0.0 }
+        Patterns { t: 7.0, inch_t: 7.0, ratio: 2.0, ratio_to: 2.0, boost: 0.0, nudge, life: Life::new(), life_acc: 0.0 }
     }
 
     /// Advance by `dt` seconds (only while the cross shows).
     pub fn step(&mut self, dt: f32) {
         let dt = dt.clamp(0.0, 0.05);
         self.t += dt;
+        self.inch_t += dt * (1.0 + 2.0 * self.boost);
         self.ratio += (self.ratio_to - self.ratio) * (dt * 2.0).min(1.0);
-        self.march += dt * ANT_SPEED * (1.0 + 3.0 * self.boost);
         self.boost = (self.boost - dt * 1.2).max(0.0);
         self.life_acc += dt;
         while self.life_acc >= 0.25 {
@@ -230,10 +244,9 @@ impl Patterns {
         }
     }
 
-    /// Draw `kind` in the strip, moved `dx` sideways (transitions), clipped
-    /// to the strip, in the current transform (the cross page).
-    /// (`dx` moves the pattern; only the part of the strip it still or
-    /// already covers shows, so two never overlap mid-slide.)
+    /// Draw `kind` in the strip, moved `dx` sideways (transitions), in the
+    /// current transform (the cross page). Only the part of the strip it
+    /// still or already covers shows, so two never overlap mid-slide.
     pub fn draw(&self, b: &mut B, pal: &Pal, kind: Kind, dx: f32) {
         let (x0, x1) = ((STRIP_X + dx).max(STRIP_X), (STRIP_X + dx + STRIP_W).min(STRIP_X + STRIP_W));
         if x1 - x0 < 0.5 {
@@ -241,99 +254,108 @@ impl Patterns {
         }
         b.clip(Some([x0, 0.0, x1 - x0, STRIP_H]));
         b.push(Xf::translate(STRIP_X + dx, 0.0));
-        let edge = with_a(pal.ink, 0.7);
         match kind {
-            Kind::Zigzag => self.zigzag(b, soft(pal.yellow, pal.ground), edge),
-            Kind::Life => self.life_cells(b, soft(pal.lime, pal.ground), edge),
-            Kind::Scope => self.scope(b, soft(pal.orange, pal.ground), pal.ink),
-            Kind::Truchet => self.truchet(b, soft(pal.pink, pal.ground), edge),
+            Kind::Zigzag => self.zigzag(b, pal),
+            Kind::Life => self.life_tiles(b, pal),
+            Kind::Scope => self.scope(b, pal),
+            Kind::Truchet => self.truchet(b, pal),
         }
         b.pop();
         b.clip(None);
     }
 
-    /// Marching ants on zig-zag lines.
-    fn zigzag(&self, b: &mut B, fill: Color, edge: Color) {
-        use crate::scene::{polyline_len, sub_polyline};
-        let (period, amp, space) = (64.0, 13.0, 46.0);
-        let drift = self.t * 9.0;
-        let ox = (self.t * 14.0).rem_euclid(period);
-        let oy = drift.rem_euclid(space);
-        // lines keep their parity as they drift (so their direction too)
-        let shift = (drift / space).floor() as i32;
-        let n = (STRIP_W / (period / 2.0)) as i32 + 4;
-        let mut k = -1;
-        while k as f32 * space - oy < STRIP_H + space {
-            let base = k as f32 * space - oy;
-            let odd = (k + shift).rem_euclid(2) == 1;
-            let pts: Vec<P> = (0..n).map(|i| (i as f32 * period / 2.0 - ox - period / 2.0, base + if i % 2 == 0 { -amp } else { amp })).collect();
-            let len = polyline_len(&pts);
-            // draw in from the left, then erase from the left; odd lines
-            // half a cycle behind (one draws while its neighbour erases)
-            let c = (self.t / ANT_CYCLE + if odd { 0.5 } else { 0.0 }).fract();
-            let ease = |x: f32| x * x * (3.0 - 2.0 * x);
-            let (w0, w1) = if c < 0.5 { (0.0, ease(c * 2.0) * len) } else { (ease(c * 2.0 - 1.0) * len, len) };
-            let seg = sub_polyline(&pts, w0, w1);
-            if seg.len() >= 2 {
-                b.stroke(&seg, false, 7.0, fill);
-                // the ants: dashes anchored to the line, marching one way
-                // on even lines and the other on odd ones
-                let phase = if odd { -self.march } else { self.march } + w0;
-                b.dashed(&seg, 2.5, edge, ANT_ON, ANT_OFF, phase);
+    /// Inchworms: zig-zag bands two tiles thick, each stepping one grid
+    /// unit at a time; a tile hops a moment after the one ahead of it.
+    fn zigzag(&self, b: &mut B, pal: &Pal) {
+        let cols = [pal.yellow, pal.lavender, pal.dark];
+        let tri = [0.0, 1.0, 2.0, 1.0];
+        let n = (STRIP_W / GRID) as i32;
+        // how far a clock has inched (grid units): whole steps, then an
+        // eased hop at the start of each
+        let inched = |t: f32| (t / STEP).floor() + ease(((t / STEP).fract() * STEP) / HOP);
+        for band in 0..6 {
+            let base = band as f32 * 5.0 - 1.0;
+            let dir = if band % 2 == 0 { 1.0 } else { -1.0 };
+            let col = cols[band % 3];
+            let clock = self.inch_t - band as f32 * 0.37;
+            // the band repeats every 4 columns: count from a whole period
+            // behind it, so the numbers stay small
+            let period = (inched(clock) / 4.0).floor() * 4.0;
+            for q in -8..n + 8 {
+                // the front hops first, each tile behind it a moment later
+                let lag = if dir > 0.0 { (n + 8 - q) as f32 } else { (q + 8) as f32 } * 0.025;
+                let s = inched(clock - lag) - period;
+                let x = q as f32 + s * dir;
+                if x < -1.0 || x > n as f32 + 1.0 {
+                    continue;
+                }
+                let row = base + tri[q.rem_euclid(4) as usize];
+                for r in 0..2 {
+                    tile(b, x, row + r as f32, 1.0, 0.0, col);
+                }
             }
-            k += 1;
         }
     }
 
-    fn life_cells(&self, b: &mut B, fill: Color, edge: Color) {
-        let x0 = (STRIP_W - LW as f32 * CELL) / 2.0;
+    fn life_tiles(&self, b: &mut B, pal: &Pal) {
         for y in 0..LH {
             for x in 0..LW {
-                let s = self.life.shown[y * LW + x];
+                let i = y * LW + x;
+                let s = self.life.shown[i];
                 if s < 0.04 {
                     continue;
                 }
-                let size = (CELL - 4.0) * s;
-                let (cx, cy) = (x0 + x as f32 * CELL + CELL / 2.0, y as f32 * CELL + CELL / 2.0);
-                let (l, t) = (cx - size / 2.0, cy - size / 2.0);
-                b.rect(l, t, size, size, fill);
-                if size > 4.0 {
-                    b.frame(l, t, size, size, 1.5, edge);
-                }
+                let c = if self.life.cells[i] && self.life.age[i] <= 1 { pal.yellow } else { pal.lime };
+                tile(b, x as f32, y as f32, s, 0.0, c);
             }
         }
     }
 
-    /// An oscilloscope: a Lissajous figure (x at 3x, y at the drifting
-    /// ratio) traced with a tail that thins and fades.
-    fn scope(&self, b: &mut B, col: Color, ink: Color) {
+    /// The oscilloscope as a mosaic: the Lissajous path quantised to 20 px
+    /// cells; the newest stretch orange, the older lavender, the head ink.
+    fn scope(&self, b: &mut B, pal: &Pal) {
+        const C: f32 = 20.0;
+        const CW: usize = 13;
+        const CH: usize = 38;
         let r = self.ratio + 0.5 * (self.t * 0.06).sin();
-        let (cx, cy, ax, ay) = (STRIP_W / 2.0, STRIP_H / 2.0, 110.0, 300.0);
-        // a slow breath in the amplitude
+        let (cx, cy, ax, ay) = (STRIP_W / 2.0, STRIP_H / 2.0, 118.0, 340.0);
         let breathe = 0.92 + 0.08 * (self.t * 0.7).sin();
-        let pts: Vec<P> = (0..360)
-            .map(|k| {
-                let s = self.t * 0.9 - k as f32 * 0.016;
-                (cx + ax * breathe * (3.0 * s + 0.6).sin(), cy + ay * breathe * (r * s).sin())
-            })
-            .collect();
-        for (n, ch) in pts.chunks(12).enumerate() {
-            let a = 1.0 - n as f32 / 30.0;
-            let mut seg = ch.to_vec();
-            if let Some(next) = pts.get((n + 1) * 12) {
-                seg.push(*next);
+        // the rank of the newest sample in each cell (0: none)
+        let mut rank = [0u16; CW * CH];
+        let n = 420;
+        for k in (0..n).rev() {
+            let s = self.t * 0.9 - k as f32 * 0.014;
+            let (x, y) = (cx + ax * breathe * (3.0 * s + 0.6).sin(), cy + ay * breathe * (r * s).sin());
+            let (i, j) = ((x / C).floor(), ((y - 4.0) / C).floor());
+            if i < 0.0 || j < 0.0 || i as usize >= CW || j as usize >= CH {
+                continue;
             }
-            b.stroke(&seg, false, 10.0 * a.max(0.3), with_a(col, a));
-            b.stroke(&seg, false, 2.5, with_a(ink, a * 0.8));
+            rank[j as usize * CW + i as usize] = (n - k) as u16;
         }
-        let (hx, hy) = pts[0];
-        b.ellipse(hx, hy, 6.0, 6.0, ink);
+        let head = (n) as u16;
+        let size = C - 4.0;
+        for (idx, &rk) in rank.iter().enumerate() {
+            if rk == 0 {
+                continue;
+            }
+            let (i, j) = ((idx % CW) as f32, (idx / CW) as f32);
+            let c = if rk + 3 >= head {
+                pal.dark
+            } else if rk as usize > n / 2 {
+                pal.orange
+            } else {
+                pal.lavender
+            };
+            b.rect(i * C + 2.0, 4.0 + j * C + 2.0, size, size, c);
+        }
     }
 
-    /// Truchet tiles: two quarter-circle arcs per 40 px tile; a wave runs
-    /// down the diagonal and turns each tile 90 degrees as it passes.
-    fn truchet(&self, b: &mut B, col: Color, edge: Color) {
-        let cell = 40.0;
+    /// Truchet tiles, the classic two-colour mosaic: a pink 56 px square
+    /// with lavender quarter discs at two opposite corners; the wave turns
+    /// each tile a quarter turn, eased, as it passes.
+    fn truchet(&self, b: &mut B, pal: &Pal) {
+        let cell = GRID * 2.0;
+        let side = cell - GROUT;
         let span = STRIP_W + STRIP_H + 160.0;
         let wave = self.t * 70.0 + self.nudge.x;
         let pass = (wave / span).floor() as i32;
@@ -344,10 +366,11 @@ impl Patterns {
             h = h.wrapping_mul(0x2c1b_3c6d);
             h ^ (h >> 12)
         };
-        for j in 0..(STRIP_H / cell) as i32 + 1 {
+        let (fill, disc) = (pal.pink, pal.lavender);
+        for j in 0..((STRIP_H - Y0) / cell) as i32 + 1 {
             for i in 0..(STRIP_W / cell) as i32 + 1 {
-                let (x, y) = (i as f32 * cell, j as f32 * cell);
-                let r = ((front - (x + y)) / 50.0).clamp(0.0, 1.0);
+                let (x, y) = (i as f32 * cell, Y0 + j as f32 * cell);
+                let r = ease((front - (x + y)) / 60.0);
                 let base = (hash(i, j) & 1) as i32 + pass;
                 let ang = (base as f32 + r) * std::f32::consts::FRAC_PI_2;
                 let (cx, cy) = (x + cell / 2.0, y + cell / 2.0);
@@ -356,15 +379,17 @@ impl Patterns {
                     let (dx, dy) = (p.0 - cx, p.1 - cy);
                     (cx + dx * ca - dy * sa, cy + dx * sa + dy * ca)
                 };
-                for (ox, oy, a0) in [(x, y, 0.0f32), (x + cell, y + cell, 180.0)] {
-                    let pts: Vec<P> = (0..=8)
-                        .map(|k| {
-                            let a = (a0 + k as f32 * 90.0 / 8.0).to_radians();
-                            rot((ox + cell / 2.0 * a.cos(), oy + cell / 2.0 * a.sin()))
-                        })
-                        .collect();
-                    b.stroke(&pts, false, 8.0, col);
-                    b.stroke(&pts, false, 1.5, edge);
+                let h = side / 2.0;
+                let sq = [(cx - h, cy - h), (cx + h, cy - h), (cx + h, cy + h), (cx - h, cy + h)];
+                b.poly(&sq.map(rot), fill);
+                // quarter discs at the top-left and bottom-right corners
+                for (ox, oy, a0) in [(cx - h, cy - h, 0.0f32), (cx + h, cy + h, 180.0)] {
+                    let mut pts: Vec<P> = vec![rot((ox, oy))];
+                    pts.extend((0..=8).map(|k| {
+                        let a = (a0 + k as f32 * 90.0 / 8.0).to_radians();
+                        rot((ox + h * a.cos(), oy + h * a.sin()))
+                    }));
+                    b.poly(&pts, disc);
                 }
             }
         }
@@ -377,15 +402,19 @@ mod tests {
 
     #[test]
     fn life_follows_the_rules() {
-        let mut l = Life { cells: vec![false; LW * LH], shown: vec![0.0; LW * LH], hist: Vec::new(), rng: 1, generation: 0 };
+        let mut l = Life { cells: vec![false; LW * LH], age: vec![0; LW * LH], shown: vec![0.0; LW * LH], hist: Vec::new(), rng: 1, generation: 0 };
         // a blinker turns over every step
         for x in 4..7 {
             l.set(x, 10, true);
         }
         l.step();
         assert!(l.alive(5, 9) && l.alive(5, 10) && l.alive(5, 11) && !l.alive(4, 10));
+        assert_eq!(l.age[10 * LW + 5], 1);
+
         l.step();
         assert!(l.alive(4, 10) && l.alive(6, 10));
+        assert_eq!(l.age[10 * LW + 5], 2, "the centre has lived on");
+        assert_eq!(l.age[10 * LW + 4], 1, "newborn");
     }
 
     #[test]
@@ -395,7 +424,6 @@ mod tests {
             l.step();
             assert!(l.population() > 0, "generation {}", l.generation);
         }
-        // a still life or a cycle gets a glider: it keeps changing
         let before = l.cells.clone();
         let mut changed = false;
         for _ in 0..40 {
@@ -406,19 +434,19 @@ mod tests {
     }
 
     #[test]
-    fn ants_march_and_a_nudge_hurries_them() {
+    fn inchworms_step_and_rest_on_the_grid() {
+        // between hops the shift is a whole number of grid units
+        let t = 3.0 * STEP + HOP + 0.1;
+        let k = (t / STEP).floor();
+        let hop = ease(((t / STEP).fract() * STEP) / HOP);
+        assert_eq!(k + hop, 4.0);
+        // a nudge hurries them
         let mut p = Patterns::new();
-        p.step(1.0 / 30.0);
-        let m0 = p.march;
-        for _ in 0..30 {
-            p.step(1.0 / 30.0);
-        }
-        let calm = p.march - m0;
-        assert!((calm - ANT_SPEED).abs() < 1.0, "{calm} px in a second");
+        p.step(0.1);
+        let a = p.inch_t;
         p.nudge(Kind::Zigzag, 1.0);
-        let m1 = p.march;
-        p.step(1.0 / 30.0);
-        assert!(p.march - m1 > ANT_SPEED / 30.0 * 3.0, "kicked");
+        p.step(0.1);
+        assert!(p.inch_t - a > 0.12, "a 50 ms step went {}", p.inch_t - a);
     }
 
     #[test]
@@ -430,17 +458,11 @@ mod tests {
             p.step(1.0 / 30.0);
         }
         assert!((p.ratio - 3.0).abs() < 0.05, "eases to the new ratio: {}", p.ratio);
-        p.nudge(Kind::Scope, -1.0);
-        p.nudge(Kind::Scope, -1.0);
-        p.nudge(Kind::Scope, -1.0);
+        for _ in 0..3 {
+            p.nudge(Kind::Scope, -1.0);
+        }
         assert_eq!(p.ratio_to, 1.0, "clamped");
         p.nudge(Kind::Truchet, 1.0);
         assert_eq!(p.nudge.t, 120.0, "the wave is pushed along");
-    }
-
-    #[test]
-    fn soft_mixes_toward_the_ground() {
-        let c = soft(Color(255, 0, 0, 255), Color(0, 0, 255, 255));
-        assert_eq!((c.0, c.2), (166, 89));
     }
 }

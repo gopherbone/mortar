@@ -20,7 +20,7 @@ pkgs/mortar-shell/
   src/cross.rs       the MENU: Running page, the cross, glass (a child
                      module of shellui)
   src/menupages.rs   the MENU's glass pages: Wi-Fi, Bluetooth, Mixer
-  src/patterns.rs    the cross's background patterns (marching ants, Life, a scope, Truchet tiles)
+  src/patterns.rs    the cross's background patterns (mosaics: inchworms, Life, a scope, Truchet tiles)
   src/mixer.rs       PipeWire output streams from pw-dump (the Mixer)
   src/radio.rs       Wi-Fi / Bluetooth on/off (rfkill)
   src/motion.rs      springs and the Bouncy/Calm/Snappy presets
@@ -225,30 +225,34 @@ blocks with 1 px ink outlines, isometric illustrations.
       thread runs these, every second while the Mixer shows. No level
       meters: PipeWire has no cheap way to read peaks without capturing
       every stream.
-  - Behind the cross (not behind Running) runs a quiet pattern per
-    category (`patterns.rs`) in a strip at the right edge (x 744 to the
-    edge, full height, clear of the rows' band and text), made of the
-    home screen's flat shapes: fills in the category's colour mixed 35%
-    toward the ground, thin ink edges, no gradients. Apps: marching
-    ants: zig-zag lines drifting on the diagonal, ink dashes (cut on the
-    CPU, `B::dashed`) running along a soft yellow line, neighbouring lines
-    marching opposite ways, each line drawing itself in and then erasing
-    on a 7 s cycle, half a cycle out of step with its neighbours. Games: Conway's
-    Game of Life on 24 px cells (a 12 x 32 torus) stepped 4 times a
-    second, each cell growing in and shrinking out over ~120 ms; it
-    starts from an R-pentomino and two gliders, and a glider drops in
-    when it dies out or repeats. Music: an oscilloscope, a Lissajous
-    trace (x at 3x, y at a slowly drifting ratio) with a tail that thins
-    and fades, its amplitude breathing slowly (generative: no cheap way
-    to read the audio level). Settings: Truchet tiles, two quarter-circle
-    arcs per 40 px tile, each tile turning 90 degrees as a wave passes
-    down the diagonal, so the curves keep re-routing (orbits and a
-    checkerboard came first; the user preferred these). A category change pushes the old pattern out and the new one
-    in, the way the categories move, on a spring; ▲▼ nudge it (a
-    burst of marching speed, one Life generation, the scope's next ratio, the Truchet wave pushed on). It runs only
-    while the cross shows and nothing covers it; Reduce motion keeps it
-    on a still frame. (A lava lamp came first; on the device it was too
-    dominant, and the user preferred screensaver-like patterns.)
+  - Behind the cross (not behind Running) runs an animated mosaic per
+    category (`patterns.rs`) in a strip at the right edge (x 772 to the
+    edge, full height, clear of the selected band and of every
+    category's icon and name): solid tiles in full palette colours on a
+    28 px grid with 4 px of grout, no hairlines, fades or translucency.
+    Apps: inchworms, zig-zag bands two tiles thick in yellow, lavender
+    and ink, each inching one grid step at a time with a short eased hop
+    (the front tile first, the rest a moment after, like a caterpillar),
+    neighbouring bands going opposite ways, out of phase. Games: Conway's
+    Game of Life on the grid (a 9 x 27 torus) stepped 4 times a second,
+    each tile growing in and shrinking out over ~120 ms, newborn tiles
+    yellow and older ones lime; it starts from an R-pentomino and two
+    gliders, and a glider drops in when it dies out or repeats. Music:
+    an oscilloscope as a mosaic, a Lissajous path (x at 3x, y at a
+    slowly drifting ratio, its amplitude breathing) quantised to 20 px
+    tiles: the newest stretch orange, the older lavender stepping off
+    tile by tile, the head in ink (generative: no cheap way to read the
+    audio level). Settings: Truchet tiles, the classic two-colour mosaic,
+    56 px pink squares with lavender quarter discs at two opposite
+    corners; a wave travels down the diagonal and turns each tile a
+    quarter turn with an eased step, so the curves re-route. A category
+    change pushes the old pattern out and the new one in, the way the
+    categories move, on a spring; ▲▼ nudge it (the inchworms hurry, one
+    Life generation, the scope's next ratio, the Truchet wave pushed
+    on). It runs only while the cross shows and nothing covers it;
+    Reduce motion keeps it on a still frame. (A lava lamp came first, then
+    thin-lined, faded patterns; the user preferred solid, chunky
+    mosaics.)
   - The hint bar follows the selection.
   - Sounds: move (category), tick (item), tab (page), drawer / drawerUp
     (open, close, popup), open (go), close (kill), deny (nothing there),

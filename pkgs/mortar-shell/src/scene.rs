@@ -312,14 +312,6 @@ impl<'a> B<'a> {
         let color = self.col(color);
         self.scene.items.push(Item::Stroke { pts, closed, width: width * x.scale_factor(), color });
     }
-    /// A dashed polyline: `on` px drawn, `off` px skipped, starting `phase`
-    /// px into the pattern (advance it and the dashes march).
-    pub fn dashed(&mut self, pts: &[P], width: f32, color: Color, on: f32, off: f32, phase: f32) {
-        for d in dashes(pts, on, off, phase) {
-            self.stroke(&d, false, width, color);
-        }
-    }
-
     pub fn rect(&mut self, x: f32, y: f32, w: f32, h: f32, color: Color) {
         if w <= 0.0 || h <= 0.0 {
             return;
@@ -434,60 +426,6 @@ impl<'a> B<'a> {
 }
 
 // -------------------------------------------------------------- geometry ----
-
-/// The part of a polyline between `from` and `to` px along it.
-pub fn sub_polyline(pts: &[P], from: f32, to: f32) -> Vec<P> {
-    let mut out = Vec::new();
-    if to <= from {
-        return out;
-    }
-    let mut at = 0.0;
-    for w in pts.windows(2) {
-        let (a, b) = (w[0], w[1]);
-        let len = ((b.0 - a.0).powi(2) + (b.1 - a.1).powi(2)).sqrt();
-        let (s, e) = (at, at + len);
-        at = e;
-        if len <= 0.0 || e <= from || s >= to {
-            continue;
-        }
-        let lerp = |d: f32| {
-            let k = ((d - s) / len).clamp(0.0, 1.0);
-            (a.0 + (b.0 - a.0) * k, a.1 + (b.1 - a.1) * k)
-        };
-        if out.is_empty() {
-            out.push(lerp(from.max(s)));
-        }
-        out.push(lerp(to.min(e)));
-    }
-    out
-}
-
-pub fn polyline_len(pts: &[P]) -> f32 {
-    pts.windows(2).map(|w| ((w[1].0 - w[0].0).powi(2) + (w[1].1 - w[0].1).powi(2)).sqrt()).sum()
-}
-
-/// A polyline cut into dashes (`on` drawn, `off` skipped), the pattern
-/// shifted `phase` px along it; each dash keeps the corners it spans.
-pub fn dashes(pts: &[P], on: f32, off: f32, phase: f32) -> Vec<Vec<P>> {
-    let period = on + off;
-    if period <= 0.0 || pts.len() < 2 {
-        return Vec::new();
-    }
-    let total = polyline_len(pts);
-    let mut d = -phase.rem_euclid(period);
-    let mut out = Vec::new();
-    while d < total {
-        let (s, e) = (d.max(0.0), (d + on).min(total));
-        if e > s {
-            let p = sub_polyline(pts, s, e);
-            if p.len() >= 2 {
-                out.push(p);
-            }
-        }
-        d += period;
-    }
-    out
-}
 
 pub fn ellipse_pts(cx: f32, cy: f32, rx: f32, ry: f32, n: usize) -> Vec<P> {
     (0..n)
@@ -721,22 +659,6 @@ mod tests {
             a.0 * b.1 - b.0 * a.1
         }).sum::<f32>().abs() / 2.0;
         assert!((tri_area(&s.tris) - poly_area).abs() / poly_area < 0.01, "{} vs {poly_area}", tri_area(&s.tris));
-    }
-
-    #[test]
-    fn dashes_follow_the_line_and_march() {
-        // an L: 100 px right, then 100 px down
-        let l = [(0.0, 0.0), (100.0, 0.0), (100.0, 100.0)];
-        let d = dashes(&l, 10.0, 10.0, 0.0);
-        assert_eq!(d.len(), 10);
-        assert_eq!(d[0], vec![(0.0, 0.0), (10.0, 0.0)]);
-        // a dash across the corner keeps it
-        let d = dashes(&l, 10.0, 10.0, 5.0);
-        assert!(d.iter().any(|p| p.len() == 3 && p[1] == (100.0, 0.0)), "{d:?}");
-        // the phase moves the dashes along
-        assert_eq!(dashes(&l, 10.0, 10.0, 5.0)[0], vec![(0.0, 0.0), (5.0, 0.0)]);
-        assert_eq!(sub_polyline(&l, 50.0, 150.0), vec![(50.0, 0.0), (100.0, 0.0), (100.0, 50.0)]);
-        assert!(sub_polyline(&l, 20.0, 20.0).is_empty());
     }
 
     #[test]
