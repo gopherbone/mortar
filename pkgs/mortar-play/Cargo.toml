@@ -1,0 +1,31 @@
+[package]
+name = "mortar-play"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-2.0-or-later"
+description = "Minimal, preconfigured libretro frontend for Mortar on the TrimUI Brick"
+publish = false
+build = "build.rs"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+debug = 1
+
+[dependencies]
+mortar-ui = { path = "../mortar-ui", default-features = false }
+libloading = "0.9"
+libc = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+png = "0.18"
+sdl3 = { version = "0.20", default-features = false, features = ["use-pkg-config"] }
+zip = { version = "9", default-features = false, features = ["deflate"] }
+sevenz-rust2 = { version = "0.24", default-features = false }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client"] }
+
+[build-dependencies]
+cc = "1"
