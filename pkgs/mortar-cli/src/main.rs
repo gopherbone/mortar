@@ -107,16 +107,6 @@ fn remote(host: &str, script: &str) -> bool {
     ssh_cmd(host).arg(script).status().map(|s| s.success()).unwrap_or(false)
 }
 
-fn remote_quiet(host: &str, script: &str) -> bool {
-    ssh_cmd(host)
-        .arg(script)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
-}
-
 fn run(cmd: &mut Command, what: &str) {
     match cmd.status() {
         Ok(s) if s.success() => {}
@@ -130,25 +120,48 @@ fn sq(s: &str) -> String {
     format!("'{}'", s.replace('\'', r"'\''"))
 }
 
-fn wait_for_brick(host: &str) {
+/// Output of a command on the Brick (None if SSH or the command failed).
+fn remote_output(host: &str, script: &str) -> Option<String> {
+    let out = ssh_cmd(host).arg(script).stderr(Stdio::null()).output().ok()?;
+    out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+const BOOT_ID: &str = "cat /proc/sys/kernel/random/boot_id";
+
+/// Wait until SSH answers again with a different boot id than `old`.
+fn wait_for_brick(host: &str, old: Option<&str>) {
     say(&format!("Waiting for {host}"));
     sleep(Duration::from_secs(5));
     let deadline = Instant::now() + Duration::from_secs(180);
     while Instant::now() < deadline {
-        if remote_quiet(host, "true") {
+        if let Some(id) = remote_output(host, BOOT_ID) {
+            if old.is_some_and(|o| o == id) {
+                // still the old boot (going down, or it never went)
+                sleep(Duration::from_secs(2));
+                continue;
+            }
             say(&format!("{host} is back"));
             return;
         }
         sleep(Duration::from_secs(2));
     }
-    die(&format!("{host} did not come back within 3 minutes"));
+    die(&format!("{host} did not come back (rebooted) within 3 minutes"));
 }
 
 fn reboot(host: &str) {
     say(&format!("Rebooting {host}"));
-    // The connection drops as the Brick goes down; that's expected.
-    let _ = remote_quiet(host, "systemctl reboot");
-    wait_for_brick(host);
+    let old = remote_output(host, BOOT_ID);
+    // The connection may drop as the Brick goes down, so only a refusal
+    // that systemctl reports (e.g. a "destructive transaction" with a job
+    // stuck in the queue) is fatal.
+    let out = ssh_cmd(host).arg("systemctl reboot").output();
+    if let Ok(o) = &out {
+        if o.status.code().is_some_and(|c| c != 0 && c != 255) {
+            eprint!("{}", String::from_utf8_lossy(&o.stderr));
+            die("systemctl reboot was refused (see `systemctl list-jobs` on the Brick)");
+        }
+    }
+    wait_for_brick(host, old.as_deref());
     remote(host, "echo \"running: $(readlink /run/current-system)\"; systemctl is-system-running || true");
 }
 
@@ -187,6 +200,10 @@ fn deploy(o: &Opts) {
     }
     if o.reboot {
         reboot(&o.host);
+        let running = remote_output(&o.host, "readlink /run/current-system").unwrap_or_default();
+        if running != path {
+            die(&format!("the Brick is running {running}, not the deployed {path}"));
+        }
     }
     remote(&o.host, &format!("nix-env -p {PROFILE} --list-generations | tail -3"));
 }

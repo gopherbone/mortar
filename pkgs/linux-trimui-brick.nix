@@ -231,6 +231,15 @@ buildLinux (
       # when it is on the command line.
       U_SERIAL_CONSOLE = yes;
 
+      # --- zram swap (zramSwap in modules/mortar-base.nix; without the
+      #     module the dev-zram0 job never finishes and blocks reboot) ---
+      ZSMALLOC = module;
+      ZRAM = module;
+      CRYPTO_ZSTD = yes;
+      CRYPTO_LZ4 = yes;
+      ZRAM_BACKEND_ZSTD = yes;
+      ZRAM_BACKEND_LZ4 = yes;
+
       # --- Suspend to RAM (SCP-backed "deep") ---
       # jkingston's native-deep.fragment (trimui-brick-firmware
       # board/trimui/brick/native-deep.fragment): wake votes through the
