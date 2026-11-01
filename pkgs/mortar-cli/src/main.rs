@@ -17,6 +17,7 @@ mortar deploy [--boot] [--reboot] [--host HOST] [--config NAME]
 mortar rollback [--host HOST]     switch back to the previous generation
 mortar generations [--host HOST]  list the Brick's system generations
 mortar reboot [--host HOST]       reboot and wait until SSH answers again
+mortar attention [--host HOST]    buzz the Brick so whoever holds it looks
 mortar ssh [--host HOST] [-- CMD...]
 
 Defaults: HOST=$MORTAR_HOST or mortar.local, CONFIG=brick-mainline,
@@ -189,6 +190,11 @@ fn main() {
             remote(&o.host, &format!("nix-env -p {PROFILE} --list-generations"));
         }
         "reboot" => reboot(&o.host),
+        "attention" => {
+            if !remote(&o.host, "mortar-rumble 300 2") {
+                die("could not buzz the Brick");
+            }
+        }
         "ssh" => {
             let mut c = Command::new("ssh");
             c.arg(format!("root@{}", o.host)).args(&o.rest);

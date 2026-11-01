@@ -47,6 +47,7 @@
     evtest
     strace dtc i2c-tools
     usbutils pciutils
+    (pkgs.callPackage ../pkgs/mortar-rumble { }) # `mortar attention` buzzes it
   ];
 
   # Compressed swap in RAM: 1 GB is tight for heavier tools (Claude Code

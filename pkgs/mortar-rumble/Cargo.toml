@@ -1,0 +1,13 @@
+[package]
+name = "mortar-rumble"
+version = "0.1.0"
+edition = "2021"
+description = "Buzz the TrimUI Brick's rumble motor"
+license = "GPL-2.0-or-later"
+
+[dependencies]
+libc = "0.2"
+
+[profile.release]
+opt-level = "s"
+strip = true
