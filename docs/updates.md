@@ -124,6 +124,13 @@ gh secret set R2_SECRET_ACCESS_KEY -R gopherbone/trimui_nix    # mortar-ci Secre
 is enabled for the repository and that your plan's Actions budget allows
 arm64 minutes.
 
+Builds on push stay off until you turn them on, so pushes don't spend
+minutes or fail before the secrets exist:
+
+```sh
+gh variable set MORTAR_CI -R gopherbone/trimui_nix --body true
+```
+
 ### 5. Your Mac as a fallback publisher (optional)
 
 ```sh

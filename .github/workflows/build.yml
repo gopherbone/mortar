@@ -50,6 +50,9 @@ permissions:
 
 jobs:
   build:
+    # Off until the one-time setup is done (docs/updates.md): set the repository
+    # variable MORTAR_CI=true. Manual runs (workflow_dispatch) always work.
+    if: vars.MORTAR_CI == 'true' || github.event_name == 'workflow_dispatch'
     runs-on: ${{ fromJSON(inputs.runner == 'x86-qemu' && '"ubuntu-24.04"' || inputs.runner == 'self-hosted' && '["self-hosted","mortar"]' || '"ubuntu-24.04-arm"') }}
     timeout-minutes: 360
     env:
