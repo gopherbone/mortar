@@ -14,7 +14,7 @@
       # Vendor SCP blob (not redistributable) and the U-Boot image embedding it.
       # Build locally only; never push these to a public cache.
       mortarUnfree = pkg: builtins.elem (nixpkgs.lib.getName pkg)
-        [ "trimui-brick-scp" "u-boot-trimui-brick-mainline" "trimui-brick-firmware" ];
+        [ "trimui-brick-scp" "u-boot-trimui-brick-mainline" "trimui-brick-firmware" "pvr-ddk-userspace" ];
     in {
       nixosConfigurations.trimui-brick = nixpkgs.lib.nixosSystem {
         system = targetSystem;
@@ -37,6 +37,7 @@
           ./modules/mortar-usb.nix
           ./modules/mortar-usb-watchdog.nix
           ./modules/brick-firmware.nix
+          ./modules/brick-gpu.nix
           ./modules/mortar-base.nix
           # SD image: mainline SPL + TF-A + U-Boot at 128 KiB, FAT /boot
           # with extlinux generations, ext4 root.

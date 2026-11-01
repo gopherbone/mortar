@@ -67,6 +67,17 @@ buildLinux (
   // {
     pname = "linux-trimui-brick";
     version = "7.3.0";
+
+    kernelPatches = (args.kernelPatches or [ ]) ++ [
+      {
+        # The DC (display class) bridge was reconstructed from DDK 1.11;
+        # stock 1.19 userspace numbers the commands differently, so window
+        # surfaces called the wrong kernel functions. Verified against the
+        # stock 4.9 pvrsrvkm.ko and libsrv_um.
+        name = "drm-img-dc-bridge-stock-1.19-command-order";
+        patch = ../patches/kernel/0001-drm-img-dc-bridge-stock-1.19-command-order.patch;
+      }
+    ];
     # Makefile at this rev is 7.3.0; the defconfig sets CONFIG_LOCALVERSION="-brick-dev"
     # and disables LOCALVERSION_AUTO. The fetched source has no .git, so
     # setlocalversion appends nothing else.
