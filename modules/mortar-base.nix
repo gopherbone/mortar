@@ -47,6 +47,7 @@
     evtest
     strace dtc i2c-tools
     usbutils pciutils
+    ghostty.terminfo # `ssh` from Ghostty without TERM overrides
     (pkgs.callPackage ../pkgs/mortar-rumble { }) # `mortar attention` buzzes it
   ];
 

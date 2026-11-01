@@ -79,6 +79,17 @@ in
   options.mortar.ai = {
     enable = mkEnableOption "Claude Code on the Brick (launcher entries, tmux sessions, Remote Control)";
 
+    pairPort = mkOption {
+      type = types.port;
+      default = 8471;
+      description = ''
+        TCP port of the sign-in page (`mortar-ai pair`) the phone opens from
+        the QR code. Opened on wlan0 only. Nothing listens on it except
+        while a sign-in is in progress, and the page sits behind a one-time
+        128-bit token path.
+      '';
+    };
+
     package = mkOption {
       type = types.package;
       default = pkgs.claude-code;
@@ -159,6 +170,10 @@ in
 
   config = lib.mkIf cfg.enable (
     lib.mkMerge [
+      {
+        environment.variables.MORTAR_AI_PAIR_PORT = toString cfg.pairPort;
+        networking.firewall.interfaces.wlan0.allowedTCPPorts = [ cfg.pairPort ];
+      }
       {
         assertions = [
           {

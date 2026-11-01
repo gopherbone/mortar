@@ -256,7 +256,12 @@ impl Pair {
             p.direct = true;
             return p;
         };
-        let Ok(listener) = TcpListener::bind(("0.0.0.0", 0)) else {
+        // MORTAR_AI_PAIR_PORT: fixed port so the firewall can allow it (0 = any)
+        let want_port: u16 = std::env::var("MORTAR_AI_PAIR_PORT")
+            .ok()
+            .and_then(|p| p.parse().ok())
+            .unwrap_or(0);
+        let Ok(listener) = TcpListener::bind(("0.0.0.0", want_port)) else {
             p.direct = true;
             return p;
         };
