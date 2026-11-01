@@ -68,6 +68,9 @@ pub struct Actions {
     /// Print the mixer state; the first "[NN%]" in the output is the volume.
     #[serde(default = "d_volume_get")]
     pub volume_get: Vec<String>,
+    /// Set the time zone; "{zone}" is replaced by e.g. "Europe/Lisbon".
+    #[serde(default = "d_timezone_set")]
+    pub timezone_set: Vec<String>,
 }
 
 fn argv(v: &[&str]) -> Vec<String> {
@@ -85,6 +88,9 @@ fn d_reboot() -> Vec<String> {
 fn d_volume_set() -> Vec<String> {
     argv(&["amixer", "-M", "-q", "-c", "Codec", "sset", "DAC", "{step}"])
 }
+fn d_timezone_set() -> Vec<String> {
+    argv(&["timedatectl", "set-timezone", "{zone}"])
+}
 fn d_volume_get() -> Vec<String> {
     argv(&["amixer", "-M", "-c", "Codec", "sget", "DAC"])
 }
@@ -97,6 +103,7 @@ impl Default for Actions {
             reboot: d_reboot(),
             volume_set: d_volume_set(),
             volume_get: d_volume_get(),
+            timezone_set: d_timezone_set(),
         }
     }
 }
@@ -168,6 +175,13 @@ pub struct UiConfig {
     /// Frame callbacks per second for apps whose live card shows in the
     /// MENU drawer.
     pub card_fps: u32,
+    /// After the screen-off sleep goes dark, also run `actions.sleep`
+    /// (suspend-to-RAM). Off: untested on the Brick.
+    pub suspend: bool,
+    /// tzdata (zone1970.tab and the zone files) for Settings > Time zone.
+    pub zoneinfo: String,
+    /// The local-time link naming the current zone ("~" allowed).
+    pub localtime: String,
 }
 
 impl Default for UiConfig {
@@ -187,6 +201,9 @@ impl Default for UiConfig {
             audio_device: "default".into(),
             screenshot_dir: "~/Pictures/Screenshots".into(),
             card_fps: 15,
+            suspend: false,
+            zoneinfo: "/etc/zoneinfo".into(),
+            localtime: "/etc/localtime".into(),
         }
     }
 }

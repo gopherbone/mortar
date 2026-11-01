@@ -127,6 +127,14 @@ pub struct Shell {
     vol_held: [bool; 2],
     vol_combo: bool,
     pub host: String,
+    /// The current time zone (Settings > Time zone).
+    pub timezone: String,
+    /// The power key went down at (cleared on release), and whether the
+    /// hold already opened the power menu.
+    power_down: Option<Instant>,
+    power_long: bool,
+    /// Asleep and dark: the backlight is off.
+    pub dark: bool,
     /// The UI is drawn on the GPU (else on the CPU).
     pub gpu_ui: bool,
     pub osk: Osk,
@@ -256,6 +264,10 @@ impl Shell {
             vol_held: [false; 2],
             vol_combo: false,
             host,
+            timezone: "UTC".into(),
+            power_down: None,
+            power_long: false,
+            dark: false,
             gpu_ui,
             osk: Osk::default(),
             router: Router::default(),
@@ -282,6 +294,7 @@ impl Shell {
             last_bg_tick: Instant::now(),
         };
         shell.apply_prefs();
+        shell.refresh_timezone();
         Ok(shell)
     }
 
@@ -476,6 +489,9 @@ impl Shell {
                 t = t.min(Duration::from_secs_f64(d));
             }
         }
+        if self.power_down.is_some() {
+            t = t.min(Duration::from_millis(16));
+        }
         if let Some(p) = self.pending_toast.as_ref() {
             t = t.min(p.0.saturating_duration_since(now));
         }
@@ -530,6 +546,12 @@ impl Shell {
         }
         // the shell UI: time, transitions, toasts
         self.ui_step();
+        self.power_hold_tick();
+        match self.sui.sleep_phase() {
+            crate::shellui::SleepPhase::Dark => self.set_dark(true),
+            crate::shellui::SleepPhase::Awake | crate::shellui::SleepPhase::Waking => self.set_dark(false),
+            crate::shellui::SleepPhase::Fading => {}
+        }
         self.page_poll();
         // status while a shell screen shows
         if self.shell_screen() && self.sys_at.elapsed() > Duration::from_secs(2) {
@@ -593,6 +615,11 @@ impl Shell {
         }
         self.ui_dirty = false;
         self.update_layers();
+        if self.dark {
+            // asleep: the last (black) frame stays; nothing is drawn
+            self.needs_redraw = false;
+            self.slow_redraw = false;
+        }
         if self.needs_redraw {
             self.slow_redraw = false;
             super::backend::render(self);
@@ -603,6 +630,20 @@ impl Shell {
 
     /// A key event from a classified device.
     pub fn on_key(&mut self, kind: Kind, code: u16, value: i32) {
+        // the power key belongs to the shell (logind ignores it, see
+        // modules/mortar-shell.nix): tap = sleep/wake, hold = power menu
+        if code == codes::KEY_POWER {
+            self.power_key(value);
+            return;
+        }
+        // asleep: any press only wakes
+        if self.sui.sleep_phase() != crate::shellui::SleepPhase::Awake
+            && value == 1
+            && (code == codes::KEY_VOLUMEUP || code == codes::KEY_VOLUMEDOWN)
+        {
+            self.ui_wake();
+            return;
+        }
         // volume keys work everywhere; both together take a screenshot
         if code == codes::KEY_VOLUMEUP || code == codes::KEY_VOLUMEDOWN {
             let i = if code == codes::KEY_VOLUMEUP { 0 } else { 1 };
@@ -725,7 +766,87 @@ impl Shell {
         }
     }
 
-    pub     fn read_volume(&self) -> Option<u8> {
+    fn power_key(&mut self, value: i32) {
+        use crate::shellui::SleepPhase;
+        match value {
+            1 => {
+                self.power_down = Some(Instant::now());
+                self.power_long = false;
+            }
+            0 => {
+                let held = self.power_down.take();
+                self.sui.set_power_hold(None);
+                if self.power_long || held.is_none() {
+                    return;
+                }
+                if self.sui.sleep_phase() != SleepPhase::Awake {
+                    self.ui_wake();
+                } else if self.sui.power_menu_open() {
+                    self.sui.close_power_menu();
+                } else {
+                    self.sui.sleep();
+                }
+                let outs = self.sui.take_out();
+                self.handle_outs(outs);
+                self.sync_cover();
+                self.needs_redraw = true;
+            }
+            _ => {}
+        }
+    }
+
+    /// While the power key is held: progress, then the power menu.
+    fn power_hold_tick(&mut self) {
+        let Some(t) = self.power_down else { return };
+        if self.power_long {
+            return;
+        }
+        let e = t.elapsed().as_secs_f32();
+        if e >= POWER_HOLD {
+            self.power_long = true;
+            self.sui.set_power_hold(None);
+            if self.sui.sleep_phase() != crate::shellui::SleepPhase::Awake {
+                self.ui_wake();
+            }
+            self.sui.open_power_menu();
+            let outs = self.sui.take_out();
+            self.handle_outs(outs);
+            self.sync_cover();
+        } else if e >= 0.25 && self.sui.sleep_phase() == crate::shellui::SleepPhase::Awake {
+            self.sui.set_power_hold(Some((e - 0.25) / (POWER_HOLD - 0.25)));
+        }
+        self.needs_redraw = true;
+    }
+
+    /// Wake from sleep (backlight on first, then the fade back in).
+    pub fn ui_wake(&mut self) {
+        self.sui.wake();
+        self.set_dark(false);
+        let outs = self.sui.take_out();
+        self.handle_outs(outs);
+        self.sync_cover();
+        self.needs_redraw = true;
+    }
+
+    /// Backlight off when the sleep fade reaches black; on when waking.
+    pub fn set_dark(&mut self, dark: bool) {
+        if dark == self.dark {
+            return;
+        }
+        self.dark = dark;
+        if let Some(b) = mortar_ui::status::Backlight::find()
+            && let Err(e) = b.power(!dark)
+        {
+            tracing::warn!("backlight power: {e}");
+        }
+        tracing::info!(dark, "sleep");
+        if dark && self.cfg.ui.suspend {
+            // the hook for real suspend-to-RAM (untested on the Brick)
+            run_detached(&self.cfg.actions.sleep.clone());
+        }
+    }
+
+    pub fn read_volume(&self) -> Option<u8> {
         let a = &self.cfg.actions.volume_get;
         let out = std::process::Command::new(a.first()?).args(&a[1..]).output().ok()?;
         parse_volume(&String::from_utf8_lossy(&out.stdout))
@@ -973,6 +1094,8 @@ impl CompositorHandler for Shell {
 
 /// Composited GPU-app frames while something covers the app: at most 5/s.
 const SLOW_COMPOSITE: Duration = Duration::from_millis(200);
+/// Hold the power key this long (s) for the power menu.
+const POWER_HOLD: f32 = 0.8;
 /// Frame interval when only the background drifts.
 const AMBIENT: Duration = Duration::from_millis(50);
 

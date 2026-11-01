@@ -18,6 +18,7 @@
   jq,
   makeFontsConf,
   dejavu_fonts,
+  tzdata,
 }:
 
 let
@@ -64,6 +65,12 @@ let
       actions = {
         volumeGet = [ "echo" "[50%]" ];
         volumeSet = [ "true" ];
+        # stands in for timedatectl: point a local link at the zone
+        timezoneSet = [ "sh" "-c" "ln -sfn ${tzdata}/share/zoneinfo/$1 $HOME/localtime" "sh" "{zone}" ];
+      };
+      ui = {
+        zoneinfo = "${tzdata}/share/zoneinfo";
+        localtime = "~/localtime";
       };
     }
   );
@@ -239,6 +246,58 @@ runCommand "mortar-shell-headless-test"
     tshot 800 night-home
     ctl prefs > $out/prefs.json
     jq -e '.night == true' $HOME/.local/state/mortar-shell/prefs.json >/dev/null || echo "FAIL: prefs saved" >> $out/result
+
+    echo "== Settings > Time zone: region list, Europe, pick the first city"
+    jq -e '.timezone == "UTC"' <(ctl state) >/dev/null || echo "FAIL: starts in UTC" >> $out/result
+    ctl press menu
+    ctl press l1
+    for _ in 1 2 3 4 5 6 7; do ctl press down >/dev/null; done
+    tshot 700 tz-settings-row
+    ctl press a
+    tshot 700 tz-regions
+    for _ in 1 2 3; do ctl press up >/dev/null; done   # UTC -> Pacific -> Indian -> Europe
+    tshot 300 tz-regions-europe
+    ctl press a
+    tshot 700 tz-europe
+    ctl press r1
+    tshot 400 tz-europe-page
+    ctl press a
+    tshot 120 tz-set-toast
+    tshot 800 tz-back-in-settings
+    ctl state | jq -r .timezone > $out/timezone.txt
+    jq -e '.timezone | startswith("Europe/")' <(ctl state) >/dev/null || echo "FAIL: time zone set" >> $out/result
+    ctl press b
+    tshot 800 tz-home
+
+    echo "== power key: hold for the power menu, confirm, Sleep, wake"
+    ctl power hold
+    sleep 0.5
+    tshot 16 power-hold
+    sleep 0.6
+    tshot 16 power-hold-done
+    ctl power-up
+    tshot 500 power-menu
+    jq -e '.power_menu == true' <(ctl state) >/dev/null || echo "FAIL: power menu" >> $out/result
+    ctl press down
+    ctl press a
+    tshot 200 power-confirm-restart
+    ctl press b
+    ctl press up
+    ctl press a
+    tshot 250 sleep-fading
+    tshot 2000 sleep-dark
+    jq -e '.sleep == "Dark"' <(ctl state) >/dev/null || echo "FAIL: asleep" >> $out/result
+    ctl press a
+    tshot 120 wake-120
+    tshot 1500 wake-done
+    jq -e '.sleep == "Awake" and .power_menu == false' <(ctl state) >/dev/null || echo "FAIL: awake" >> $out/result
+    echo "== power key tap: sleep, tap again: wake"
+    ctl power
+    tshot 2000 tap-sleep
+    jq -e '.sleep == "Dark"' <(ctl state) >/dev/null || echo "FAIL: tap sleeps" >> $out/result
+    ctl power
+    tshot 1500 tap-wake
+    jq -e '.sleep == "Awake"' <(ctl state) >/dev/null || echo "FAIL: tap wakes" >> $out/result
 
     echo "== boot replay"
     ctl boot

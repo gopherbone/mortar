@@ -127,6 +127,18 @@ pub fn command(shell: &mut Shell, line: &str) -> Result<String, String> {
             super::ui::save_rgb_png(&pm, Path::new(arg))?;
             "ok".into()
         }
+        "power" => {
+            // the power key: `power` taps, `power hold` holds it for the menu
+            shell.on_key(super::input::Kind::Keys, mortar_ui::input::codes::KEY_POWER, 1);
+            if arg != "hold" {
+                shell.on_key(super::input::Kind::Keys, mortar_ui::input::codes::KEY_POWER, 0);
+            }
+            "ok".into()
+        }
+        "power-up" => {
+            shell.on_key(super::input::Kind::Keys, mortar_ui::input::codes::KEY_POWER, 0);
+            "ok".into()
+        }
         "shot" => {
             shell.screenshot_combo();
             "ok".into()
@@ -211,6 +223,9 @@ fn state(shell: &Shell) -> String {
         },
         "visible": vis,
         "osk": shell.osk.visible,
+        "sleep": format!("{:?}", shell.sui.sleep_phase()),
+        "power_menu": shell.sui.power_menu_open(),
+        "timezone": shell.timezone,
         "held": shell.router.held(),
         "apps": apps,
         "frames": shell.backend.frames(),
