@@ -21,10 +21,10 @@ over SSH.
 | Shell | `mortar-shell`, a Wayland compositor (Rust, Smithay). Apps run fullscreen side by side; **MENU** opens a drawer with live app cards, a launcher and settings. Its UI is drawn on the GPU with spring animations, synthesized UI sounds and haptic ticks. |
 | GPU | PowerVR GE8300 on TrimUI's stock DDK 1.19 userspace. GPU apps inside the shell render into dma-bufs (`mortar-wlegl`) that the shell scans out directly; outside the shell, `brick_dc_drm` flips them at 60 fps. A busy M8 screen costs ~12% CPU. |
 | Greeter | `mortar-ui` greeter (greetd): pick **Mortar** (the shell) or launch an app directly. |
-| Apps | M8 (m8c; plug the M8 into the top port), PICO-8 (your own licensed copy), PuzzleScript, Games (emulators), Terminal, Claude Code. |
+| Apps | M8 (m8c; plug the M8 into the top port), ChooChooTracker, PICO-8 (your own licensed copy), PuzzleScript, Games (emulators), Terminal, Claude Code. |
 | Emulators | `mortar-play`, a minimal libretro frontend with 16 curated, preconfigured systems (GB/GBC/GBA, NES, SNES, Genesis, PS1, arcade, …). Auto-saves and resume, save states, fast-forward. |
 | Claude Code | Runs in a persistent tmux session, a controller UI for approving tool calls (A/B/X), and Remote Control from your phone. Sign in with a QR code. |
-| Audio | Codec speaker and headphones (ALSA dmix, shared by all apps); USB audio on the top port. |
+| Audio | Codec speaker and headphones (ALSA dmix, shared by all apps); USB audio and USB MIDI on the top port. |
 | USB-C, bottom port | USB device: serial console + Ethernet over USB. The Brick is `10.55.0.1` / `mortar.local`. A watchdog recovers the link if it goes deaf. |
 | USB-C, top port | USB host: the M8, USB audio, keyboards and controllers. |
 | SSH | Keys only, from `ssh-keys/root` on the card's FAT boot partition, or added with `mortar pair`. No account has a password. |
@@ -33,6 +33,8 @@ over SSH.
 | Display | JD9168 DSI panel, 1024×768. |
 | Updates | `nix run .#mortar -- deploy`: build, copy, switch. Every generation stays in the boot menu. |
 | Debug | Each boot saves logs to `mortar-logs/` on the card's FAT partition. |
+
+The power key sleeps (screen off; any button wakes); hold it for Sleep / Restart / Power off. Set the time zone in Settings.
 
 Not yet: suspend to RAM, charging configuration, LED effects.
 
@@ -127,6 +129,7 @@ pkgs/
   mortar-cli/             the `mortar` command: deploy, pair, attention, … (Rust)
   mortar-rumble/          rumble motor helper (Rust)
   m8c/, pico8/, trimui-brick-firmware.nix, mortar-gpu-tests/
+  choochootracker/        ChooChooTracker (MIT tracker/groovebox), Mortar build + launcher
 firmware/mainline/        U-Boot SPL + TF-A + U-Boot, with jkingston's patches
 image/build-image-mainline.nix   SD image (bootloader at 128 KiB, FAT /boot, ext4 /)
 docs/                     mortar.md, firmware.md, setup-file.md, pairing.md

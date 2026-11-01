@@ -1,0 +1,179 @@
+ChooChooTracker on Mortar (MORTAR_BUILD, on top of the Linux desktop build).
+Every change is behind MORTAR_BUILD; other builds are unchanged.
+
+- corelib_file.cpp: the install is read-only (Nix store), so always use the
+  per-user data directory the AppImage build uses
+  ($XDG_DATA_HOME/ChooChooTracker); the launcher seeds it.
+- corelib_gfx.cpp: open fullscreen at the panel's native size and pick the
+  largest built-in font that fits (1024x768 -> 24x36 cells, a 960x720
+  grid, centred), as the handheld builds do, instead of the desktop's
+  fixed 640x480 canvas scaled by 1.6.
+- corelib_input.cpp: default gamepad EDIT/OPT by the Brick's labels
+  (A = BTN_EAST = SDL "B", B = BTN_SOUTH = SDL "A"), and show the labels
+  on the key-mapping screen.
+- corelib_mainloop.cpp: the handhelds' idle frame-rate throttle.
+- common.cpp: default audio 44.1 kHz (the codec's dmix rate, no
+  resampling) and the handhelds' 512-frame buffer.
+
+--- a/tracker/platforms/sdl2/corelib_gfx.cpp
++++ b/tracker/platforms/sdl2/corelib_gfx.cpp
+@@ -14,6 +14,13 @@
+ #include "button_icons.h"
+ #endif
+ 
++// Mortar is a desktop (Linux) build on a fixed-size handheld panel: draw
++// the tracker at the panel's native size with the largest built-in font
++// that fits, like the handheld builds, not on the desktop's 640x480 canvas.
++#if defined(DESKTOP_BUILD) && !defined(MORTAR_BUILD)
++#define DESKTOP_CANVAS 1
++#endif
++
+ #define PRINT_BUFFER_SIZE (256)
+ #define TEXT_COLS (40)
+ #define TEXT_ROWS (20)
+@@ -603,7 +610,7 @@
+ 
+   // Desktop deliberately uses the tracker's native window size.  Do not
+   // restore a DPI-scaled drawable size from a prior run as a window size.
+-#ifdef DESKTOP_BUILD
++#ifdef DESKTOP_CANVAS
+   screenW = 640;
+   screenH = 480;
+   if (screenWidth != NULL) *screenWidth = screenW;
+@@ -617,7 +624,7 @@
+   detectDisplay = true;
+ #endif
+   if (detectDisplay) {
+-    #if defined(DESKTOP_BUILD) || defined(WEB_BUILD)
++    #if defined(DESKTOP_CANVAS) || defined(WEB_BUILD)
+       // Desktop and the HTML canvas use the tracker's native size.
+       screenW = 640;
+       screenH = 480;
+@@ -649,9 +656,12 @@
+ #ifdef ANDROID_BUILD
+     | SDL_WINDOW_RESIZABLE
+ #endif
+-#ifdef DESKTOP_BUILD
++#ifdef DESKTOP_CANVAS
+     | SDL_WINDOW_RESIZABLE
+ #endif
++#ifdef MORTAR_BUILD
++    | SDL_WINDOW_FULLSCREEN_DESKTOP
++#endif
+   );
+ 
+   if (!window) {
+@@ -683,7 +693,7 @@
+   // Desktop and web keep the requested logical window size. SDL's drawable
+   // size may be the physical monitor size with the software renderer.
+   int drawableW, drawableH;
+-#if defined(DESKTOP_BUILD) || defined(WEB_BUILD)
++#if defined(DESKTOP_CANVAS) || defined(WEB_BUILD)
+   drawableW = screenW;
+   drawableH = screenH;
+ #else
+@@ -1313,7 +1323,7 @@
+   resizePresentDelay = 2;
+   screenW = 640;
+   screenH = 480;
+-#elif defined(DESKTOP_BUILD) || defined(MIYOOPORTS_BUILD)
++#elif defined(DESKTOP_CANVAS) || defined(MIYOOPORTS_BUILD)
+   // Desktop windows resize the presentation only. The tracker itself remains
+   // a 640x480 canvas, avoiding font/layout changes during a live resize.
+   screenW = 640;
+--- a/tracker/platforms/sdl2/corelib_input.cpp
++++ b/tracker/platforms/sdl2/corelib_input.cpp
+@@ -88,8 +88,15 @@
+   appSettings.keyMapping.keyDown[1] = (InputCode){InputDeviceType::gamepad, SDL_CONTROLLER_BUTTON_DPAD_DOWN};
+   appSettings.keyMapping.keyLeft[1] = (InputCode){InputDeviceType::gamepad, SDL_CONTROLLER_BUTTON_DPAD_LEFT};
+   appSettings.keyMapping.keyRight[1] = (InputCode){InputDeviceType::gamepad, SDL_CONTROLLER_BUTTON_DPAD_RIGHT};
++#ifdef MORTAR_BUILD
++  // TrimUI Brick: A is the right face button (BTN_EAST = SDL B), B the
++  // bottom one (BTN_SOUTH = SDL A). EDIT on A, OPT on B, as on PortMaster.
++  appSettings.keyMapping.keyEdit[1] = (InputCode){InputDeviceType::gamepad, SDL_CONTROLLER_BUTTON_B};
++  appSettings.keyMapping.keyOpt[1] = (InputCode){InputDeviceType::gamepad, SDL_CONTROLLER_BUTTON_A};
++#else
+   appSettings.keyMapping.keyEdit[1] = (InputCode){InputDeviceType::gamepad, SDL_CONTROLLER_BUTTON_A};
+   appSettings.keyMapping.keyOpt[1] = (InputCode){InputDeviceType::gamepad, SDL_CONTROLLER_BUTTON_B};
++#endif
+   appSettings.keyMapping.keyPlay[1] = (InputCode){InputDeviceType::gamepad, SDL_CONTROLLER_BUTTON_START};
+   appSettings.keyMapping.keyShift[1] = (InputCode){InputDeviceType::gamepad, SDL_CONTROLLER_BUTTON_BACK};
+   appSettings.keyMapping.keyMotionLive[1] = (InputCode){InputDeviceType::gamepad, SDL_CONTROLLER_BUTTON_LEFTSHOULDER};
+@@ -128,6 +135,21 @@
+   if (input.deviceType == InputDeviceType::none) return "---";
+ 
+   if (input.deviceType == InputDeviceType::gamepad) {
++#ifdef MORTAR_BUILD
++    // Name the Brick's face buttons by their labels (SDL names positions).
++    switch (input.code) {
++      case SDL_CONTROLLER_BUTTON_A: return "B";
++      case SDL_CONTROLLER_BUTTON_B: return "A";
++      case SDL_CONTROLLER_BUTTON_X: return "Y";
++      case SDL_CONTROLLER_BUTTON_Y: return "X";
++      case SDL_CONTROLLER_BUTTON_BACK: return "Select";
++      case SDL_CONTROLLER_BUTTON_START: return "Start";
++      case SDL_CONTROLLER_BUTTON_LEFTSHOULDER: return "L1";
++      case SDL_CONTROLLER_BUTTON_RIGHTSHOULDER: return "R1";
++      case gamepadTriggerLeft: return "L2";
++      case gamepadTriggerRight: return "R2";
++    }
++#endif
+     switch (input.code) {
+       case SDL_CONTROLLER_BUTTON_A: return "Pad A";
+       case SDL_CONTROLLER_BUTTON_B: return "Pad B";
+--- a/tracker/platforms/sdl2/corelib_mainloop.cpp
++++ b/tracker/platforms/sdl2/corelib_mainloop.cpp
+@@ -25,7 +25,7 @@
+ static int frameTimeUs;
+ 
+ void mainLoopSetTargetFps(int fps) {
+-#if defined(PORTMASTER_BUILD) || defined(MIYOOPORTS_BUILD)
++#if defined(PORTMASTER_BUILD) || defined(MIYOOPORTS_BUILD) || defined(MORTAR_BUILD)
+   requestedFps = fps < 1 ? 1 : (fps > 60 ? 60 : fps);
+ #else
+   (void)fps;
+@@ -742,7 +742,7 @@
+ 
+     busytime = SDL_GetTicks() - start;
+     frameTimeUs = (int)(busytime * 1000);
+-#if defined(PORTMASTER_BUILD) || defined(MIYOOPORTS_BUILD)
++#if defined(PORTMASTER_BUILD) || defined(MIYOOPORTS_BUILD) || defined(MORTAR_BUILD)
+     int targetFps = SDL_GetTicks() < interactionUntil ? 60 : requestedFps;
+ #else
+     int targetFps = FPS;
+--- a/tracker/src/common.cpp
++++ b/tracker/src/common.cpp
+@@ -13,12 +13,16 @@
+ static char settingsPath[PATH_LENGTH + 32];
+ static char autosavePath[PATH_LENGTH + 32];
+ static char lineBuffer[1024];
++#ifdef MORTAR_BUILD
++static const int kAudioSampleRate = 44100; // the Brick codec's dmix rate
++#else
+ static const int kAudioSampleRate = 48000;
++#endif
+ 
+ static int defaultAudioBufferSize(void) {
+ #ifdef WEB_BUILD
+   return 1024;
+-#elif defined(PORTMASTER_BUILD)
++#elif defined(PORTMASTER_BUILD) || defined(MORTAR_BUILD)
+   return 512;
+ #elif defined(ANDROID_BUILD) || defined(DESKTOP_BUILD)
+   return 256;
+--- a/tracker/src/corelib/corelib_file.cpp
++++ b/tracker/src/corelib/corelib_file.cpp
+@@ -75,7 +75,13 @@
+ #if defined(ANDROID_BUILD) || defined(MACOS_BUILD) || defined(_WIN32)
+   return 0;
+ #else
++#ifdef MORTAR_BUILD
++  // Mortar: installed read-only in the Nix store, like an AppImage mount;
++  // data lives in $XDG_DATA_HOME/ChooChooTracker (seeded by the launcher).
++  return 1;
++#else
+   return getenv("APPIMAGE") != NULL;
++#endif
+ #endif
+ }
+ 

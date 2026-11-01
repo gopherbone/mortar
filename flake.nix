@@ -79,6 +79,13 @@
                 order = 20;
                 command = "exec ${config.mortar.gpu.sdlRun}/bin/mortar-sdl-run ${config.mortar.apps.m8c.package}/bin/m8c-brick";
               };
+              choochoo = {
+                name = "ChooChoo";
+                description = "Tracker · groovebox";
+                icon = "pad";
+                order = 22;
+                command = "exec ${config.mortar.gpu.sdlRun}/bin/mortar-sdl-run ${config.mortar.apps.choochootracker.package}/bin/choochootracker";
+              };
               pico8 = {
                 name = "PICO-8";
                 description = "Fantasy console, Splore";

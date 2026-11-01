@@ -5,6 +5,8 @@
 #   puzzlescript  PuzzleScript engine (C core + Rust/SDL3 shell)
 #   m8c           Dirtywave M8 / M8 Headless client. Plug the M8 into the
 #                 Brick's TOP USB-C port (USB host).
+#   choochootracker  multi-engine tracker / groovebox ("ChooChoo"); see
+#                 pkgs/choochootracker for controls, data dir and MIDI.
 #
 # Display: the sessions start both through `mortar-sdl-run` (brick-gpu.nix),
 # which puts them on the PowerVR GPU (pkgs/sdl3-pvr). If that fails they
@@ -50,6 +52,15 @@ in
         description = "PICO-8 built from the user-supplied Raspberry Pi zip.";
       };
     };
+    choochootracker = {
+      enable = lib.mkEnableOption "ChooChooTracker, a multi-engine music tracker" // { default = true; };
+      package = lib.mkOption {
+        type = lib.types.package;
+        default = pkgs.callPackage ../pkgs/choochootracker { };
+        defaultText = lib.literalExpression "pkgs.callPackage ../pkgs/choochootracker { }";
+        description = "ChooChooTracker (Mortar build) with its launcher.";
+      };
+    };
     m8c = {
       enable = lib.mkEnableOption "m8c, the M8 tracker client" // { default = true; };
       package = lib.mkOption {
@@ -65,6 +76,7 @@ in
     environment.systemPackages =
       lib.optional (cfg.puzzlescript.enable && cfg.puzzlescript.package != null) cfg.puzzlescript.package
       ++ lib.optional cfg.m8c.enable cfg.m8c.package
+      ++ lib.optional cfg.choochootracker.enable cfg.choochootracker.package
       ++ lib.optional cfg.pico8.enable cfg.pico8.package
       ++ [ pkgs.alsa-utils ];
 
