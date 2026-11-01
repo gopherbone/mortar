@@ -51,6 +51,8 @@
             });
           }
           ./modules/mortar-greeter.nix
+          ./modules/mortar-shell.nix
+          { mortar.shell.enable = true; }
           ({ config, pkgs, ... }: {
             mortar.greeter.enable = true;
             mortar.greeter.sessions = {
