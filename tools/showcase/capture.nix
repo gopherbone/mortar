@@ -26,6 +26,7 @@
   ncurses,
   util-linux,
   inetutils,
+  libfaketime,
   jq,
   makeFontsConf,
   dejavu_fonts,
@@ -377,7 +378,12 @@ let
   # The filming script: shell, clips, frames.
   run = writeShellScript "showcase-run" ''
     log=$out/shell.log
+    # Every run (and every app in it) starts the wall clock at 10:30, so
+    # the clocks agree from one capture to the next.
+    off=$(( $(date -d '2026-11-01 10:30:00' +%s) - $(date +%s) ))
+    [ $off -ge 0 ] && off=+$off
     MORTAR_SHELL_LOG=info,mortar_shell=debug NO_COLOR=1 \
+      FAKETIME_DONT_FAKE_MONOTONIC=1 faketime -f "''${off}s" \
       mortar-shell run --backend headless --config ${config} --socket wayland-0 2> $log &
     shell=$!
     trap 'kill $shell 2>/dev/null || true' EXIT
@@ -460,7 +466,7 @@ let
 in
 runCommand "mortar-showcase-capture${lib.optionalString apps "-apps"}"
   {
-    nativeBuildInputs = [ mortar-shell jq util-linux inetutils ];
+    nativeBuildInputs = [ mortar-shell jq util-linux inetutils libfaketime ];
     FONTCONFIG_FILE = makeFontsConf { fontDirectories = [ dejavu_fonts ]; };
     passthru = { inherit mortar-shell mortar-ai fakeClaude config run; };
   }
