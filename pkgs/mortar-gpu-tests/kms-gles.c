@@ -15,6 +15,8 @@
 //          --fmt=xrgb|xbgr|argb|abgr (dumb buffer fourcc, default xrgb)
 //          --dump=FILE (write the last presented buffer, raw XRGB at its pitch)
 //          --hold=SEC (keep the last frame on screen before restoring the CRTC)
+//          --delay=MS (after each flip completes, wait MS before drawing the
+//                      next frame: moves the GPU's memory burst within the scanout)
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
 #include <GLES2/gl2.h>
@@ -185,7 +187,7 @@ static void draw_pattern(struct buf *b, int f)
 int main(int argc, char **argv)
 {
 	const char *what = argc > 1 ? argv[1] : "import";
-	int frames = 300, show = 0, novsync = 0, hold = 0;
+	int frames = 300, show = 0, novsync = 0, hold = 0, delay = 0;
 	const char *dump = NULL;
 	uint32_t fourcc = DRM_FORMAT_XRGB8888;
 	for (int i = 2; i < argc; i++) {
@@ -196,6 +198,7 @@ int main(int argc, char **argv)
 		else if (!strcmp(argv[i], "--fmt=abgr")) fourcc = DRM_FORMAT_ABGR8888;
 		else if (!strncmp(argv[i], "--dump=", 7)) dump = argv[i] + 7;
 		else if (!strncmp(argv[i], "--hold=", 7)) hold = atoi(argv[i] + 7);
+		else if (!strncmp(argv[i], "--delay=", 8)) delay = atoi(argv[i] + 8);
 		else frames = atoi(argv[i]);
 	}
 	int import = !strcmp(what, "import"), pattern = !strcmp(what, "pattern");
@@ -265,6 +268,10 @@ int main(int argc, char **argv)
 	double t0 = now(), tgpu = 0, tcopy = 0;
 	int cur = 1;
 	for (int f = 0; f < frames; f++) {
+		if (delay) {
+			wait_flip();
+			usleep(delay * 1000);
+		}
 		double a = now();
 		if (pattern) {
 			draw_pattern(&b[cur], f);

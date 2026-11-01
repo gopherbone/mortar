@@ -13,6 +13,7 @@ stdenv.mkDerivation {
     $CC -O2 -Wall -o egl-pbuffer egl-pbuffer.c $I $L
     $CC -O2 -Wall -o egl-window egl-window.c $I $L -lm
     $CC -O2 -Wall -o kms-gles kms-gles.c $I $L $(pkg-config --libs libdrm)
+    $CC -O2 -Wall -o devmem devmem.c
   '';
-  installPhase = "mkdir -p $out/bin; cp egl-pbuffer egl-window kms-gles $out/bin/";
+  installPhase = "mkdir -p $out/bin; cp egl-pbuffer egl-window kms-gles devmem $out/bin/";
 }
