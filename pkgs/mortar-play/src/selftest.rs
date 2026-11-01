@@ -38,6 +38,10 @@ pub struct Report {
     pub ms_per_frame: f64,
     /// Share of one CPU core at the game's frame rate.
     pub core_load: f64,
+    /// Average cost of the CPU presenter's work per frame (convert done in
+    /// the callback; this is the scale into a screen-sized buffer, as for
+    /// wl_shm), ms.
+    pub scale_ms: f64,
     pub shots: Vec<String>,
     pub distinct_colors: usize,
     pub audio_rms: f64,
@@ -63,6 +67,9 @@ pub fn run(cfg: &Config, sys_id: &str, rom: Option<&Path>, o: &Opts) -> Result<R
     let mut held = Held::default();
     let presses: Vec<(u64, Button, u64)> = o.press.iter().filter_map(|(f, b, n)| Button::parse(b).map(|b| (*f, b, *n))).collect();
     let mut run_time = 0.0;
+    let mut scale_time = 0.0;
+    let mut scaler = video::Scaler::default();
+    let mut screen = vec![0u32; (o.size.0 * o.size.1) as usize];
     let mut samples: Vec<i16> = Vec::new();
     for frame in 1..=o.frames {
         for &(f, b, n) in &presses {
@@ -78,6 +85,13 @@ pub fn run(cfg: &Config, sys_id: &str, rom: Option<&Path>, o: &Opts) -> Result<R
             mixer.set_core_rate(s.sample_rate());
         }
         run_time += t.elapsed().as_secs_f64();
+        let t = Instant::now();
+        {
+            let f = s.display_frame();
+            let dst = video::layout(sys.scaling, f.w, f.h, s.aspect(), o.size.0, o.size.1);
+            scaler.scale(&f, dst, &mut screen, o.size.0 as usize);
+        }
+        scale_time += t.elapsed().as_secs_f64();
         samples.extend_from_slice(s.audio());
         mixer.push(s.audio());
         if o.shots.contains(&frame) {
@@ -92,6 +106,7 @@ pub fn run(cfg: &Config, sys_id: &str, rom: Option<&Path>, o: &Opts) -> Result<R
     r.frames = o.frames;
     r.ms_per_frame = run_time * 1000.0 / o.frames.max(1) as f64;
     r.core_load = r.ms_per_frame * s.fps() / 1000.0;
+    r.scale_ms = scale_time * 1000.0 / o.frames.max(1) as f64;
     {
         let f = s.display_frame();
         r.width = f.w;

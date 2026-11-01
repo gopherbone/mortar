@@ -618,11 +618,12 @@ impl App {
                         Some(Target::System(i)) => {
                             if self.shelves[i].games.is_empty() {
                                 let sys = &self.cfg.systems[i];
-                                let mut lines = vec![format!("Copy {} games into a folder named {} in either place:", sys.name, sys.folders.first().cloned().unwrap_or_default())];
+                                let place = if self.shelves[i].dirs.len() > 1 { "one of these folders" } else { "this folder" };
+                                let mut lines = vec![format!("Copy {} games into {place}:", sys.name)];
                                 lines.extend(self.shelves[i].dirs.iter().map(|d| d.to_string_lossy().into_owned()));
                                 lines.push(format!("Files: {}, or .zip / .7z archives.", sys.extensions.join(", ")));
                                 lines.push("From your computer, over SSH:".into());
-                                lines.push(format!("scp *.{} root@mortar.local:{}/", sys.extensions.first().cloned().unwrap_or_default(), self.shelves[i].dirs[0].display()));
+                                lines.push(format!("scp -r GAMES root@mortar.local:{}/", self.shelves[i].dirs[0].display()));
                                 self.screen = Screen::Message {
                                     crumb: format!("Games / {}", sys.tag),
                                     title: "No games yet".into(),
