@@ -4,7 +4,10 @@
 //! shapes (flat fills mixed toward the ground, thin ink edges, no
 //! gradients), like little screensavers:
 //!
-//! - Apps: zig-zag chevron stripes drifting slowly on the diagonal.
+//! - Apps: zig-zag lines of marching ants drifting slowly on the
+//!   diagonal: ink dashes running along a soft yellow line, neighbouring
+//!   lines marching opposite ways, each line drawing itself in from the
+//!   left and then erasing, out of step with its neighbours.
 //! - Games: Conway's Game of Life on 24 px cells, stepped 4 times a
 //!   second, each cell growing in and shrinking out; reseeded with a
 //!   glider when it settles.
@@ -13,7 +16,7 @@
 //! - Settings: a sliding checkerboard whose squares flip as a wave passes.
 //!
 //! ▲▼ nudges it (`nudge`): a scroll step, one Life generation, a burst of
-//! orbit speed. Nothing runs while the cross is not on screen; Reduce
+//! orbit or marching speed. Nothing runs while the cross is not on screen; Reduce
 //! motion keeps it still. Everything is drawn with the UI's ordinary
 //! polygons and strokes, so it costs a few hundred small fills a frame.
 
@@ -27,6 +30,12 @@ use mortar_ui::gfx::Color;
 pub const STRIP_X: f32 = 744.0;
 pub const STRIP_W: f32 = 1024.0 - STRIP_X;
 const STRIP_H: f32 = 768.0;
+
+/// Marching ants: dash and gap (px), speed (px/s), draw-and-erase cycle (s).
+const ANT_ON: f32 = 9.0;
+const ANT_OFF: f32 = 7.0;
+const ANT_SPEED: f32 = 22.0;
+const ANT_CYCLE: f32 = 7.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
@@ -166,6 +175,8 @@ pub struct Patterns {
     pub t: f32,
     /// Orbit time: runs faster for a moment after a nudge.
     orbit_t: f32,
+    /// How far the zig-zags' ants have marched (px); faster after a nudge.
+    pub march: f32,
     boost: f32,
     /// A scroll offset (px) that ▲▼ push, eased.
     pub nudge: Spring,
@@ -184,7 +195,7 @@ impl Patterns {
         let mut nudge = Spring::new(0.0);
         nudge.k_mul = 0.4;
         // a nice still frame for Reduce motion: some time in
-        Patterns { t: 7.0, orbit_t: 7.0, boost: 0.0, nudge, life: Life::new(), life_acc: 0.0 }
+        Patterns { t: 7.0, orbit_t: 7.0, march: 0.0, boost: 0.0, nudge, life: Life::new(), life_acc: 0.0 }
     }
 
     /// Advance by `dt` seconds (only while the cross shows).
@@ -192,6 +203,7 @@ impl Patterns {
         let dt = dt.clamp(0.0, 0.05);
         self.t += dt;
         self.orbit_t += dt * (1.0 + 2.5 * self.boost);
+        self.march += dt * ANT_SPEED * (1.0 + 3.0 * self.boost);
         self.boost = (self.boost - dt * 1.2).max(0.0);
         self.life_acc += dt;
         while self.life_acc >= 0.25 {
@@ -208,7 +220,7 @@ impl Patterns {
                 self.life.step();
                 self.life_acc = 0.0;
             }
-            Kind::Orbits => self.boost = 1.0,
+            Kind::Orbits | Kind::Zigzag => self.boost = 1.0,
             _ => self.nudge.set(self.nudge.t + 28.0 * dir),
         }
     }
@@ -235,23 +247,36 @@ impl Patterns {
         b.clip(None);
     }
 
+    /// Marching ants on zig-zag lines.
     fn zigzag(&self, b: &mut B, fill: Color, edge: Color) {
-        let (period, amp, thick, space) = (64.0, 12.0, 18.0, 58.0);
-        let ox = (self.t * 14.0 + self.nudge.x).rem_euclid(period);
-        let oy = (self.t * 9.0 + self.nudge.x * 0.6).rem_euclid(space);
+        use crate::scene::{polyline_len, sub_polyline};
+        let (period, amp, space) = (64.0, 13.0, 46.0);
+        let drift = self.t * 9.0;
+        let ox = (self.t * 14.0).rem_euclid(period);
+        let oy = drift.rem_euclid(space);
+        // lines keep their parity as they drift (so their direction too)
+        let shift = (drift / space).floor() as i32;
         let n = (STRIP_W / (period / 2.0)) as i32 + 4;
-        let mut k = -1.0;
-        while k * space - oy < STRIP_H + space {
-            let base = k * space - oy;
+        let mut k = -1;
+        while k as f32 * space - oy < STRIP_H + space {
+            let base = k as f32 * space - oy;
+            let odd = (k + shift).rem_euclid(2) == 1;
             let pts: Vec<P> = (0..n).map(|i| (i as f32 * period / 2.0 - ox - period / 2.0, base + if i % 2 == 0 { -amp } else { amp })).collect();
-            for w in pts.windows(2) {
-                let (a, c) = (w[0], w[1]);
-                b.poly(&[a, c, (c.0, c.1 + thick), (a.0, a.1 + thick)], fill);
+            let len = polyline_len(&pts);
+            // draw in from the left, then erase from the left; odd lines
+            // half a cycle behind (one draws while its neighbour erases)
+            let c = (self.t / ANT_CYCLE + if odd { 0.5 } else { 0.0 }).fract();
+            let ease = |x: f32| x * x * (3.0 - 2.0 * x);
+            let (w0, w1) = if c < 0.5 { (0.0, ease(c * 2.0) * len) } else { (ease(c * 2.0 - 1.0) * len, len) };
+            let seg = sub_polyline(&pts, w0, w1);
+            if seg.len() >= 2 {
+                b.stroke(&seg, false, 7.0, fill);
+                // the ants: dashes anchored to the line, marching one way
+                // on even lines and the other on odd ones
+                let phase = if odd { -self.march } else { self.march } + w0;
+                b.dashed(&seg, 2.5, edge, ANT_ON, ANT_OFF, phase);
             }
-            b.stroke(&pts, false, 1.5, edge);
-            let low: Vec<P> = pts.iter().map(|p| (p.0, p.1 + thick)).collect();
-            b.stroke(&low, false, 1.5, edge);
-            k += 1.0;
+            k += 1;
         }
     }
 
@@ -365,6 +390,22 @@ mod tests {
             changed |= l.cells != before;
         }
         assert!(changed);
+    }
+
+    #[test]
+    fn ants_march_and_a_nudge_hurries_them() {
+        let mut p = Patterns::new();
+        p.step(1.0 / 30.0);
+        let m0 = p.march;
+        for _ in 0..30 {
+            p.step(1.0 / 30.0);
+        }
+        let calm = p.march - m0;
+        assert!((calm - ANT_SPEED).abs() < 1.0, "{calm} px in a second");
+        p.nudge(Kind::Zigzag, 1.0);
+        let m1 = p.march;
+        p.step(1.0 / 30.0);
+        assert!(p.march - m1 > ANT_SPEED / 30.0 * 3.0, "kicked");
     }
 
     #[test]

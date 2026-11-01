@@ -229,8 +229,11 @@ blocks with 1 px ink outlines, isometric illustrations.
     category (`patterns.rs`) in a strip at the right edge (x 744 to the
     edge, full height, clear of the rows' band and text), made of the
     home screen's flat shapes: fills in the category's colour mixed 35%
-    toward the ground, thin ink edges, no gradients. Apps: zig-zag
-    chevron stripes drifting slowly on the diagonal. Games: Conway's
+    toward the ground, thin ink edges, no gradients. Apps: marching
+    ants: zig-zag lines drifting on the diagonal, ink dashes (cut on the
+    CPU, `B::dashed`) running along a soft yellow line, neighbouring lines
+    marching opposite ways, each line drawing itself in and then erasing
+    on a 7 s cycle, half a cycle out of step with its neighbours. Games: Conway's
     Game of Life on 24 px cells (a 12 x 32 torus) stepped 4 times a
     second, each cell growing in and shrinking out over ~120 ms; it
     starts from an R-pentomino and two gliders, and a glider drops in
@@ -240,7 +243,7 @@ blocks with 1 px ink outlines, isometric illustrations.
     like cards as a wave passes down the diagonal (each pass swaps the
     board). A category change pushes the old pattern out and the new one
     in, the way the categories move, on a spring; ▲▼ nudge it (a scroll
-    step, one Life generation, a burst of orbit speed). It runs only
+    step, one Life generation, a burst of orbit or marching speed). It runs only
     while the cross shows and nothing covers it; Reduce motion keeps it
     on a still frame. (A lava lamp came first; on the device it was too
     dominant, and the user preferred screensaver-like patterns.)
