@@ -59,6 +59,17 @@ in
       defaultText = lib.literalExpression "pkgs.callPackage ../pkgs/sdl3-pvr { pvr-ddk = config.mortar.gpu.package; mortar-wlegl = config.mortar.gpu.wlegl; }";
       description = "SDL3 with the PowerVR (vivante-style) video backend.";
     };
+    cmaMegabytes = lib.mkOption {
+      type = lib.types.ints.positive;
+      default = 128;
+      description = ''
+        Size of the CMA area (the kernel default is 64 MB). Every scanout
+        buffer is CMA (the display has no IOMMU): fbdev and brick_dc_drm
+        take 9 MB each, mortar-shell's swapchain 9 MB, and each GPU app in
+        the shell 6-12 MB of dumb buffers; three GPU apps exhausted 64 MB.
+        Free CMA pages still serve movable allocations.
+      '';
+    };
     sdlRun = lib.mkOption {
       type = lib.types.package;
       readOnly = true;
@@ -102,6 +113,7 @@ in
       (kp.callPackage ../pkgs/brick-dc-drm { stdenv = pkgs.gcc15Stdenv; })
     ];
     boot.kernelModules = [ "pvrsrvkm" "brick_dc_drm" ];
+    boot.kernelParams = [ "cma=${toString cfg.cmaMegabytes}M" ];
     boot.extraModprobeConfig = ''
       options brick_dc_drm trace=${if cfg.trace then "1" else "0"}
     '';
