@@ -312,13 +312,15 @@ in
 
       services.avahi = {
         enable = true;
-        hostName = "mortar";
         nssmdns4 = true;
-        allowInterfaces = [ "usb0" "wlan0" ];
-        publish = {
-          enable = true;
-          addresses = true;
-          workstation = true;
+        settings.server = {
+          host-name = "mortar";
+          allow-interfaces = [ "usb0" "wlan0" ];
+        };
+        settings.publish = {
+          disable-publishing = false;
+          publish-addresses = true;
+          publish-workstation = true;
         };
       };
 

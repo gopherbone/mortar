@@ -34,6 +34,9 @@
     initialPassword = lib.mkForce null; # trimui-brick.nix sets "trimui"
     hashedPassword = "!"; # locked
   };
+  # NixOS can't see the keys on the card (<card>/ssh-keys/root) and would
+  # otherwise refuse to build a system where root has no password.
+  users.allowNoPasswordLogin = true;
 
   # Every getty (tty1 on the screen, ttyGS0 over USB-C, ttyS0 on the UART
   # pads) logs straight in as root.

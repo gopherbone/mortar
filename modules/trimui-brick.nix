@@ -39,9 +39,11 @@ in {
 
     mainlineKernelPackages = mkOption {
       type = types.raw;
-      default = pkgs.linuxPackagesFor (pkgs.callPackage ../pkgs/linux-trimui-brick.nix { });
+      # GCC 15: the vendor GPU driver (img-rogue) builds with -Werror and
+      # trips a new GCC 16 warning; jkingston tests with GCC 14.
+      default = pkgs.linuxPackagesFor (pkgs.callPackage ../pkgs/linux-trimui-brick.nix { stdenv = pkgs.gcc15Stdenv; });
       defaultText = literalExpression
-        "pkgs.linuxPackagesFor (pkgs.callPackage ../pkgs/linux-trimui-brick.nix { })";
+        "pkgs.linuxPackagesFor (pkgs.callPackage ../pkgs/linux-trimui-brick.nix { stdenv = pkgs.gcc15Stdenv; })";
       description = "Kernel package set used when variant = \"mainline\".";
     };
 
@@ -149,13 +151,13 @@ in {
     # cascading I/O errors, journal abort, read-only remount). Minimize writes:
 
     # Journal to RAM only — no persistent journal on SD card
-    services.journald.extraConfig = ''
-      Storage=volatile
-      RuntimeMaxUse=16M
-      ForwardToConsole=yes
-      TTYPath=/dev/ttyS0
-      MaxLevelConsole=info
-    '';
+    services.journald.settings.Journal = {
+      Storage = "volatile";
+      RuntimeMaxUse = "16M";
+      ForwardToConsole = true;
+      TTYPath = "/dev/ttyS0";
+      MaxLevelConsole = "info";
+    };
 
     # tmpfs for temp directories
     fileSystems."/tmp" = {
