@@ -214,10 +214,18 @@ in
       # Avahi then sees its own name as taken ("mortar-2.local"). Set a
       # stable, locally administered MAC derived from /etc/machine-id before
       # iwd starts.
+      # Set the MAC once, before iwd starts. iwd normally deletes the
+      # kernel's wlan0 and creates its own, which would bring back the
+      # driver's random MAC (and changing the MAC under iwd leaves the
+      # device powered off), so keep the kernel's interface.
+      networking.wireless.iwd.settings.DriverQuirks.DefaultInterface = "*";
+      systemd.services.iwd = {
+        wants = [ "mortar-wlan-mac.service" ];
+        after = [ "mortar-wlan-mac.service" ];
+      };
       systemd.services.mortar-wlan-mac = {
         description = "Stable MAC address for the XR829 Wi-Fi";
-        wantedBy = [ "sys-subsystem-net-devices-wlan0.device" ];
-        bindsTo = [ "sys-subsystem-net-devices-wlan0.device" ];
+        requires = [ "sys-subsystem-net-devices-wlan0.device" ];
         after = [ "sys-subsystem-net-devices-wlan0.device" ];
         before = [ "iwd.service" "network-pre.target" ];
         wants = [ "network-pre.target" ];
@@ -227,9 +235,11 @@ in
           h=$(printf 'mortar-wlan:%s' "$(cat /etc/machine-id)" | sha256sum | cut -c1-10)
           # 02:... = locally administered, unicast
           mac="02:$(echo "$h" | sed 's/../&:/g; s/:$//')"
-          ip link set dev wlan0 down
-          ip link set dev wlan0 address "$mac"
-          echo "wlan0 MAC set to $mac"
+          if [ "$(cat /sys/class/net/wlan0/address)" != "$mac" ]; then
+            ip link set dev wlan0 down
+            ip link set dev wlan0 address "$mac"
+          fi
+          echo "wlan0 MAC is $mac"
         '';
       };
     }

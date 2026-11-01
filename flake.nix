@@ -45,6 +45,28 @@
           ./modules/brick-gpu.nix
           ./modules/mortar-apps.nix
           { mortar.apps.puzzlescript.package = puzzlescript.packages.aarch64-linux.default; }
+          ./modules/mortar-greeter.nix
+          ({ config, pkgs, ... }: {
+            mortar.greeter.enable = true;
+            mortar.greeter.sessions = {
+              games = {
+                name = "PuzzleScript";
+                description = "Puzzle games, controller";
+                icon = "pad";
+                order = 10;
+                command = "${config.mortar.apps.puzzlescript.package}/bin/puzzlescript";
+              };
+              # M8 (m8c) comes back once m8c can get a GL window through the
+              # PowerVR path; today it crashes in renderer_initialize.
+              terminal = {
+                name = "Terminal";
+                description = "Console";
+                icon = "term";
+                order = 30;
+                command = "exec ${pkgs.bashInteractive}/bin/bash --login";
+              };
+            };
+          })
           ./modules/mortar-base.nix
           # SD image: mainline SPL + TF-A + U-Boot at 128 KiB, FAT /boot
           # with extlinux generations, ext4 root.
