@@ -1,0 +1,93 @@
+From: Mortar contributors
+Subject: [PATCH] sunxi: trimui-brick: keep boot loads clear of BL31 and the SCP region
+
+Mortar boots the Brick through sysboot/extlinux instead of a hardcoded booti
+command, so the default environment's load addresses are what NixOS
+generations get. The generic arm64 sunxi layout lets bootm relocate the
+FDT and initrd to the top of bootm_size (0x4a000000), i.e. into the
+vendor/SCP region at 0x48000000-0x48ffffff for any initrd larger than
+16 MiB, and its compressed-kernel window (0x44000000 + 176 MiB) spans that
+region too.
+
+When the A133 vendor SCP support is enabled, use a layout that keeps every
+load clear of BL31 and the vendor region, and boot the FDT and initrd in
+place. Also drop the doubled "allwinner/" from the default fdtfile (the
+Brick's DEFAULT_DEVICE_TREE already includes it), so extlinux FDTDIR
+entries resolve.
+
+Not from jkingston/trimui-brick-firmware; written for Mortar.
+
+--- a/include/configs/sunxi-common.h
++++ b/include/configs/sunxi-common.h
+@@ -68,7 +68,43 @@
+  * We cannot use expressions here, because expressions won't be evaluated in
+  * autoconf.mk.
+  */
+-#ifdef CONFIG_ARM64
++#if defined(CONFIG_ARM64) && defined(CONFIG_SUNXI_A133_VENDOR_SCP)
++/*
++ * TrimUI Brick: A133, 1 GiB DRAM at 0x40000000, mainline TF-A and the vendor
++ * SCP. The generic arm64 layout below lets bootm relocate the FDT/initrd to
++ * the top of bootm_size (0x4a000000), which lands in the vendor region at
++ * 0x48000000 (SCP service FDT at 0x48100000) for any initrd over 16 MiB.
++ * Keep every load clear of BL31 and of that region:
++ *
++ *   0x40000000-0x4003ffff  TF-A BL31 (reserved; never load here)
++ *   0x40200000             kernel Image, 2 MiB aligned so booti runs it in
++ *                          place (room: 94 MiB incl. BSS)
++ *   0x46000000             FDT (grown in place, see fdt_high)
++ *   0x46100000             boot script
++ *   0x46200000             extlinux.conf (pxefile_addr_r)
++ *   0x46300000             FDT overlays
++ *   0x48000000-0x48ffffff  vendor/SCP region (reserved)
++ *   0x49000000             initrd (room: 624 MiB)
++ *   0x70000000             compressed-kernel scratch (96 MiB)
++ *   top of DRAM            relocated U-Boot, heap, stack
++ *
++ * fdt_high/initrd_high = all ones: boot the FDT and initrd where they were
++ * loaded instead of copying them to the top of bootm_size.
++ */
++#define BOOTM_SIZE        __stringify(0x30000000)
++#define KERNEL_ADDR_R     __stringify(0x40200000)
++#define KERNEL_COMP_ADDR_R __stringify(0x70000000)
++#define KERNEL_COMP_SIZE  __stringify(0x6000000)
++#define FDT_ADDR_R        __stringify(0x46000000)
++#define SCRIPT_ADDR_R     __stringify(0x46100000)
++#define PXEFILE_ADDR_R    __stringify(0x46200000)
++#define FDTOVERLAY_ADDR_R __stringify(0x46300000)
++#define RAMDISK_ADDR_R    __stringify(0x49000000)
++#define MEM_LAYOUT_NO_RELOC_SETTINGS \
++	"fdt_high=0xffffffffffffffff\0" \
++	"initrd_high=0xffffffffffffffff\0"
++
++#elif defined(CONFIG_ARM64)
+ /*
+  * Boards seem to come with at least 512MB of DRAM.
+  * The kernel should go at 512K, which is the default text offset (that will
+@@ -140,8 +176,13 @@
+ 	"scriptaddr=" SCRIPT_ADDR_R "\0" \
+ 	"pxefile_addr_r=" PXEFILE_ADDR_R "\0" \
+ 	"fdtoverlay_addr_r=" FDTOVERLAY_ADDR_R "\0" \
+-	"ramdisk_addr_r=" RAMDISK_ADDR_R "\0"
++	"ramdisk_addr_r=" RAMDISK_ADDR_R "\0" \
++	MEM_LAYOUT_NO_RELOC_SETTINGS
+ 
++#ifndef MEM_LAYOUT_NO_RELOC_SETTINGS
++#define MEM_LAYOUT_NO_RELOC_SETTINGS ""
++#endif
++
+ #ifdef CONFIG_ARM64
+ #define MEM_LAYOUT_ENV_EXTRA_SETTINGS \
+ 	"kernel_comp_addr_r=" KERNEL_COMP_ADDR_R "\0" \
+@@ -280,7 +321,10 @@
+ 	CONSOLE_STDIN_SETTINGS \
+ 	CONSOLE_STDOUT_SETTINGS
+ 
+-#if defined(CONFIG_ARM64) || defined(CONFIG_RISCV)
++#if defined(CONFIG_SUNXI_A133_VENDOR_SCP)
++/* The Brick defconfig's DEFAULT_DEVICE_TREE already carries "allwinner/". */
++#define FDTFILE CONFIG_DEFAULT_DEVICE_TREE ".dtb"
++#elif defined(CONFIG_ARM64) || defined(CONFIG_RISCV)
+ #define FDTFILE "allwinner/" CONFIG_DEFAULT_DEVICE_TREE ".dtb"
+ #else
+ #define FDTFILE CONFIG_DEFAULT_DEVICE_TREE ".dtb"
