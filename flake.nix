@@ -11,6 +11,10 @@
       supportedSystems = [ "x86_64-linux" "aarch64-linux" ];
       forAllSystems = nixpkgs.lib.genAttrs supportedSystems;
       targetSystem = "aarch64-linux";
+      # Vendor SCP blob (not redistributable) and the U-Boot image embedding it.
+      # Build locally only; never push these to a public cache.
+      mortarUnfree = pkg: builtins.elem (nixpkgs.lib.getName pkg)
+        [ "trimui-brick-scp" "u-boot-trimui-brick-mainline" ];
     in {
       nixosConfigurations.trimui-brick = nixpkgs.lib.nixosSystem {
         system = targetSystem;
@@ -32,23 +36,28 @@
           ./modules/trimui-brick.nix
           ./modules/mortar-usb.nix
           ./configuration.nix
+          # SD image: mainline SPL + TF-A + U-Boot at 128 KiB, FAT /boot
+          # with extlinux generations, ext4 root.
+          (import ./image/build-image-mainline.nix { })
           ({ lib, ... }: {
             nixpkgs.hostPlatform = lib.mkDefault "aarch64-linux";
+            nixpkgs.config.allowUnfreePredicate = mortarUnfree;
             hardware.trimui-brick.variant = "mainline";
             # configuration.nix sets "trimui-brick"
             networking.hostName = lib.mkForce "mortar";
-            # TODO(bootloader): add the TF-A /reserved-memory overlay
-            # (0x40000000, size 0x40000) here once it exists:
-            #   hardware.trimui-brick.extraDtOverlays = [
-            #     { name = "tfa-reserved-memory"; dtsFile = ./firmware/mainline/<...>.dtso; }
-            #   ];
+            # TF-A /reserved-memory (0x40000000, 0x40000, no-map)
+            hardware.trimui-brick.extraDtOverlays = [
+              { name = "tf-a-reserved"; dtsFile = ./firmware/mainline/reserved-memory.dtso; }
+            ];
+            # FAT /boot is 512 MiB; keep a handful of generations
+            boot.loader.generic-extlinux-compatible.configurationLimit = 5;
           })
         ];
       };
 
       packages = forAllSystems (system:
         let
-          pkgs = import nixpkgs { inherit system; };
+          pkgs = import nixpkgs { inherit system; config.allowUnfreePredicate = mortarUnfree; };
           nixosConfig = self.nixosConfigurations.trimui-brick.config;
           mainlineConfig = self.nixosConfigurations.brick-mainline.config;
 
@@ -106,23 +115,9 @@
           linux-trimui-brick = mainlineConfig.boot.kernelPackages.kernel;
           mortar-toplevel = mainlineConfig.system.build.toplevel;
 
-          # TODO(bootloader): wire up the mainline SD image. It is built by
-          # image/build-image-mainline.nix (MBR, FAT p1 = /boot with
-          # extlinux.conf for U-Boot sysboot, ext4 p2 = root) from the
-          # firmware/mainline/ bootloader, both owned by the bootloader work.
-          # Expected shape:
-          #
-          #   sd-image-mainline = import ./image/build-image-mainline.nix {
-          #     inherit pkgs;
-          #     lib = nixpkgs.lib;
-          #     config = mainlineConfig;
-          #     # bootloader = pkgs.callPackage ./firmware/mainline/... { };
-          #   };
-          #
-          # mainlineConfig provides boot.kernelPackages.kernel,
-          # system.build.{initialRamdisk,toplevel}, boot.kernelParams,
-          # hardware.deviceTree.package and hardware.deviceTree.name
-          # (= "allwinner/sun50i-a133-trimui-brick.dtb", overlays applied).
+          # Mainline boot chain + SD image (fully mainline SPL/TF-A/U-Boot)
+          u-boot-mainline = mainlineConfig.system.build.mortarBootloader;
+          sd-image-mainline = mainlineConfig.system.build.sdImage;
 
           default = self.packages.${system}.sd-image;
         }
