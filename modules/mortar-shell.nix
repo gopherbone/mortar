@@ -117,13 +117,13 @@ let
   argv = c: if builtins.isString c then [ "${pkgs.runtimeShell}" "-c" c ] else c;
 
   footIni = pkgs.writeText "mortar-foot.ini" ''
-    # Mortar terminal: Geist Mono in the Pond palette. [colors-light] is the
+    # Mortar terminal: JetBrains Mono in the Pond palette. [colors-light] is the
     # day ground with ink text, [colors-dark] the night surface; which one:
     # mortarTerminal. Every ANSI colour is a text colour: the regular ones
     # reach WCAG 4.5:1 on their background, the bright ones 3:1 (day:
     # deep shades of the accents; ratios in the comments). The accents as
     # blocks (the prompt's key cap) come as 24-bit colours from zsh.
-    font=Geist Mono:size=${toString cfg.terminal.fontSize}
+    font=JetBrains Mono:size=${toString cfg.terminal.fontSize}
     pad=16x12 center
     initial-color-theme=dark
     [cursor]
@@ -581,9 +581,10 @@ in
           structuredExtraConfig.INPUT_UINPUT = lib.kernel.module;
         };
 
-        # foot and other apps find the Mortar fonts (Geist Mono) here.
+        # foot and other apps find the Mortar fonts here (JetBrains Mono for
+        # the terminal: has an italic face for zsh's grey suggestions).
         fonts.fontconfig.enable = lib.mkDefault true;
-        fonts.packages = [ cfg.package.fonts ];
+        fonts.packages = [ cfg.package.fonts pkgs.jetbrains-mono ];
 
         # The power key belongs to the shell: a tap sleeps/wakes the screen,
         # a hold opens its power menu. logind must not power off on it (its
