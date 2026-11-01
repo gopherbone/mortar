@@ -41,6 +41,14 @@ const GRID: f32 = 28.0;
 const GROUT: f32 = 4.0;
 /// Grid rows start this far down (27 rows of 28 fill 756 of the 768).
 const Y0: f32 = 6.0;
+/// The patterns span the whole screen (the screensaver shows all of
+/// them; the strip shows their right-hand end): 37 grid columns from
+/// OX, so the strip's left edge falls on a column boundary.
+const SCREEN_W: f32 = 1024.0;
+const OX: f32 = -12.0;
+const NCOL: i32 = 37;
+/// The first column in the strip ((STRIP_X - OX) / GRID).
+const STRIP_COL: usize = 28;
 
 /// The inchworm step: a hop every STEP s, taking HOP s of it.
 const STEP: f32 = 0.9;
@@ -72,7 +80,7 @@ fn tile(b: &mut B, col: f32, row: f32, s: f32, dx: f32, c: Color) {
 
 // ------------------------------------------------------------------ life ----
 
-const LW: usize = 9;
+const LW: usize = 37;
 const LH: usize = 27;
 
 /// Conway's Game of Life on a small torus, with a shown size per cell that
@@ -85,17 +93,21 @@ pub struct Life {
     hist: Vec<u64>,
     rng: u32,
     pub generation: u32,
+    /// Generations the strip has been empty (it gets a glider at 12).
+    quiet: u16,
 }
 
 impl Life {
     pub fn new() -> Life {
-        let mut l = Life { cells: vec![false; LW * LH], age: vec![0; LW * LH], shown: vec![0.0; LW * LH], hist: Vec::new(), rng: 0x6d72_7461, generation: 0 };
+        let mut l = Life { cells: vec![false; LW * LH], age: vec![0; LW * LH], shown: vec![0.0; LW * LH], hist: Vec::new(), rng: 0x6d72_7461, generation: 0, quiet: 0 };
         // an R-pentomino (long-lived) and two gliders
-        for (x, y) in [(5, 6), (6, 6), (4, 7), (5, 7), (5, 8)] {
+        // seeded in the strip (what shows most of the time)
+        let c = STRIP_COL;
+        for (x, y) in [(c + 5, 6), (c + 6, 6), (c + 4, 7), (c + 5, 7), (c + 5, 8)] {
             l.set(x, y, true);
         }
-        l.glider(1, 15);
-        l.glider(6, 21);
+        l.glider(c + 1, 15);
+        l.glider(c + 5, 21);
         // start on an interesting frame (also what Reduce motion shows)
         for _ in 0..12 {
             l.step();
@@ -164,6 +176,15 @@ impl Life {
             if self.hist.len() > 12 {
                 self.hist.remove(0);
             }
+        }
+        // the strip (usually all that shows) must not stay empty while
+        // life goes on elsewhere
+        let strip_alive = (0..LH).any(|y| (STRIP_COL..LW).any(|x| self.alive(x, y)));
+        self.quiet = if strip_alive { 0 } else { self.quiet + 1 };
+        if self.quiet >= 12 {
+            let (x, y) = (STRIP_COL + (self.rand() as usize) % 6, (self.rand() as usize) % LH);
+            self.glider(x, y);
+            self.quiet = 0;
         }
     }
 
@@ -244,20 +265,22 @@ impl Patterns {
         }
     }
 
-    /// Draw `kind` in the strip, moved `dx` sideways (transitions), in the
-    /// current transform (the cross page). Only the part of the strip it
-    /// still or already covers shows, so two never overlap mid-slide.
-    pub fn draw(&self, b: &mut B, pal: &Pal, kind: Kind, dx: f32) {
-        let (x0, x1) = ((STRIP_X + dx).max(STRIP_X), (STRIP_X + dx + STRIP_W).min(STRIP_X + STRIP_W));
-        if x1 - x0 < 0.5 {
+    /// Draw `kind` from screen x `x0` to the right edge (the strip, or more
+    /// of the screen as the screensaver grows; `e` 0..1 is how far it has
+    /// grown), moved `dx` sideways (transitions), in the current transform
+    /// (the cross page). Only the part it still or already covers shows, so
+    /// two never overlap mid-slide.
+    pub fn draw(&self, b: &mut B, pal: &Pal, kind: Kind, dx: f32, x0: f32, e: f32) {
+        let (lo, hi) = ((x0 + dx).max(x0), (SCREEN_W + dx).min(SCREEN_W));
+        if hi - lo < 0.5 {
             return;
         }
-        b.clip(Some([x0, 0.0, x1 - x0, STRIP_H]));
-        b.push(Xf::translate(STRIP_X + dx, 0.0));
+        b.clip(Some([lo, 0.0, hi - lo, STRIP_H]));
+        b.push(Xf::translate(OX + dx, 0.0));
         match kind {
             Kind::Zigzag => self.zigzag(b, pal),
             Kind::Life => self.life_tiles(b, pal),
-            Kind::Scope => self.scope(b, pal),
+            Kind::Scope => self.scope(b, pal, e),
             Kind::Truchet => self.truchet(b, pal),
         }
         b.pop();
@@ -269,7 +292,7 @@ impl Patterns {
     fn zigzag(&self, b: &mut B, pal: &Pal) {
         let cols = [pal.yellow, pal.lavender, pal.dark];
         let tri = [0.0, 1.0, 2.0, 1.0];
-        let n = (STRIP_W / GRID) as i32;
+        let n = NCOL;
         // how far a clock has inched (grid units): whole steps, then an
         // eased hop at the start of each
         let inched = |t: f32| (t / STEP).floor() + ease(((t / STEP).fract() * STEP) / HOP);
@@ -311,34 +334,36 @@ impl Patterns {
         }
     }
 
-    /// The oscilloscope as a mosaic: the Lissajous path quantised to 20 px
-    /// cells; the newest stretch orange, the older lavender, the head ink.
-    fn scope(&self, b: &mut B, pal: &Pal) {
-        const C: f32 = 20.0;
-        const CW: usize = 13;
-        const CH: usize = 38;
+    /// The oscilloscope as a mosaic: the Lissajous path quantised to the
+    /// grid; the newest stretch orange, the older lavender, the head ink.
+    /// It is centred in the strip, and spreads across the screen as the
+    /// screensaver grows (`e`).
+    fn scope(&self, b: &mut B, pal: &Pal, e: f32) {
+        const CW: usize = NCOL as usize;
+        const CH: usize = 27;
         let r = self.ratio + 0.5 * (self.t * 0.06).sin();
-        let (cx, cy, ax, ay) = (STRIP_W / 2.0, STRIP_H / 2.0, 118.0, 340.0);
+        let strip_cx = STRIP_COL as f32 * GRID + (SCREEN_W - STRIP_X) / 2.0;
+        let full_cx = (SCREEN_W - OX) / 2.0;
+        let (cx, cy) = (strip_cx + (full_cx - strip_cx) * e, Y0 + CH as f32 * GRID / 2.0);
+        let (ax, ay) = (110.0 + 320.0 * e, 340.0);
         let breathe = 0.92 + 0.08 * (self.t * 0.7).sin();
         // the rank of the newest sample in each cell (0: none)
         let mut rank = [0u16; CW * CH];
-        let n = 420;
+        let n = 480;
         for k in (0..n).rev() {
-            let s = self.t * 0.9 - k as f32 * 0.014;
+            let s = self.t * 0.9 - k as f32 * 0.013;
             let (x, y) = (cx + ax * breathe * (3.0 * s + 0.6).sin(), cy + ay * breathe * (r * s).sin());
-            let (i, j) = ((x / C).floor(), ((y - 4.0) / C).floor());
+            let (i, j) = ((x / GRID).floor(), ((y - Y0) / GRID).floor());
             if i < 0.0 || j < 0.0 || i as usize >= CW || j as usize >= CH {
                 continue;
             }
             rank[j as usize * CW + i as usize] = (n - k) as u16;
         }
-        let head = (n) as u16;
-        let size = C - 4.0;
+        let head = n as u16;
         for (idx, &rk) in rank.iter().enumerate() {
             if rk == 0 {
                 continue;
             }
-            let (i, j) = ((idx % CW) as f32, (idx / CW) as f32);
             let c = if rk + 3 >= head {
                 pal.dark
             } else if rk as usize > n / 2 {
@@ -346,7 +371,7 @@ impl Patterns {
             } else {
                 pal.lavender
             };
-            b.rect(i * C + 2.0, 4.0 + j * C + 2.0, size, size, c);
+            tile(b, (idx % CW) as f32, (idx / CW) as f32, 1.0, 0.0, c);
         }
     }
 
@@ -356,7 +381,7 @@ impl Patterns {
     fn truchet(&self, b: &mut B, pal: &Pal) {
         let cell = GRID * 2.0;
         let side = cell - GROUT;
-        let span = STRIP_W + STRIP_H + 160.0;
+        let span = (SCREEN_W - OX) + STRIP_H + 160.0;
         let wave = self.t * 70.0 + self.nudge.x;
         let pass = (wave / span).floor() as i32;
         let front = wave.rem_euclid(span) - 80.0;
@@ -368,7 +393,7 @@ impl Patterns {
         };
         let (fill, disc) = (pal.pink, pal.lavender);
         for j in 0..((STRIP_H - Y0) / cell) as i32 + 1 {
-            for i in 0..(STRIP_W / cell) as i32 + 1 {
+            for i in 0..((SCREEN_W - OX) / cell) as i32 + 1 {
                 let (x, y) = (i as f32 * cell, Y0 + j as f32 * cell);
                 let r = ease((front - (x + y)) / 60.0);
                 let base = (hash(i, j) & 1) as i32 + pass;
@@ -402,7 +427,7 @@ mod tests {
 
     #[test]
     fn life_follows_the_rules() {
-        let mut l = Life { cells: vec![false; LW * LH], age: vec![0; LW * LH], shown: vec![0.0; LW * LH], hist: Vec::new(), rng: 1, generation: 0 };
+        let mut l = Life { cells: vec![false; LW * LH], age: vec![0; LW * LH], shown: vec![0.0; LW * LH], hist: Vec::new(), rng: 1, generation: 0, quiet: 0 };
         // a blinker turns over every step
         for x in 4..7 {
             l.set(x, 10, true);

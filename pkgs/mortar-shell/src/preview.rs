@@ -201,10 +201,12 @@ pub fn run(o: &Opts) -> Result<(), String> {
     let launcher = demo_launcher();
     let running = demo_running();
     let none: Vec<RunningInfo> = Vec::new();
-    let prefs = Prefs { night: o.night, ..Prefs::default() };
+    // the screensaver screens: it comes after 30 s (use --at 29000)
+    let screensaver = if o.screen.starts_with("saver") { 30 } else { Prefs::default().screensaver };
+    let prefs = Prefs { night: o.night, screensaver, ..Prefs::default() };
     let s = o.screen.as_str();
     let mut ui = ShellUi::new(prefs, s == "boot");
-    let over_app = s.starts_with("menu") || s.starts_with("cross") || matches!(s, "running" | "cross-switch" | "mixer" | "bluetooth" | "setup-wifi" | "setup-bluetooth" | "settings" | "app" | "osd" | "osd-mute" | "osd-bri" | "osd-home" | "toast" | "achievement" | "flash" | "osk" | "osk-chips" | "osk-chips-focus" | "close" | "swap" | "remote" | "wifi");
+    let over_app = s.starts_with("menu") || s.starts_with("cross") || s.starts_with("saver") || matches!(s, "running" | "cross-switch" | "mixer" | "bluetooth" | "setup-wifi" | "setup-bluetooth" | "settings" | "app" | "osd" | "osd-mute" | "osd-bri" | "osd-home" | "toast" | "achievement" | "flash" | "osk" | "osk-chips" | "osk-chips-focus" | "close" | "swap" | "remote" | "wifi");
     let mut current = if s == "cross-dark" { Some(1) } else if over_app { Some(2) } else { None };
     let run_ref: &[RunningInfo] = if s == "home-empty" { &none } else { &running };
     let host = "brick";
@@ -244,15 +246,21 @@ pub fn run(o: &Opts) -> Result<(), String> {
         "menu" | "menu-running" | "running" => {
             ui.menu_key(&v0);
         }
-        "menu-apps" | "cross-apps" | "cross-dark" | "home-menu" | "menu-games" | "cross-games" | "menu-music" | "cross-music" | "cross-switch" => {
+        "menu-apps" | "cross-apps" | "cross-dark" | "home-menu" | "menu-games" | "cross-games" | "menu-music" | "cross-music" | "cross-switch" | "saver-apps" | "saver-games" | "saver-music" | "saver-settings" | "saver-exit" => {
             ui.menu_key(&v0);
             let n = match s {
-                "menu-games" | "cross-games" => 2,
-                "menu-music" | "cross-music" => 3,
+                "menu-games" | "cross-games" | "saver-games" => 2,
+                "menu-music" | "cross-music" | "saver-music" => 3,
+                "saver-settings" => 4,
                 _ => 1,
             };
             for _ in 0..n {
                 ui.button(Button::Right, false, &v0);
+            }
+            if s == "saver-exit" {
+                // the screensaver has filled the screen; a press brings it back
+                settle(&mut ui, &v0, 33.0);
+                ui.button(Button::A, false, &v0);
             }
             if s == "cross-switch" {
                 // settled on Apps, then Games: the patterns trade places

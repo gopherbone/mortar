@@ -395,6 +395,7 @@ impl Config {
             night,
             suspend: u.suspend,
             idle_minutes: u.idle_minutes,
+            screensaver: crate::shellui::Prefs::default().screensaver,
         }
     }
 }

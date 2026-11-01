@@ -234,7 +234,7 @@ blocks with 1 px ink outlines, isometric illustrations.
     and ink, each inching one grid step at a time with a short eased hop
     (the front tile first, the rest a moment after, like a caterpillar),
     neighbouring bands going opposite ways, out of phase. Games: Conway's
-    Game of Life on the grid (a 9 x 27 torus) stepped 4 times a second,
+    Game of Life on the grid (37 x 27, see below) stepped 4 times a second,
     each tile growing in and shrinking out over ~120 ms, newborn tiles
     yellow and older ones lime; it starts from an R-pentomino and two
     gliders, and a glider drops in when it dies out or repeats. Music:
@@ -252,7 +252,23 @@ blocks with 1 px ink outlines, isometric illustrations.
     on). It runs only while the cross shows and nothing covers it;
     Reduce motion keeps it on a still frame. (A lava lamp came first, then
     thin-lined, faded patterns; the user preferred solid, chunky
-    mosaics.)
+    mosaics.) The patterns are laid out over the whole screen (37 grid
+    columns from x -12, so the strip's edge falls on a tile boundary;
+    Life is a 37 x 27 torus seeded in the strip, with a glider dropped
+    into the strip when it has been empty for 3 s); the strip shows
+    their right-hand end.
+  - Screensaver: after a while with no input on the cross (Settings >
+    Screensaver: Off, 30 s, 1 min (the default), 2 min, 5 min), its
+    pattern grows from the strip over the whole screen in ~1.1 s while
+    the menu, the bars and the list fade out; the scope's figure spreads
+    as it grows. Any button (MENU too) shrinks it back, and that press
+    does nothing else. Only the cross alone triggers it: not Running
+    (live windows), a glass page or the options popup. It redraws at
+    30 fps; after 3 minutes full screen it dims (ground at 35%) and drops
+    to 20 fps. Reduce motion shows it as a still frame at once. The
+    shell's idle sleep (`ui.idleMinutes`) counts input as before, so it
+    still sleeps the screen on time. Full screen it is at most ~1,000
+    solid quads a frame (Life and the scope fill a 37 x 27 grid).
   - The hint bar follows the selection.
   - Sounds: move (category), tick (item), tab (page), drawer / drawerUp
     (open, close, popup), open (go), close (kill), deny (nothing there),
@@ -260,6 +276,7 @@ blocks with 1 px ink outlines, isometric illustrations.
 - Settings screen (MENU > Settings > More settings): slides in from the
   right over the MENU. UI sounds, Haptic ticks, Motion
   (Bouncy/Calm/Snappy), Reduce motion, Palette (Day/Night), Time zone,
+  Sleep, Sleep when idle, Screensaver,
   Wi-Fi networks, Bluetooth devices and Remote access (mortar-setup
   pages), Log out (second A). B goes back to the MENU, MENU closes both.
   Changes are saved in $XDG_STATE_HOME/mortar-shell/prefs.json over the

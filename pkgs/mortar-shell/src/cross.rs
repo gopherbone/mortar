@@ -353,6 +353,12 @@ impl Cross {
         self.closing && self.op.x < 0.02
     }
 
+    /// The screensaver may grow here: the cross alone, settled (not
+    /// Running, a glass page or the options popup).
+    pub(super) fn saver_ok(&self) -> bool {
+        !self.closing && self.on_cross && self.sub.is_none() && self.ctx.is_none() && self.page_x.x > 0.99
+    }
+
     pub(super) fn on_cross(&self) -> bool {
         self.on_cross
     }
@@ -910,9 +916,13 @@ impl ShellUi {
         if let Some(c) = &m.ctx {
             draw_ctx(b, pal, c, g);
         }
+        // the bars fade with the menu under the screensaver
+        let (e, _) = self.saver();
+        b.push_alpha(1.0 - e);
         self.glass_status(b, pal, v, g);
         let hints = self.menu_hints(m, v);
         glass_hints(b, pal, g, &hints);
+        b.pop_alpha();
         b.pop_alpha();
     }
 
@@ -1009,15 +1019,26 @@ impl ShellUi {
 
     fn draw_cross(&self, b: &mut B, pal: &Pal, v: &View, m: &Cross, g: &Glass) {
         let accent = m.cat.accent(pal);
+        // the screensaver: the pattern grows from its strip over the screen
+        // and the menu fades out
+        let (e, dim) = self.saver();
         if m.pattern_visible() {
+            let x0 = patterns::STRIP_X * (1.0 - e);
             // the new pattern slides in as the old one slides out
             let p = m.pat_x.x;
             let off = patterns::STRIP_W * m.pat_dir;
             if let Some(old) = m.pat_from.filter(|_| p < 0.999) {
-                m.patterns.draw(b, pal, old.pattern(), -p * off);
+                m.patterns.draw(b, pal, old.pattern(), -p * off, x0, e);
             }
-            m.patterns.draw(b, pal, m.cat.pattern(), (1.0 - p) * off);
+            m.patterns.draw(b, pal, m.cat.pattern(), (1.0 - p) * off, x0, e);
+            if dim > 0.0 {
+                b.rect(0.0, 0.0, W, H, with_a(pal.ground, dim));
+            }
         }
+        if e >= 0.999 {
+            return;
+        }
+        b.push_alpha(1.0 - e);
         let s = self.cross_sel[m.cat.i()];
         // rows first, the categories over them (a row moving past never
         // covers an icon or its shadow)
@@ -1036,6 +1057,7 @@ impl ShellUi {
         if let Some(sub) = &m.sub {
             self.draw_sub(b, pal, v, m, sub, g);
         }
+        b.pop_alpha();
     }
 
     fn draw_cats(&self, b: &mut B, pal: &Pal, v: &View, m: &Cross, g: &Glass) {

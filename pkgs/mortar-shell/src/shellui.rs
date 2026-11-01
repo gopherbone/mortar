@@ -94,17 +94,28 @@ pub struct Prefs {
     pub suspend: bool,
     /// Sleep after this many minutes without input (0: never).
     pub idle_minutes: u32,
+    /// The MENU's screensaver: seconds idle on the cross before its
+    /// pattern fills the screen (0: never).
+    pub screensaver: u32,
 }
 
 impl Default for Prefs {
     fn default() -> Self {
-        Prefs { sounds: true, sound_volume: 60, haptics: true, motion: Preset::Bouncy, reduce_motion: false, night: false, suspend: false, idle_minutes: 0 }
+        Prefs { sounds: true, sound_volume: 60, haptics: true, motion: Preset::Bouncy, reduce_motion: false, night: false, suspend: false, idle_minutes: 0, screensaver: 60 }
     }
 }
 
 /// Settings > Sleep when idle: the choices, in minutes (0: never).
 pub const IDLE_CHOICES: [u32; 6] = [0, 1, 2, 5, 10, 30];
 const IDLE_LABELS: [&str; 6] = ["Off", "1m", "2m", "5m", "10m", "30m"];
+
+/// Settings > Screensaver: seconds idle on the cross (0: never).
+pub const SAVER_CHOICES: [u32; 5] = [0, 30, 60, 120, 300];
+const SAVER_LABELS: [&str; 5] = ["Off", "30s", "1m", "2m", "5m"];
+/// The screensaver grows (and shrinks) over this long; after SAVER_DIM s
+/// full screen it dims and redraws at 20 fps.
+const SAVER_GROW: f32 = 1.1;
+const SAVER_DIM: f64 = 180.0;
 
 // ----------------------------------------------------------------- view ----
 
@@ -275,6 +286,7 @@ enum Setting {
     AutoUpdate,
     SleepMode,
     IdleSleep,
+    Screensaver,
     Logout,
 }
 
@@ -285,7 +297,7 @@ fn settings(v: &View) -> Vec<Setting> {
     if v.update.is_some() {
         s.extend([Updates, AutoUpdate]);
     }
-    s.extend([SleepMode, IdleSleep, Logout]);
+    s.extend([SleepMode, IdleSleep, Screensaver, Logout]);
     s
 }
 
@@ -553,6 +565,12 @@ pub struct ShellUi {
     flash: Option<Spring>,
     boot: Option<Boot>,
     confirm: Option<(Setting, f64)>,
+    /// The last button press (UI time), and the screensaver: wanted, how
+    /// far it has grown (0..1), when it filled the screen.
+    last_input: f64,
+    saver_on: bool,
+    saver_p: f32,
+    saver_full: f64,
     out: Vec<Out>,
     /// Something changed that a frame must show (even if nothing moves).
     pub dirty: bool,
@@ -585,6 +603,10 @@ impl ShellUi {
             flash: None,
             boot: None,
             confirm: None,
+            last_input: 0.0,
+            saver_on: false,
+            saver_p: 0.0,
+            saver_full: 0.0,
             out: Vec::new(),
             dirty: true,
         };
@@ -887,6 +909,14 @@ impl ShellUi {
         if !has_app && over_home && self.drifting() {
             return Pace::Ambient;
         }
+        // the screensaver growing or shrinking; full for a long while: it
+        // dims and slows down
+        if self.saver_p > 0.0 && (self.saver_p < 1.0 || !self.saver_on) {
+            return Pace::Full;
+        }
+        if self.saver_on && self.saver_p >= 1.0 && !self.prefs.reduce_motion && self.t - self.saver_full > SAVER_DIM {
+            return Pace::Ambient;
+        }
         // the cross's pattern moves while it shows (Reduce motion: still)
         if !self.prefs.reduce_motion && self.page.is_none() && self.settings.is_none() && self.tz.is_none() && self.menu.as_ref().is_some_and(|m| m.pattern_visible()) {
             return Pace::Pattern;
@@ -908,6 +938,9 @@ impl ShellUi {
         }
         if let Some(t) = &self.toast {
             take(t.until - self.t);
+        }
+        if let Some(at) = self.saver_due() {
+            take(at - self.t);
         }
         if self.drifting() {
             take(self.drift_until - self.t);
@@ -984,6 +1017,7 @@ impl ShellUi {
         if self.page.is_none() && self.settings.as_ref().is_none_or(|p| p.closing) && self.tz.is_none() {
             self.step_pattern(dt as f32);
         }
+        self.step_saver(dt as f32);
         self.timers(v);
         std::mem::take(&mut self.out)
     }
@@ -1230,6 +1264,7 @@ impl ShellUi {
     /// A button was pressed (`repeat`: software auto-repeat).
     pub fn button(&mut self, b: Button, repeat: bool, v: &View) -> Vec<Out> {
         self.drift_until = self.t + DRIFT_SECS;
+        self.last_input = self.t;
         self.dirty = true;
         if self.boot.is_some() {
             return Vec::new();
@@ -1241,6 +1276,9 @@ impl ShellUi {
         }
         if self.power.is_some() {
             self.power_button(b, repeat);
+            return std::mem::take(&mut self.out);
+        }
+        if self.saver_wake() {
             return std::mem::take(&mut self.out);
         }
         if self.tz.is_some() {
@@ -1263,6 +1301,7 @@ impl ShellUi {
     /// was opened from it.
     pub fn menu_key(&mut self, v: &View) -> Vec<Out> {
         self.drift_until = self.t + DRIFT_SECS;
+        self.last_input = self.t;
         self.dirty = true;
         if self.boot.is_some() {
             return Vec::new();
@@ -1273,6 +1312,9 @@ impl ShellUi {
         }
         if self.power.is_some() {
             self.close_power_menu();
+            return std::mem::take(&mut self.out);
+        }
+        if self.saver_wake() {
             return std::mem::take(&mut self.out);
         }
         let sub = self.tz.take().is_some() | self.page.take().is_some() | self.settings.take().is_some();
@@ -1446,6 +1488,12 @@ impl ShellUi {
             (Setting::ReduceMotion, _) if horiz || b == Button::A => self.prefs.reduce_motion = !self.prefs.reduce_motion,
             (Setting::Palette, _) if horiz || b == Button::A => self.prefs.night = !self.prefs.night,
             (Setting::SleepMode, _) if horiz || b == Button::A => self.prefs.suspend = !self.prefs.suspend,
+            (Setting::Screensaver, _) if horiz || b == Button::A => {
+                let n = SAVER_CHOICES.len() as i32;
+                let i = SAVER_CHOICES.iter().position(|m| *m == self.prefs.screensaver).unwrap_or(2) as i32;
+                let d = if b == Button::Left { -1 } else { 1 };
+                self.prefs.screensaver = SAVER_CHOICES[(i + d).rem_euclid(n) as usize];
+            }
             (Setting::IdleSleep, _) if horiz || b == Button::A => {
                 let n = IDLE_CHOICES.len() as i32;
                 let i = IDLE_CHOICES.iter().position(|m| *m == self.prefs.idle_minutes).unwrap_or(0) as i32;
@@ -1813,6 +1861,68 @@ impl ShellUi {
         self.dirty = true;
     }
 
+    /// The screensaver may come: the cross shows on its own (not Running,
+    /// not a glass page or popup, nothing over it) and it is not off.
+    fn saver_allowed(&self) -> bool {
+        self.prefs.screensaver > 0
+            && self.boot.is_none()
+            && self.sleep.is_none()
+            && self.power.is_none()
+            && self.trans.is_none()
+            && self.settings.is_none()
+            && self.tz.is_none()
+            && self.page.is_none()
+            && self.menu.as_ref().is_some_and(|m| m.saver_ok())
+    }
+
+    /// When the screensaver is due (UI time), while it may come.
+    fn saver_due(&self) -> Option<f64> {
+        (self.saver_allowed() && !self.saver_on).then(|| self.last_input + self.prefs.screensaver as f64)
+    }
+
+    /// Grow the screensaver after the idle delay; shrink it when it may no
+    /// longer show.
+    fn step_saver(&mut self, dt: f32) {
+        let allowed = self.saver_allowed();
+        if !allowed {
+            self.saver_on = false;
+        } else if !self.saver_on && self.t >= self.last_input + self.prefs.screensaver as f64 {
+            self.saver_on = true;
+            self.saver_full = self.t + SAVER_GROW as f64;
+        }
+        let target = if self.saver_on { 1.0 } else { 0.0 };
+        let was = self.saver_p;
+        self.saver_p = if self.prefs.reduce_motion || !allowed && target == 0.0 && self.menu.is_none() {
+            target
+        } else if target > self.saver_p {
+            (self.saver_p + dt / SAVER_GROW).min(1.0)
+        } else {
+            (self.saver_p - dt / SAVER_GROW).max(0.0)
+        };
+        if self.saver_p != was {
+            self.dirty = true;
+        }
+    }
+
+    /// A press while the screensaver shows: it shrinks back, and the press
+    /// does nothing else.
+    fn saver_wake(&mut self) -> bool {
+        if !self.saver_on && self.saver_p <= 0.0 {
+            return false;
+        }
+        self.saver_on = false;
+        self.fx(Sfx::Tab, Some(Haptic::Tick));
+        true
+    }
+
+    /// How far the screensaver has grown (0: the strip; 1: the screen),
+    /// and how dim it is (after a long while).
+    pub(super) fn saver(&self) -> (f32, f32) {
+        let e = self.saver_p * self.saver_p * (3.0 - 2.0 * self.saver_p);
+        let dim = if self.saver_p >= 1.0 { ((self.t - self.saver_full - SAVER_DIM) / 8.0).clamp(0.0, 1.0) as f32 * 0.35 } else { 0.0 };
+        (e, dim)
+    }
+
     /// Put the veil at its target now (previews).
     pub fn snap_veil(&mut self) {
         self.veil.snap(self.veil.t);
@@ -2093,6 +2203,10 @@ impl ShellUi {
                 Setting::ReduceMotion => ("Reduce motion", Ok((vec!["Off", "On"], self.prefs.reduce_motion as usize))),
                 Setting::Palette => ("Palette", Ok((vec!["Day", "Night"], self.prefs.night as usize))),
                 Setting::SleepMode => ("Sleep", Ok((vec!["Suspend", "Screen off"], if self.prefs.suspend { 0 } else { 1 }))),
+                Setting::Screensaver => (
+                    "Screensaver",
+                    Ok((SAVER_LABELS.to_vec(), SAVER_CHOICES.iter().position(|m| *m == self.prefs.screensaver).unwrap_or(2))),
+                ),
                 Setting::IdleSleep => (
                     "Sleep when idle",
                     Ok((IDLE_LABELS.to_vec(), IDLE_CHOICES.iter().position(|m| *m == self.prefs.idle_minutes).unwrap_or(0))),
@@ -2888,8 +3002,15 @@ mod tests {
         press(&mut ui, &v, &[Button::Down; 10]);
         assert!(press(&mut ui, &v, &[Button::A]).is_empty());
         assert_eq!(press(&mut ui, &v, &[Button::A]), vec![Out::Logout]);
-        // Sleep when idle, then Sleep (Suspend / Screen off), above Log out
+        // Screensaver, Sleep when idle, then Sleep (Suspend / Screen off),
+        // above Log out
         assert!(!ui.prefs.suspend);
+        ui.button(Button::Up, false, &v);
+        assert_eq!(ui.prefs.screensaver, 60);
+        assert!(ui.button(Button::Right, false, &v).contains(&Out::Prefs));
+        assert_eq!(ui.prefs.screensaver, 120);
+        press(&mut ui, &v, &[Button::Right, Button::Right]);
+        assert_eq!(ui.prefs.screensaver, 0, "wraps around to Off");
         ui.button(Button::Up, false, &v);
         assert!(ui.button(Button::Right, false, &v).contains(&Out::Prefs));
         assert_eq!(ui.prefs.idle_minutes, 1);
@@ -3100,6 +3221,67 @@ mod tests {
         assert_eq!(ui.pace(true), Pace::Full);
         settle(&mut ui, &v);
         assert!((ui.veil.x - ui.veil.t).abs() < 0.01);
+    }
+
+    #[test]
+    fn screensaver_grows_and_a_press_brings_the_menu_back() {
+        let sys = Sys::demo(None);
+        let l = launcher();
+        let v = view(&[], &l, &sys, None);
+        let mut ui = ShellUi::new(Prefs { screensaver: 30, ..Prefs::default() }, false);
+        ui.menu_key(&v);
+        // on Running it never comes
+        for _ in 0..(40 * 30) {
+            ui.step(1.0 / 30.0, &v);
+        }
+        assert_eq!(ui.saver().0, 0.0, "not on Running");
+        // on the cross: 30 s idle, then it grows over the screen
+        press(&mut ui, &v, &[Button::Right]);
+        settle(&mut ui, &v);
+        assert!(ui.next_deadline().is_some_and(|d| d > 20.0 && d < 30.0), "the shell wakes for it: {:?}", ui.next_deadline());
+        for _ in 0..(25 * 30) {
+            ui.step(1.0 / 30.0, &v);
+        }
+        assert_eq!(ui.saver().0, 0.0, "not yet");
+        for _ in 0..(3 * 30) {
+            ui.step(1.0 / 30.0, &v);
+        }
+        assert!(ui.saver().0 >= 0.999, "full screen");
+        assert!(ui.menu_open());
+        // a press brings the menu back and does nothing else
+        assert!(press(&mut ui, &v, &[Button::A]).is_empty());
+        assert_eq!(ui.menu_category(), Some(Cat::Apps));
+        assert_eq!(ui.pace(false), Pace::Full, "it shrinks back");
+        settle(&mut ui, &v);
+        assert_eq!(ui.saver().0, 0.0);
+        // a long while full screen: it dims and slows to 20 fps
+        for _ in 0..(32 * 30) {
+            ui.step(1.0 / 30.0, &v);
+        }
+        for _ in 0..(200 * 2) {
+            ui.step(0.5, &v);
+        }
+        assert!(ui.saver().1 > 0.3, "dimmed");
+        assert_eq!(ui.pace(false), Pace::Ambient);
+        // MENU also only wakes it
+        ui.menu_key(&v);
+        assert!(ui.menu_open());
+        // Reduce motion: a still frame, at once
+        ui.prefs.reduce_motion = true;
+        for _ in 0..(32 * 30) {
+            ui.step(1.0 / 30.0, &v);
+        }
+        assert_eq!(ui.saver().0, 1.0);
+        // a glass page never gets it
+        ui.prefs.reduce_motion = false;
+        ui.button(Button::A, false, &v);
+        settle(&mut ui, &v);
+        press(&mut ui, &v, &[Button::R1, Button::Down, Button::Down, Button::A]);
+        assert_eq!(ui.menu_sub(), Some(SubKind::Mixer));
+        for _ in 0..(40 * 30) {
+            ui.step(1.0 / 30.0, &v);
+        }
+        assert_eq!(ui.saver().0, 0.0, "not over a glass page");
     }
 
     #[test]
