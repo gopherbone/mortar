@@ -1,0 +1,18 @@
+[package]
+name = "mortar-pair"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Mortar pairing protocol: put an SSH key on a TrimUI Brick with the code on its screen"
+publish = false
+
+[dependencies]
+spake2 = "0.4.0"
+hkdf = "0.12.4"
+hmac = "0.12.1"
+sha2 = "0.10.9"
+subtle = "2.6.1"
+base64 = "0.22.1"
+getrandom = "0.2.16"
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.140"
