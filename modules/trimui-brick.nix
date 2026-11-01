@@ -117,7 +117,9 @@ in {
 
     hardware = {
       enableRedistributableFirmware = true;
-      graphics.enable = false;  # PowerVR GE8300 — no open driver
+      # PowerVR GE8300: no Mesa driver. Mortar turns Mesa on anyway for its
+      # software GL (llvmpipe), see mortar-apps.nix.
+      graphics.enable = mkDefault false;
     };
 
     # --- Networking ---
