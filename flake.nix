@@ -4,9 +4,14 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    # PuzzleScript (private repo; fetched over SSH with the user's key)
+    puzzlescript = {
+      url = "git+ssh://git@github.com/gopherbone/puzzlescript_pd?ref=sdl";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
-  outputs = { self, nixpkgs }:
+  outputs = { self, nixpkgs, puzzlescript }:
     let
       supportedSystems = [ "x86_64-linux" "aarch64-linux" ];
       forAllSystems = nixpkgs.lib.genAttrs supportedSystems;
@@ -38,6 +43,8 @@
           ./modules/mortar-usb-watchdog.nix
           ./modules/brick-firmware.nix
           ./modules/brick-gpu.nix
+          ./modules/mortar-apps.nix
+          { mortar.apps.puzzlescript.package = puzzlescript.packages.aarch64-linux.default; }
           ./modules/mortar-base.nix
           # SD image: mainline SPL + TF-A + U-Boot at 128 KiB, FAT /boot
           # with extlinux generations, ext4 root.

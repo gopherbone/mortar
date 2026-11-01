@@ -16,9 +16,31 @@
         "type": "github"
       }
     },
+    "puzzlescript": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1793506848,
+        "narHash": "sha256-BPqHgKUXgq85lTUj6jAkG/A4bvIzXslSrcF1R/FWnLM=",
+        "ref": "sdl",
+        "rev": "42e159bffae5463d96fa12e8044fa9dbd984db57",
+        "revCount": 2,
+        "type": "git",
+        "url": "ssh://git@github.com/gopherbone/puzzlescript_pd"
+      },
+      "original": {
+        "ref": "sdl",
+        "type": "git",
+        "url": "ssh://git@github.com/gopherbone/puzzlescript_pd"
+      }
+    },
     "root": {
       "inputs": {
-        "nixpkgs": "nixpkgs"
+        "nixpkgs": "nixpkgs",
+        "puzzlescript": "puzzlescript"
       }
     }
   },
