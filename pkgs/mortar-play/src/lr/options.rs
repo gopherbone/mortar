@@ -119,6 +119,21 @@ impl Options {
         }
     }
 
+    /// Presets that don't fit what the core declared: (key, value, problem).
+    pub fn preset_problems(&self) -> Vec<(String, String, String)> {
+        let mut v: Vec<_> = self
+            .presets
+            .iter()
+            .filter_map(|(k, val)| match self.defs.get(k) {
+                None => Some((k.clone(), val.clone(), "no such option".to_string())),
+                Some(d) if !d.values.is_empty() && !d.values.contains(val) => Some((k.clone(), val.clone(), format!("not one of {:?}", d.values))),
+                _ => None,
+            })
+            .collect();
+        v.sort();
+        v
+    }
+
     /// The value the core gets for `key`.
     pub fn value(&self, key: &str) -> Option<String> {
         let def = self.defs.get(key);

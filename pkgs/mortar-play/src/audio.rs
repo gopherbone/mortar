@@ -45,7 +45,7 @@ impl Resampler {
         }
         self.buf.clear();
         self.buf.extend_from_slice(&self.hist);
-        self.buf.extend(input.chunks_exact(2).map(|c| [c[0] as f32, c[1] as f32]));
+        self.buf.extend(input.as_chunks::<2>().0.iter().map(|c| [c[0] as f32, c[1] as f32]));
         let n = self.buf.len();
         let step = 1.0 / ratio;
         let mut pos = self.pos;

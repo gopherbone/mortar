@@ -156,3 +156,48 @@ pub fn run(cfg: &Config, sys_id: &str, rom: Option<&Path>, o: &Opts) -> Result<R
     let _ = std::fs::write(o.out.join("report.json"), serde_json::to_string_pretty(&r).unwrap_or_default());
     Ok(r)
 }
+
+/// Load every system's core (no game) and check the option presets against
+/// what the core declares. Returns the exit status.
+pub fn check(cfg: &Config) -> i32 {
+    use crate::lr::core::{Core, Host};
+    use crate::lr::options::Options;
+    let mut bad = 0;
+    let tmp = std::env::temp_dir();
+    for sys in &cfg.systems {
+        let presets = sys.options.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+        let core = crate::config::expand(&sys.core);
+        match Core::open(&core, Host::new(Options::new(presets), &tmp, &tmp, &core)) {
+            Ok(c) => {
+                // some cores (fceumm, fbneo) declare their options only
+                // once a game is loaded: nothing to check without one
+                let deferred = c.host_ref().options.defs.is_empty();
+                let problems = if deferred { Vec::new() } else { c.host_ref().options.preset_problems() };
+                println!(
+                    "{:10} {} {} [{}] {} options{}",
+                    sys.id,
+                    c.info.name,
+                    c.info.version,
+                    c.info.extensions.join("|"),
+                    c.host_ref().options.defs.len(),
+                    if deferred && !sys.options.is_empty() {
+                        " (declared with the game: presets not checked)"
+                    } else if problems.is_empty() {
+                        ", presets ok"
+                    } else {
+                        ""
+                    }
+                );
+                for (k, v, p) in problems {
+                    println!("           preset {k}={v}: {p}");
+                    bad += 1;
+                }
+            }
+            Err(e) => {
+                println!("{:10} FAILED: {e}", sys.id);
+                bad += 1;
+            }
+        }
+    }
+    if bad > 0 { 1 } else { 0 }
+}

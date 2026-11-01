@@ -353,6 +353,8 @@ unsafe fn env(h: &mut Host, cmd: c_uint, data: *mut c_void) -> bool {
             ENV_GET_TARGET_REFRESH_RATE => out!(data, f32, 60.0),
             ENV_GET_MESSAGE_INTERFACE_VERSION => out!(data, c_uint, 1),
             ENV_GET_JIT_CAPABLE => out!(data, bool, true),
+            // RETRO_SAVESTATE_CONTEXT_NORMAL: states go to disk, no runahead
+            ENV_GET_SAVESTATE_CONTEXT => out!(data, i32, 0),
             ENV_SET_CONTROLLER_INFO
             | ENV_SET_SUBSYSTEM_INFO
             | ENV_SET_MEMORY_MAPS

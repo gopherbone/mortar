@@ -255,11 +255,10 @@ impl Session {
 
     /// Quit: auto state + SRAM. Errors are logged, not fatal.
     pub fn finish(&mut self) {
-        if self.game.is_some() {
-            if let Err(e) = self.save_state(Slot::Auto) {
+        if self.game.is_some()
+            && let Err(e) = self.save_state(Slot::Auto) {
                 eprintln!("mortar-play: auto state: {e}");
             }
-        }
         if let Err(e) = self.save_sram() {
             eprintln!("mortar-play: save RAM: {e}");
         }

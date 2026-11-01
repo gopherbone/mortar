@@ -99,7 +99,7 @@ impl Frame {
                     }
                 }
                 let n = n.max(1);
-                out.px[(ty * tw + tx) as usize] = (r / n) << 16 | (g / n) << 8 | b / n;
+                out.px[(ty * tw + tx) as usize] = (r / n) << 16 | (g / n) << 8 | (b / n);
             }
         }
         out
@@ -220,17 +220,13 @@ pub fn layout(mode: Scaling, fw: u32, fh: u32, aspect: f32, sw: u32, sh: u32) ->
 /// Nearest-neighbour scaler into a 32-bit destination buffer (`stride` in
 /// pixels). Rows that repeat the previous source row are copied, so the cost
 /// is about one gather per source row plus memcpy.
+#[derive(Default)]
 pub struct Scaler {
     key: (u32, u32, Dst),
     xmap: Vec<u32>,
     ymap: Vec<u32>,
 }
 
-impl Default for Scaler {
-    fn default() -> Self {
-        Scaler { key: (0, 0, Dst::default()), xmap: Vec::new(), ymap: Vec::new() }
-    }
-}
 
 impl Scaler {
     pub fn scale(&mut self, f: &Frame, dst: Dst, out: &mut [u32], stride: usize) {

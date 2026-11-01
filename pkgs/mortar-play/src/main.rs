@@ -4,6 +4,7 @@
 //!   mortar-play [--config FILE] [--display auto|sdl|wayland|headless]
 //!   mortar-play run SYSTEM [ROM] [...]      play one game, quit with it
 //!   mortar-play selftest SYSTEM [ROM] --out DIR [--frames N] [--shots 60,120]
+//!   mortar-play check                       load every core, validate option presets
 //!   mortar-play make-test-rom OUT.nes       the built-in NES test program
 //!   mortar-play --script "wait 30, press a, shot x.png" [...]   scripted input
 //!
@@ -81,7 +82,7 @@ fn parse_args() -> Result<Args, String> {
                 }
             }
             s if s.starts_with("--") => return Err(format!("unknown option {s}\n{USAGE}")),
-            s if a.cmd.is_none() && matches!(s, "run" | "selftest" | "make-test-rom") => a.cmd = Some(s.into()),
+            s if a.cmd.is_none() && matches!(s, "run" | "selftest" | "make-test-rom" | "check") => a.cmd = Some(s.into()),
             s => a.pos.push(s.into()),
         }
     }
@@ -111,6 +112,9 @@ fn main() {
             std::process::exit(1);
         }
     };
+    if a.cmd.as_deref() == Some("check") {
+        std::process::exit(selftest::check(&cfg));
+    }
     if a.cmd.as_deref() == Some("selftest") {
         let Some(sys) = a.pos.first() else {
             eprintln!("{USAGE}");
