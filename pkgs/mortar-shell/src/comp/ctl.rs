@@ -155,10 +155,18 @@ fn state(shell: &Shell) -> String {
         "osk": shell.osk.visible,
         "apps": apps,
         "frames": shell.backend.frames(),
+        "scanout_frames": shell.backend.scanout_frames(),
+        "rss_kib": rss_kib(),
         "inputs": shell.inputs.summary(),
         "pads": shell.pads.phys_names(),
     })
     .to_string()
+}
+
+fn rss_kib() -> Option<u64> {
+    let s = std::fs::read_to_string("/proc/self/status").ok()?;
+    let l = s.lines().find(|l| l.starts_with("VmRSS:"))?;
+    l.split_whitespace().nth(1)?.parse().ok()
 }
 
 /// The client side: `mortar-shell ctl <command...>`.

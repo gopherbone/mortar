@@ -132,6 +132,14 @@ impl Backend {
         r.import_dmabuf(buf, None).is_ok()
     }
 
+    /// Frames where a client buffer was scanned out directly (DRM only).
+    pub fn scanout_frames(&self) -> u64 {
+        match self {
+            Backend::Drm(d) => d.scanout_frames,
+            _ => 0,
+        }
+    }
+
     pub fn frames(&self) -> u64 {
         match self {
             Backend::Headless(h) => h.frames,
