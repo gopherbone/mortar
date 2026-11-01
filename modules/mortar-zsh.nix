@@ -83,6 +83,9 @@ in
       autosuggestions = {
         enable = true;
         strategy = [ "history" ];
+        # mid grey (WCAG 4.7:1 day, 5.1:1 night) and italic: readable, and
+        # still clearly not typed text
+        highlightStyle = "fg=8,italic";
         async = false;
         extraConfig = {
           ZSH_AUTOSUGGEST_BUFFER_MAX_SIZE = "80";
@@ -196,7 +199,7 @@ in
           local host= branch=
           [[ -n ''${SSH_CONNECTION-} ]] && host='%F{3}%m%f '
           [[ -n $b ]] && branch=" %F{5}''${b//\%/%%}%f"
-          PROMPT="$host%B%(4~|…/%3~|%~)%b$branch %(?..%F{1}%?%f )%(?.%K{10}.%K{9})%F{0} %(!.#.›) %f%k "
+          PROMPT="$host%B%(4~|…/%3~|%~)%b$branch %(?..%F{1}%?%f )%(?.%K{#cef058}.%K{#ff9f67})%F{#1d1d1d} %(!.#.›) %f%k "
           RPROMPT=''${took:+%F{8}$took%f}
           return $e
         }
@@ -215,7 +218,7 @@ in
             for p in /sys/class/power_supply/*(N); do
               [[ -r $p/type && $(<$p/type) == Battery && -r $p/capacity ]] && bat=$(<$p/capacity)% && break
             done
-            line="%F{10}▆▆%F{13}▆▆%f %Bmortar%b%F{8}"
+            line="%F{#cef058}▆▆%F{#cba6f7}▆▆%f %Bmortar%b%F{8}"
             [[ -n $bat ]] && line+=" · $bat"
             line+=" · up $(( up / 3600 ))h $(( up % 3600 / 60 ))m%f"
             local -a tips=(

@@ -117,11 +117,12 @@ let
   argv = c: if builtins.isString c then [ "${pkgs.runtimeShell}" "-c" c ] else c;
 
   footIni = pkgs.writeText "mortar-foot.ini" ''
-    # Mortar terminal: Geist Mono in the Pond palette. [colors-light] is
-    # the day ground with ink text (the regular ANSI colours are deep
-    # versions of the accents so they read on it; the bright ones are the
-    # accents themselves, for blocks such as the zsh prompt's lime key
-    # cap); [colors-dark] the night surface. Which one: mortarTerminal.
+    # Mortar terminal: Geist Mono in the Pond palette. [colors-light] is the
+    # day ground with ink text, [colors-dark] the night surface; which one:
+    # mortarTerminal. Every ANSI colour is a text colour: the regular ones
+    # reach WCAG 4.5:1 on their background, the bright ones 3:1 (day:
+    # deep shades of the accents; ratios in the comments). The accents as
+    # blocks (the prompt's key cap) come as 24-bit colours from zsh.
     font=Geist Mono:size=${toString cfg.terminal.fontSize}
     pad=16x12 center
     initial-color-theme=dark
@@ -134,29 +135,32 @@ let
     cursor=1d1d1d cef058
     selection-background=cba6f7
     selection-foreground=1d1d1d
+    # 14.0 5.0 5.1 5.5 5.9 6.2 5.3 5.3
     regular0=1d1d1d
-    regular1=c4452a
-    regular2=4d7a12
-    regular3=946200
-    regular4=2f5fb3
-    regular5=7a3fc4
-    regular6=1d7a6e
-    regular7=bfcbd8
-    bright0=7d8799
-    bright1=ff9f67
-    bright2=cef058
-    bright3=ffd330
-    bright4=8fb4ff
-    bright5=cba6f7
-    bright6=7fd6c8
-    bright7=ffffff
+    regular1=b03a1e
+    regular2=4a6b0e
+    regular3=805400
+    regular4=2a56a3
+    regular5=6d35b3
+    regular6=166b61
+    regular7=566072
+    # 4.7 (zsh's grey suggestion) 4.1 4.2 4.4 5.1 5.2 4.3 4.0
+    bright0=5f6878
+    bright1=c4452a
+    bright2=557a12
+    bright3=946200
+    bright4=2f5fb3
+    bright5=7a3fc4
+    bright6=1d7a6e
+    bright7=6b7385
     [colors-dark]
     cursor=1d1d1d cef058
     background=1d1d1d
     foreground=e1ebf7
     selection-background=cef058
     selection-foreground=1b322d
-    regular0=1d1d1d
+    # 4.7 8.4 13.0 11.7 8.1 8.3 9.9 14.0
+    regular0=7d8799
     regular1=ff9f67
     regular2=cef058
     regular3=ffd330
@@ -164,7 +168,8 @@ let
     regular5=cba6f7
     regular6=7fd6c8
     regular7=e1ebf7
-    bright0=4c5164
+    # 5.1 10.0 14.0 12.8 10.2 10.6 11.7 16.9
+    bright0=848ea0
     bright1=ffb78c
     bright2=dcf58a
     bright3=ffdf66
