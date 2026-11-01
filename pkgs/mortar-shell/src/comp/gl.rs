@@ -1018,6 +1018,29 @@ impl Gl {
         self.check("blur")
     }
 
+    /// The gaussian rounds alone on `a` (already quarter size: the home
+    /// screen drawn small), `b` as scratch.
+    pub fn blur_in_place(&mut self, a: &Fbo, b: &Fbo) -> Result<(), String> {
+        // SAFETY: plain state changes on the current context
+        unsafe {
+            (self.gl.glDisable)(GL_BLEND);
+            (self.gl.glDisable)(GL_SCISSOR_TEST);
+        }
+        let (tx, ty) = (1.0 / a.w as f32, 1.0 / a.h as f32);
+        for _ in 0..3 {
+            self.pass(4, a.tex, b, (tx, 0.0), false, false);
+            self.pass(4, b.tex, a, (0.0, ty), false, false);
+        }
+        // SAFETY: state reset
+        unsafe {
+            (self.gl.glDisableVertexAttribArray)(0);
+            (self.gl.glDisableVertexAttribArray)(1);
+            (self.gl.glDisableVertexAttribArray)(2);
+            (self.gl.glBindFramebuffer)(GL_FRAMEBUFFER, 0);
+        }
+        self.check("home blur")
+    }
+
     pub fn finish(&self) {
         // SAFETY: plain call
         unsafe { (self.gl.glFinish)() }
@@ -1123,11 +1146,24 @@ impl Gl {
 
     /// Draw `scene` into `t`. `tex` resolves image sources.
     pub fn render(&mut self, t: &Target, scene: &Scene, typo: &Typo, tex: &dyn Fn(Src) -> Option<(GLuint, bool, bool, i32, i32)>) -> Result<(), String> {
+        self.render_fb(t.fbo, t.w, t.h, t.w as f32, t.h as f32, scene, typo, tex)
+    }
+
+    /// Draw `scene` (laid out in `cw` x `ch` units) into an offscreen
+    /// target of any size (the home screen into the blur's quarter-size
+    /// FBO: it is blurred anyway, so drawing it small costs nothing).
+    pub fn render_into(&mut self, f: &Fbo, cw: f32, ch: f32, scene: &Scene, typo: &Typo) -> Result<(), String> {
+        self.render_fb(f.fbo, f.w, f.h, cw, ch, scene, typo, &|_| None)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn render_fb(&mut self, fbo: GLuint, vw: i32, vh: i32, cw: f32, ch: f32, scene: &Scene, typo: &Typo, tex: &dyn Fn(Src) -> Option<(GLuint, bool, bool, i32, i32)>) -> Result<(), String> {
+        let (sx, sy) = (vw as f32 / cw, vh as f32 / ch);
         let g = &self.gl;
         // SAFETY: GL state setup on the current context
         unsafe {
-            (g.glBindFramebuffer)(GL_FRAMEBUFFER, t.fbo);
-            (g.glViewport)(0, 0, t.w, t.h);
+            (g.glBindFramebuffer)(GL_FRAMEBUFFER, fbo);
+            (g.glViewport)(0, 0, vw, vh);
             (g.glDisable)(GL_DEPTH_TEST);
             (g.glDisable)(GL_CULL_FACE);
             (g.glDisable)(GL_SCISSOR_TEST);
@@ -1138,7 +1174,7 @@ impl Gl {
             (g.glBlendFunc)(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
             for p in &self.progs {
                 (g.glUseProgram)(p.id);
-                (g.glUniform2f)(p.size, t.w as f32, t.h as f32);
+                (g.glUniform2f)(p.size, cw, ch);
             }
         }
         self.kind = Kind::Solid;
@@ -1152,7 +1188,7 @@ impl Gl {
                         match r {
                             Some(r) => {
                                 (self.gl.glEnable)(GL_SCISSOR_TEST);
-                                (self.gl.glScissor)(r[0].round() as GLint, r[1].round() as GLint, r[2].round().max(0.0) as GLsizei, r[3].round().max(0.0) as GLsizei);
+                                (self.gl.glScissor)((r[0] * sx).round() as GLint, (r[1] * sy).round() as GLint, (r[2] * sx).round().max(0.0) as GLsizei, (r[3] * sy).round().max(0.0) as GLsizei);
                             }
                             None => (self.gl.glDisable)(GL_SCISSOR_TEST),
                         }
@@ -1233,7 +1269,7 @@ impl Gl {
                 }
                 Item::Lava(l) => {
                     if let Some((id, ..)) = tex(Src::Lava) {
-                        self.lava_draw(l, id, t.w as f32, t.h as f32);
+                        self.lava_draw(l, id, cw, ch);
                     }
                 }
                 Item::Image { src, quad, uv, alpha } => {

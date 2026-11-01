@@ -243,7 +243,7 @@ pub fn run(o: &Opts) -> Result<(), String> {
         "menu" | "menu-running" | "running" => {
             ui.menu_key(&v0);
         }
-        "menu-apps" | "cross-apps" | "menu-games" | "menu-music" => {
+        "menu-apps" | "cross-apps" | "home-menu" | "menu-games" | "menu-music" => {
             ui.menu_key(&v0);
             let n = match s {
                 "menu-games" => 2,
@@ -366,7 +366,7 @@ pub fn run(o: &Opts) -> Result<(), String> {
         }
         other => {
             return Err(format!(
-                "unknown preview screen '{other}' (boot, home, home-empty, app, running, cross-apps, menu-games, menu-music, cross-settings, menu-adjust, menu-confirm, menu-options, wifi, bluetooth, mixer, lava, settings, remote, setup-wifi, setup-bluetooth, timezone, timezone-zones, launch, close, swap, osd, osd-mute, osd-bri, osd-home, toast, achievement, flash, osk, osk-chips, osk-chips-focus, power)"
+                "unknown preview screen '{other}' (boot, home, home-empty, app, running, cross-apps, home-menu (the cross over home), menu-games, menu-music, cross-settings, menu-adjust, menu-confirm, menu-options, wifi, bluetooth, mixer, lava, settings, remote, setup-wifi, setup-bluetooth, timezone, timezone-zones, launch, close, swap, osd, osd-mute, osd-bri, osd-home, toast, achievement, flash, osk, osk-chips, osk-chips-focus, power)"
             ))
         }
     }
@@ -379,6 +379,12 @@ pub fn run(o: &Opts) -> Result<(), String> {
     settle(&mut ui, &v, o.at_ms as f64 / 1000.0);
     let mut raster = Raster::default();
     let mut pm = Pixmap::new(W as u32, H as u32).ok_or("canvas")?;
+    // the MENU over home blurs the home screen (as the compositor does)
+    let home = ui.build_home(&typo, &v, W, H);
+    raster.render(&mut pm, &home, &typo, &demo);
+    if let Some(b) = crate::raster::blur_quarter(&pm) {
+        demo.pix.insert(Src::HomeBlur, b);
+    }
     let n = o.frames.max(1);
     let mut page_ui = Ui::new(W as u32, H as u32, Fonts::load(&dir)?);
     for f in 0..n {

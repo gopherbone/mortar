@@ -1697,24 +1697,31 @@ impl ShellUi {
         // the app behind the MENU or the power menu: frosted (blurred
         // under a light veil) as they open
         let frost_app = base_app.and_then(|u| v.app(u)).filter(|a| a.has_buffer).map(|a| (a.uid, a.geom));
-        let frost = if frost_app.is_some() { self.frost() } else { 0.0 };
+        // what gets blurred: the app, or the home screen when none is in
+        // front (an app still starting has nothing to blur)
+        let backdrop = match (base_app, frost_app) {
+            (Some(_), Some((uid, g))) => Some((Src::Blur(uid), g)),
+            (Some(_), None) => None,
+            (None, _) => Some((Src::HomeBlur, [0.0, 0.0, W, H])),
+        };
+        let frost = if backdrop.is_some() { self.frost() } else { 0.0 };
         match base_app {
-            // fully frosted: the sharp app would be drawn for nothing
-            Some(_) if frost >= 0.999 => b.rect(0.0, 0.0, W, H, Color(0, 0, 0, 255)),
+            // fully frosted: the sharp screen would be drawn for nothing
+            _ if frost >= 0.999 => b.rect(0.0, 0.0, W, H, Color(0, 0, 0, 255)),
             Some(uid) => self.draw_app(&mut b, v, uid, true),
             None => self.draw_home(&mut b, &pal, v),
         }
-        if let Some((uid, g)) = frost_app
+        if let Some((src, g)) = backdrop
             && frost > 0.0
         {
             b.push_alpha(frost);
-            b.image(Src::Blur(uid), g[0], g[1], g[2], g[3], [0.0, 0.0, 1.0, 1.0]);
+            b.image(src, g[0], g[1], g[2], g[3], [0.0, 0.0, 1.0, 1.0]);
             b.pop_alpha();
             b.rect(0.0, 0.0, W, H, with_a(pal.ground, frost * FROST_VEIL));
         }
         // the MENU fades out under the transition it started
         if let Some(m) = &self.menu {
-            let g = Glass { app: frost_app.filter(|_| frost > 0.0), veil: frost * FROST_VEIL };
+            let g = Glass { src: backdrop.filter(|_| frost > 0.0), veil: frost * FROST_VEIL };
             self.draw_menu(&mut b, &pal, v, m, &g);
         }
         self.draw_trans(&mut b, &pal, v);
@@ -1802,6 +1809,16 @@ impl ShellUi {
         let st2 = ts(Face::Mono400, 18.0, pal.dark).tracking(0.08);
         b.text_center(W / 2.0, 550.0, &format!("STARTING{dots}"), &st2);
         b.pop_alpha();
+    }
+
+    /// The home screen alone (what `Src::HomeBlur` blurs).
+    pub fn build_home(&self, typo: &Typo, v: &View, out_w: f32, out_h: f32) -> Scene {
+        let mut b = B::new(typo, out_w, out_h, Color(0, 0, 0, 255));
+        if (out_w, out_h) != (W, H) {
+            b.push(Xf::scale(out_w / W, out_h / H));
+        }
+        self.draw_home(&mut b, &self.pal(), v);
+        b.finish()
     }
 
     fn draw_home(&self, b: &mut B, pal: &Pal, v: &View) {

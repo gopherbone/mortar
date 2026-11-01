@@ -210,6 +210,10 @@ pub struct Shell {
     pub mixer_worker: super::bg::MixerWorker,
     pub mixer: Vec<crate::shellui::MixChan>,
     pub streams: Vec<crate::mixer::Stream>,
+    /// The home screen drawn for the MENU's backdrop (blurred by the
+    /// renderers), and a counter that changes with each new one.
+    pub home_scene: Option<crate::scene::Scene>,
+    pub home_gen: u64,
     /// Last volume-step haptic: held keys tick at most every 150 ms.
     pub volume_haptic_at: Option<std::time::Instant>,
     last_bg_tick: Instant,
@@ -353,6 +357,8 @@ impl Shell {
             mixer_worker,
             mixer: Vec::new(),
             streams: Vec::new(),
+            home_scene: None,
+            home_gen: 0,
             last_bg_tick: Instant::now(),
             update: Default::default(),
         };

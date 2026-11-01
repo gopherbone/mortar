@@ -119,9 +119,13 @@ blocks with 1 px ink outlines, isometric illustrations.
   (`cross.rs` and `menupages.rs`, after the approved
   plan/mortar-cross-2.html), over the app, which stays on screen frosted:
   blurred (about 14 px) under a ground-colour veil at 62%, so its
-  colours and layout show but its text does not read. The blur and veil
+  colours and layout show but its text does not read. Over home the home
+  screen is frosted the same way (`Src::HomeBlur`: the home scene drawn
+  once into the blur's quarter-size FBO when the MENU first needs it, the
+  same gaussian rounds, kept while frames use it); a lightly veiled
+  sharp home read through and clashed with the menu. The blur and veil
   fade in and out with the menu's open spring (Reduce motion: on and off
-  at once); home behind the menu gets the flat veil at 90%. The power
+  at once). The power
   menu frosts the app the same way (with a lighter scrim); the settings
   screen and time zone picker are opaque, so nothing is blurred behind
   them. MENU closes it from anywhere.
@@ -160,12 +164,18 @@ blocks with 1 px ink outlines, isometric illustrations.
     selection stays in the second column. The selected item sits right
     under its category as a bold band in the accent, coming in from the
     left screen edge, with an ink edge and an offset ink shadow, its
-    name in the serif italic; the items below continue down (four), the
-    two above stay visible, dimmed, above the category row. Values (level
-    bars and percentages, ›) line up in one right-hand column. A large
-    faint serif index ("03/10") sits in the lower left. Each category
-    remembers its selection (across openings too). ◀▶ move a category,
-    ▲▼ an item.
+    name in the serif italic; three items below continue down, the one
+    above stays visible, dimmed, above the category row. Values (level
+    bars and percentages, ›) line up in one right-hand column. Each
+    category remembers its selection (across openings too). ◀▶ move a
+    category, ▲▼ an item. (The mockup's large faint index number was
+    dropped as clutter.)
+  - Sizes: the mockup's 1024x768 stage scaled about 1.4x for the
+    Brick's 3.2" panel (about 400 ppi, at arm's length): the selected
+    title is serif 56 px, other titles 32 px with 20 px mono subtitles in
+    ink-soft (over 4.5:1 on the frosted ground), category names 34 px
+    over 116 px icons, the clock 48 px, hint labels 22 px with 38 px
+    keycaps, the glass pages' rows 30 px; both bars are 72 px tall.
   - Apps: every launcher entry. Games, Music: the entries with that
     `category` (the module's `category` or `categories.<id>`, else
     guessed: M8 and trackers are music, PICO-8, PuzzleScript and
@@ -216,8 +226,11 @@ blocks with 1 px ink outlines, isometric illustrations.
       meters: PipeWire has no cheap way to read peaks without capturing
       every stream.
   - The lava lamp (`lava.rs`) runs behind the cross (not behind
-    Running), in the category's colour with a 3 px ink edge and a 12 px
-    hard ink shadow, flush from the top edge to the bottom: a heavy pool
+    Running), a quiet strip about 260 px wide by the right edge (clear
+    of the rows' text), in the category's colour mixed 35% toward the
+    ground with a 2 px ink edge and no drop shadow (the full-width,
+    saturated, shadowed first version dominated the menu on the device),
+    flush from the top edge to the bottom: a heavy pool
     along the bottom, a layer hanging from the top, five bottom-heavy wax
     pieces that heat at the bottom, rise, cool and sink (about 15 s from
     bottom to top), each joined to its pool by a column that thins and
@@ -497,18 +510,21 @@ draw it:
   `raster::blur_quarter` (box blurs of matching variance). Glass panes
   draw the same blurred texture again, cut to the pane, so the backdrop
   is blurred once a frame however many panes there are. The lava lamp
-  (`Item::Lava`) is two passes: its signed distance field (the smooth
-  union of two pools, five wobbling, stretched pieces and five tapered
-  columns, ~25 ALU ops per primitive, no transcendentals but the pools'
-  sin/exp) at quarter resolution over the lamp's 640x768 region into a
-  160x192 RGBA8 FBO (highp; the distance stored as two bytes, which
-  bilinear filtering still interpolates exactly), once a frame before
-  the frame proper; then a full-resolution quad thresholds it (two
-  texture reads: the fill, a 3 px ink edge, the ink shadow 12 px down
-  and right). Estimate on the GE8300: ~31k field texels x ~400 ops
-  ≈ 12 M ops plus ~490k composite pixels x ~20 ops ≈ 10 M ops, about
-  1-1.5 ms (unmeasured on the device; `ctl state` reports the field
-  pass's own time every 30th frame as `gpu_ms.lava`). The FBO is freed
+  (`Item::Lava`) is two passes: its signed distance field (two pools,
+  five wobbling, stretched pieces and five tapered columns, ~25 ALU ops
+  per primitive plus one exp each for the metaball union, -k ln sum
+  e^(-d/k), which closes gaps a pairwise smooth minimum left as ink-
+  rimmed pinholes) at 1/6 resolution over the lamp's 324x768 region into
+  a 54x128 RGBA8 FBO (highp; the distance stored as two bytes, which
+  bilinear filtering still interpolates exactly), recomputed at most
+  every 32 ms (30 Hz) before a frame and reused in between; then a
+  full-resolution quad thresholds it (one texture read: the fill and a
+  2 px ink edge). The first version (quarter resolution over 640x768,
+  every frame, a shadow read) measured 3.25 ms on the device; this one
+  has 4.5x fewer field texels, half the composite area and runs the
+  field at most every other frame, so expect well under 1 ms (re-read
+  `gpu_ms.lava`, the field pass's own time sampled every 30th field). The
+  FBO is freed
   when the lamp is not on screen; shaders that fail to build (or fewer
   than 48 fragment uniform vectors) disable only the lamp. When no UI
   layer shows, the DrmCompositor takes over again (`reset_state`, full
@@ -810,7 +826,7 @@ shell through it; over SSH it gives remote screenshots and app control
   mockup) has no backend yet; the row opens mortar-setup's Wi-Fi page
   (WPS, the full list). The Mixer's level meters are left out: PipeWire
   peaks would need a capture stream per app.
-- The lava lamp's GPU cost is an estimate (1-1.5 ms); read `gpu_ms.lava`
+- The lava lamp's GPU cost after the 1/6-resolution rework is an estimate; read `gpu_ms.lava`
   on the device.
 - The mockup's per-app subtitles ("Song · playing") need data apps do
   not give the shell; window labels say on screen / background /

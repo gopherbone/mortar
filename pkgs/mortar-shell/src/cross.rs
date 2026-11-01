@@ -179,38 +179,50 @@ pub(super) struct Cross {
     pub closing: bool,
 }
 
-// layout (the mockup's 1024x768 stage)
+// layout: the mockup's 1024x768 stage, scaled up about 1.4x for the
+// Brick's 3.2" panel (about 400 ppi, held at arm's length)
 const RUN_Y: f32 = 84.0;
 const RUN_H: f32 = 600.0;
 const RUN_STEP: f32 = 612.0;
-const COLX: f32 = 120.0;
-const CATW: f32 = 150.0;
-const CATS_TOP: f32 = 186.0;
-const ROW_TOP: f32 = 370.0;
+/// The selected category's column, and the step between categories.
+const COLX: f32 = 100.0;
+const CATW: f32 = 180.0;
+/// Category icons: ICON square at (x + 16, CATS_TOP + 10), names below.
+const CATS_TOP: f32 = 150.0;
+const ICON: f32 = 116.0;
+/// The selected row (taller, a serif title) right under the categories,
+/// the others below it; one dimmed row above the categories.
+const ROW_TOP: f32 = 332.0;
+const SEL_H: f32 = 96.0;
 const ROWH: f32 = 80.0;
-const LISTX: f32 = 92.0;
-const ITEM_W: f32 = 560.0;
-const ITEM_H: f32 = 74.0;
-pub(super) const BAR_H: f32 = 64.0;
-pub(super) const HINT_H: f32 = 60.0;
-const CTX_X: f32 = 600.0;
-const CTX_Y: f32 = 300.0;
+const ABOVE_H: f32 = 74.0;
+/// A row: the index, the icon tile, the text, the value column ending at
+/// ITEM_W (all from LISTX).
+const LISTX: f32 = 68.0;
+const IX_W: f32 = 48.0;
+const TILE: f32 = 72.0;
+const ITEM_W: f32 = 620.0;
+pub(super) const BAR_H: f32 = 72.0;
+pub(super) const HINT_H: f32 = 72.0;
+const CTX_X: f32 = 560.0;
+const CTX_Y: f32 = 290.0;
 
 fn slot_y(j: usize, s: usize) -> f32 {
     let d = j as f32 - s as f32;
     if d == 0.0 {
         ROW_TOP
     } else if d > 0.0 {
-        ROW_TOP + 10.0 + d * ROWH
+        ROW_TOP + SEL_H + 8.0 + (d - 1.0) * ROWH
     } else {
-        196.0 + d * 64.0
+        CATS_TOP - ABOVE_H + (d + 1.0) * ABOVE_H
     }
 }
 
-/// The two items above the selection stay, dimmed; four show below.
+/// The item above the selection stays, dimmed, above the categories;
+/// three show below.
 fn row_op(j: usize, s: usize) -> f32 {
     if j < s {
-        if s - j <= 2 { 0.62 } else { 0.0 }
+        if s - j <= 1 { 0.62 } else { 0.0 }
     } else if j > s + 3 {
         0.0
     } else {
@@ -801,10 +813,10 @@ impl ShellUi {
 
     /// Where the selected row's icon is (the zoom starts there).
     fn sel_rect(&self) -> R4 {
-        let Some(m) = &self.menu else { return R4 { x: LISTX + 44.0, y: ROW_TOP, w: 58.0, h: 58.0 } };
+        let Some(m) = &self.menu else { return R4 { x: LISTX + IX_W, y: ROW_TOP, w: TILE, h: TILE } };
         let s = self.cross_sel[m.cat.i()];
         let y = m.rows.get(s).map(|r| r.y.x).unwrap_or(ROW_TOP);
-        R4 { x: LISTX + 44.0, y: y + 8.0, w: 58.0, h: 58.0 }
+        R4 { x: LISTX + IX_W, y: y + (SEL_H - TILE) / 2.0, w: TILE, h: TILE }
     }
 
     fn start_trans(&mut self, target: Target, name: String, art: Art, from: R4, prev: Option<u32>) {
@@ -879,7 +891,7 @@ impl ShellUi {
     /// veil instead).
     pub(super) fn draw_menu(&self, b: &mut B, pal: &Pal, v: &View, m: &Cross, g: &Glass) {
         let o = m.op.x.clamp(0.0, 1.0);
-        if g.app.is_none() {
+        if g.src.is_none() {
             b.rect(0.0, 0.0, W, H, with_a(pal.ground, o * 0.9));
         }
         if o < 0.01 {
@@ -887,7 +899,7 @@ impl ShellUi {
         }
         b.push_alpha(o);
         let px = m.page_x.x;
-        let lava = m.lava_visible().then(|| (m.lamp.prims(), m.cat.accent(pal)));
+        let lava = m.lava_visible().then(|| (m.lamp.prims(), lava_fill(pal, m.cat)));
         if px < 0.99 {
             let s = 1.04 - 0.04 * o;
             b.push(Xf::translate(-px * W, 0.0).mul(&Xf::about(W / 2.0, H / 2.0, Xf::scale(s, s))));
@@ -975,14 +987,14 @@ impl ShellUi {
             },
             _ => (String::new(), String::new()),
         };
-        let h = 47.0;
+        let h = 58.0;
         let (x, top) = (28.0, y + RUN_H - 18.0 - h);
-        let ix = ts(Face::Mono600, 14.0, pal.ground);
+        let ix = ts(Face::Mono600, 18.0, pal.ground);
         let ix_s = format!("{:02}", j + 1);
         let iw = b.measure(&ix_s, &ix) + 24.0;
         b.rect(x, top, iw, h, pal.dark);
-        b.text(x + 12.0, top + 10.0, &ix_s, &ts(Face::Mono600, 14.0, DAY.ground));
-        let nm = ts(Face::SerifItalic, 30.0, pal.ink).line_height(1.1);
+        b.text(x + 12.0, top + h / 2.0 - ix.line_px() / 2.0, &ix_s, &ts(Face::Mono600, 18.0, DAY.ground));
+        let nm = ts(Face::SerifItalic, 40.0, pal.ink).line_height(1.1);
         let name = b.fit(&name, &nm, 600.0);
         let nw = b.measure(&name, &nm) + 28.0;
         let nx = x + iw;
@@ -990,9 +1002,9 @@ impl ShellUi {
         b.text(nx + 14.0, top + h / 2.0 - nm.line_px() / 2.0, &name, &nm);
         open_box(b, nx, top, nw, h, 3.0, pal.dark);
         if !status.is_empty() {
-            let st = ts(Face::Mono400, 13.0, pal.ink);
+            let st = ts(Face::Mono400, 17.0, pal.ink);
             let sw = b.measure(&status, &st) + 24.0;
-            let (sx, sh) = (nx + nw, 46.0);
+            let (sx, sh) = (nx + nw, 56.0);
             let sy = top + (h - sh) / 2.0;
             glass(b, pal, g, sx, sy, sw, sh, 0.6, None);
             b.text(sx + 12.0, sy + sh / 2.0 - st.line_px() / 2.0, &status, &st);
@@ -1003,12 +1015,9 @@ impl ShellUi {
     fn draw_cross(&self, b: &mut B, pal: &Pal, v: &View, m: &Cross, g: &Glass) {
         let accent = m.cat.accent(pal);
         if m.lava_visible() {
-            b.lava(&m.lamp.prims(), accent, pal.ink, 1.0);
+            b.lava(&m.lamp.prims(), lava_fill(pal, m.cat), pal.ink, 1.0);
         }
         let s = self.cross_sel[m.cat.i()];
-        // the large faint index
-        let big = ts(Face::SerifItalic, 120.0, with_a(pal.ink, 0.1)).line_height(0.8);
-        b.text(28.0, 590.0, &format!("{:02}/{:02}", s + 1, m.rows.len()), &big);
         self.draw_cats(b, pal, v, m, g);
         for (j, r) in m.rows.iter().enumerate() {
             let a = r.op.x.clamp(0.0, 1.0);
@@ -1029,100 +1038,110 @@ impl ShellUi {
     fn draw_cats(&self, b: &mut B, pal: &Pal, v: &View, m: &Cross, g: &Glass) {
         let list = cats(v);
         let cur = list.iter().position(|c| *c == m.cat).unwrap_or(0) as f32;
-        let name_st = ts(Face::SerifItalic, 26.0, pal.ink).line_height(1.0);
+        let name_st = ts(Face::SerifItalic, 34.0, pal.ink).line_height(1.0);
+        let cw = ICON + 32.0;
         for (i, c) in list.iter().enumerate() {
             let x = COLX + i as f32 * CATW + m.cat_x.x;
-            if x > W + 40.0 || x + 128.0 < -40.0 {
+            if x > W + 40.0 || x + cw < -40.0 {
                 continue;
             }
             let dist = (i as f32 - cur).abs();
             let l = m.lift.get(i).map(|s| s.x).unwrap_or(0.0);
             b.push_alpha((1.0 - dist * 0.16).max(0.0));
-            let (ix, iy) = (x + 16.0, CATS_TOP + 22.0);
+            let (ix, iy) = (x + 16.0, CATS_TOP + 10.0);
             let sc = 0.82 + 0.18 * l;
             // lifted: up and left, with a hard ink shadow; it scales from
             // its bottom centre
-            b.push(Xf::translate(-6.0 * l, -10.0 * l).mul(&Xf::about(ix + 48.0, iy + 96.0, Xf::scale(sc, sc))));
+            b.push(Xf::translate(-7.0 * l, -10.0 * l).mul(&Xf::about(ix + ICON / 2.0, iy + ICON, Xf::scale(sc, sc))));
             if l > 0.01 {
                 b.push_alpha(l.clamp(0.0, 1.0));
-                b.rect(ix + 8.0, iy + 8.0, 96.0, 96.0, pal.dark);
+                b.rect(ix + 9.0, iy + 9.0, ICON, ICON, pal.dark);
                 b.pop_alpha();
             }
+            let glyph = ICON * 0.6;
             if *c == m.cat {
-                b.rect(ix, iy, 96.0, 96.0, c.accent(pal));
-                b.frame(ix, iy, 96.0, 96.0, 2.0, pal.dark);
-                draw_icon(b, c.icon(), ix + 48.0, iy + 48.0, 56.0, pal, pal.dark);
+                b.rect(ix, iy, ICON, ICON, c.accent(pal));
+                b.frame(ix, iy, ICON, ICON, 2.0, pal.dark);
+                draw_icon(b, c.icon(), ix + ICON / 2.0, iy + ICON / 2.0, glyph, pal, pal.dark);
             } else {
-                glass(b, pal, g, ix, iy, 96.0, 96.0, 0.4, None);
-                b.frame(ix, iy, 96.0, 96.0, 1.0, Color(255, 255, 255, 190));
-                draw_icon(b, c.icon(), ix + 48.0, iy + 48.0, 56.0, pal, pal.ink);
+                glass(b, pal, g, ix, iy, ICON, ICON, 0.4, None);
+                b.frame(ix, iy, ICON, ICON, 1.0, Color(255, 255, 255, 190));
+                draw_icon(b, c.icon(), ix + ICON / 2.0, iy + ICON / 2.0, glyph, pal, pal.ink);
             }
             b.pop();
-            b.text_center(x + 64.0, CATS_TOP + 142.0, c.name(), &name_st);
+            b.text_center(x + cw / 2.0, iy + ICON + 12.0, c.name(), &name_st);
             b.pop_alpha();
         }
     }
 
-    /// One item in its own space (0, 0 is its top left, 560 x 74).
+    /// One item in its own space (0, 0 is its top left; ITEM_W wide, SEL_H
+    /// tall when selected, else ROWH).
     #[allow(clippy::too_many_arguments)]
     fn draw_item(&self, b: &mut B, pal: &Pal, v: &View, m: &Cross, r: &RowAnim, on: bool, accent: Color, g: &Glass) {
         let row = &r.key;
         let confirm = on && m.confirm.as_ref() == Some(row);
         let info = row_info(row, v, self.prefs.sound_volume);
+        let h = if on { SEL_H } else { ROWH };
+        let cy = h / 2.0;
         let bw = r.bw.x;
         if bw > 0.01 {
             // the band, from the left screen edge, with its offset shadow
-            let x1 = bw * (LISTX + ITEM_W + 24.0);
-            b.rect(-LISTX - 8.0, 12.0, x1 + LISTX + 8.0 + 10.0, 66.0, pal.dark);
-            b.rect(-LISTX - 8.0, 4.0, x1 + LISTX + 8.0, 66.0, accent);
-            b.rect(-LISTX - 8.0, 4.0, x1 + LISTX + 8.0, 2.0, pal.dark);
-            b.rect(-LISTX - 8.0, 68.0, x1 + LISTX + 8.0, 2.0, pal.dark);
-            b.rect(x1 - 2.0, 4.0, 2.0, 66.0, pal.dark);
+            let x1 = bw * (ITEM_W + 24.0);
+            let (by, bh) = (4.0, SEL_H - 8.0);
+            b.rect(-LISTX - 8.0, by + 10.0, x1 + LISTX + 8.0 + 10.0, bh, pal.dark);
+            b.rect(-LISTX - 8.0, by, x1 + LISTX + 8.0, bh, accent);
+            b.rect(-LISTX - 8.0, by, x1 + LISTX + 8.0, 2.0, pal.dark);
+            b.rect(-LISTX - 8.0, by + bh - 2.0, x1 + LISTX + 8.0, 2.0, pal.dark);
+            b.rect(x1 - 2.0, by, 2.0, bh, pal.dark);
         }
+        // on the band: dark ink; elsewhere ink and ink-soft (at least
+        // 4.5:1 on the frosted ground)
         let (ink, soft) = if on { (pal.dark, pal.dark) } else { (pal.ink, pal.soft) };
-        let ix = ts(Face::Mono400, 14.0, soft);
-        b.text(0.0, ITEM_H / 2.0 - ix.line_px() / 2.0, &info.index_of(m, row), &ix);
+        let ix = ts(Face::Mono400, 18.0, soft);
+        b.text(0.0, cy - ix.line_px() / 2.0, &info.index_of(m, row), &ix);
         // the icon tile: glass, or solid with an ink outline when selected
-        let (sx, sy) = (44.0, 8.0);
+        let (sx, sy) = (IX_W, cy - TILE / 2.0);
         if confirm {
-            b.rect(sx, sy, 58.0, 58.0, pal.orange);
-            b.frame(sx, sy, 58.0, 58.0, 2.0, pal.dark);
+            b.rect(sx, sy, TILE, TILE, pal.orange);
+            b.frame(sx, sy, TILE, TILE, 2.0, pal.dark);
         } else if on {
-            b.rect(sx, sy, 58.0, 58.0, DAY.ground);
-            b.frame(sx, sy, 58.0, 58.0, 2.0, pal.dark);
+            b.rect(sx, sy, TILE, TILE, DAY.ground);
+            b.frame(sx, sy, TILE, TILE, 2.0, pal.dark);
         } else {
-            glass(b, pal, g, sx, sy, 58.0, 58.0, 0.45, None);
-            b.frame(sx, sy, 58.0, 58.0, 1.0, Color(255, 255, 255, 190));
+            glass(b, pal, g, sx, sy, TILE, TILE, 0.45, None);
+            b.frame(sx, sy, TILE, TILE, 1.0, Color(255, 255, 255, 190));
         }
-        draw_icon(b, info.icon, sx + 29.0, sy + 29.0, 36.0, pal, if on || confirm { pal.dark } else { pal.ink });
+        draw_icon(b, info.icon, sx + TILE / 2.0, sy + TILE / 2.0, TILE * 0.62, pal, if on || confirm { pal.dark } else { pal.ink });
         // the value column, right-aligned at the item's right edge
         let adjusting = on && m.adjusting;
         let mut right = ITEM_W;
-        let num_st = ts(Face::Mono400, 16.0, ink);
+        let num_st = ts(Face::Mono400, 22.0, ink);
         if let Some(lv) = info.level {
             let txt = format!("{lv}%");
-            b.text_right(ITEM_W, ITEM_H / 2.0 - num_st.line_px() / 2.0, &txt, &num_st);
-            let (bx, by) = (ITEM_W - 46.0 - 10.0 - 120.0, ITEM_H / 2.0 - 7.0);
-            b.rect(bx, by, 120.0, 14.0, if adjusting { pal.yellow } else { DAY.ground });
-            b.rect(bx, by, 120.0 * (lv.min(100) as f32 / 100.0), 14.0, pal.dark);
-            b.frame(bx, by, 120.0, 14.0, 2.0, pal.dark);
-            right = bx - 12.0;
+            let nw = b.measure("100%", &num_st);
+            b.text_right(ITEM_W, cy - num_st.line_px() / 2.0, &txt, &num_st);
+            let (bw2, bh) = (130.0, 18.0);
+            let (bx, by) = (ITEM_W - nw - 12.0 - bw2, cy - bh / 2.0);
+            b.rect(bx, by, bw2, bh, if adjusting { pal.yellow } else { DAY.ground });
+            b.rect(bx, by, bw2 * (lv.min(100) as f32 / 100.0), bh, pal.dark);
+            b.frame(bx, by, bw2, bh, 2.0, pal.dark);
+            right = bx - 14.0;
         } else if info.chevron {
-            let ch = ts(Face::Mono400, 22.0, ink);
-            let cw = b.text_right(ITEM_W, ITEM_H / 2.0 - ch.line_px() / 2.0, "›", &ch);
+            let ch = ts(Face::Mono400, 30.0, ink);
+            let cw = b.text_right(ITEM_W, cy - ch.line_px() / 2.0, "›", &ch);
             right = ITEM_W - cw - 16.0;
             if let Some(n) = &info.value {
-                let w = b.text_right(right - 10.0, ITEM_H / 2.0 - num_st.line_px() / 2.0, n, &num_st);
-                right -= 10.0 + w + 12.0;
+                let w = b.text_right(right - 6.0, cy - num_st.line_px() / 2.0, n, &num_st);
+                right -= 6.0 + w + 14.0;
             }
         } else if let Some(n) = &info.value {
-            let w = b.text_right(ITEM_W, ITEM_H / 2.0 - num_st.line_px() / 2.0, n, &num_st);
-            right = ITEM_W - w - 12.0;
+            let w = b.text_right(ITEM_W, cy - num_st.line_px() / 2.0, n, &num_st);
+            right = ITEM_W - w - 14.0;
         }
-        let title = if on { ts(Face::SerifItalic, 40.0, ink).line_height(1.0) } else { ts(Face::Body600, 24.0, ink).line_height(1.05) };
-        let sub = ts(Face::Mono400, 14.0, soft);
-        let tx = sx + 58.0 + 16.0;
-        let top = ITEM_H / 2.0 - (title.line_px() + 3.0 + sub.line_px()) / 2.0;
+        let title = if on { ts(Face::SerifItalic, 56.0, ink).line_height(0.95) } else { ts(Face::Body600, 32.0, ink).line_height(1.05) };
+        let sub = ts(Face::Mono400, 20.0, soft);
+        let tx = sx + TILE + 20.0;
+        let top = cy - (title.line_px() + 2.0 + sub.line_px()) / 2.0;
         let t = b.fit(&info.title, &title, right - tx);
         b.text(tx, top, &t, &title);
         let s = if confirm {
@@ -1133,7 +1152,7 @@ impl ShellUi {
             info.sub
         };
         let s = b.fit(&s, &sub, right - tx);
-        arrow_text(b, tx, top + title.line_px() + 3.0, &s, &sub, true);
+        arrow_text(b, tx, top + title.line_px() + 2.0, &s, &sub, true);
     }
 
     fn menu_hints(&self, m: &Cross, v: &View) -> Vec<(&'static str, &'static str)> {
@@ -1177,14 +1196,14 @@ impl ShellUi {
     /// (no hairline, no category tabs).
     fn glass_status(&self, b: &mut B, pal: &Pal, v: &View, g: &Glass, lava: Option<(&lava::Prims, Color, f32)>) {
         glass(b, pal, g, 0.0, 0.0, W, BAR_H, 0.42, lava);
-        let clock = ts(Face::SerifItalic, 40.0, pal.ink).line_height(1.0);
+        let clock = ts(Face::SerifItalic, 48.0, pal.ink).line_height(1.0);
         b.text(28.0, BAR_H / 2.0 - clock.line_px() / 2.0, &v.sys.time, &clock);
-        let mono = ts(Face::Mono400, 15.0, pal.ink);
+        let mono = ts(Face::Mono400, 19.0, pal.ink);
         let mut right = W - 28.0;
         if let Some(bat) = v.sys.battery {
             right -= b.text_right(right, BAR_H / 2.0 - mono.line_px() / 2.0, &format!("{bat}%"), &mono) + 8.0;
             // a small battery: body, level, cap
-            let (bw, bh) = (34.0, 16.0);
+            let (bw, bh) = (42.0, 20.0);
             let (bx, by) = (right - 3.0 - bw, BAR_H / 2.0 - bh / 2.0);
             b.frame(bx, by, bw, bh, 1.5, pal.ink);
             let fill = if v.sys.charging || bat > 15 {
@@ -1195,10 +1214,10 @@ impl ShellUi {
                 pal.orange
             };
             b.rect(bx + 3.5, by + 3.5, (bw - 7.0) * bat.min(100) as f32 / 100.0, bh - 7.0, fill);
-            b.rect(bx + bw + 1.0, by + 4.5, 3.0, 7.0, pal.ink);
+            b.rect(bx + bw + 1.0, by + 6.0, 4.0, 8.0, pal.ink);
             if v.sys.charging {
-                b.poly_concave(&bolt_pts(bx - 12.0, BAR_H / 2.0, 18.0), pal.ink);
-                right = bx - 26.0;
+                b.poly_concave(&bolt_pts(bx - 14.0, BAR_H / 2.0, 22.0), pal.ink);
+                right = bx - 30.0;
             } else {
                 right = bx - 14.0;
             }
@@ -1214,19 +1233,19 @@ impl ShellUi {
             right -= b.text_right(right, BAR_H / 2.0 - mono.line_px() / 2.0, &net.join(" · "), &mono) + 12.0;
         }
         if v.sys.ssh_sessions > 0 {
-            chip(b, right, BAR_H / 2.0, "SSH", 14.0, (8.0, 2.0), pal.lime, pal.lime_ink);
+            chip(b, right, BAR_H / 2.0, "SSH", 18.0, (9.0, 3.0), pal.lime, pal.lime_ink);
         }
     }
 }
 
 /// A frosted pane over the backdrop the MENU sits on: the blurred app (cut
 /// to the pane) under its veil, the lava seen softly through it, then a
-/// light ground at `tint` and a light top edge. Over home (no blur) a flat
-/// ground.
+/// light ground at `tint` and a light top edge. With nothing blurred (an
+/// app still starting) a flat ground.
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct Glass {
-    /// The app behind, blurred: (uid, its geometry).
-    pub app: Option<(u32, [f32; 4])>,
+    /// The blurred backdrop (the app or home) and where it is on screen.
+    pub src: Option<(Src, [f32; 4])>,
     /// The veil over the blurred app (frost x 0.62).
     pub veil: f32,
 }
@@ -1236,14 +1255,14 @@ pub(super) fn glass(b: &mut B, pal: &Pal, g: &Glass, x: f32, y: f32, w: f32, h: 
     if w <= 0.0 || h <= 0.0 {
         return;
     }
-    match g.app {
-        Some((uid, gg)) if gg[2] > 0.0 && gg[3] > 0.0 => {
+    match g.src {
+        Some((src, gg)) if gg[2] > 0.0 && gg[3] > 0.0 => {
             // the blur under the pane, in screen space (the pane may move
             // or scale; the backdrop does not)
             let m = b.xf();
             let (p0, p1) = (m.apply((x, y)), m.apply((x + w, y + h)));
             let uv = [(p0.0 - gg[0]) / gg[2], (p0.1 - gg[1]) / gg[3], (p1.0 - gg[0]) / gg[2], (p1.1 - gg[1]) / gg[3]];
-            b.image(Src::Blur(uid), x, y, w, h, uv.map(|c| c.clamp(0.0, 1.0)));
+            b.image(src, x, y, w, h, uv.map(|c| c.clamp(0.0, 1.0)));
             b.rect(x, y, w, h, with_a(pal.ground, g.veil));
         }
         _ => b.rect(x, y, w, h, with_a(pal.ground, 0.9)),
@@ -1259,6 +1278,14 @@ pub(super) fn glass(b: &mut B, pal: &Pal, g: &Glass, x: f32, y: f32, w: f32, h: 
     b.rect(x, y, w, 1.0, Color(255, 255, 255, if pal.night { 60 } else { 190 }));
 }
 
+/// The lava's wax: the category's accent mixed 35% toward the ground, so
+/// the lamp stays a quiet background element.
+pub(super) fn lava_fill(pal: &Pal, cat: Cat) -> Color {
+    let (a, g) = (cat.accent(pal), pal.ground);
+    let mix = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * 0.35).round() as u8;
+    Color(mix(a.0, g.0), mix(a.1, g.1), mix(a.2, g.2), 255)
+}
+
 /// A box border without its left side (the label's segments).
 fn open_box(b: &mut B, x: f32, y: f32, w: f32, h: f32, bw: f32, c: Color) {
     b.rect(x, y, w, bw, c);
@@ -1270,18 +1297,18 @@ fn open_box(b: &mut B, x: f32, y: f32, w: f32, h: f32, bw: f32, c: Color) {
 pub(super) fn glass_hints(b: &mut B, pal: &Pal, g: &Glass, items: &[(&str, &str)], lava: Option<(&lava::Prims, Color, f32)>) {
     let y = H - HINT_H;
     glass(b, pal, g, 0.0, y, W, HINT_H, 0.42, lava);
-    let cap_st = ts(Face::Mono600, 13.0, DAY.ground);
-    let lab = ts(Face::Body400, 17.0, pal.soft);
+    let cap_st = ts(Face::Mono600, 17.0, DAY.ground);
+    let lab = ts(Face::Body400, 22.0, pal.soft);
     let mut right = W - 28.0;
     for (cap, label) in items.iter().rev() {
         let lw = b.measure(label, &lab);
         b.text(right - lw, y + HINT_H / 2.0 - lab.line_px() / 2.0, label, &lab);
-        right -= lw + 8.0;
+        right -= lw + 10.0;
         let tw = arrow_text(b, 0.0, 0.0, cap, &cap_st, false);
-        let cw = (tw + 18.0).max(30.0);
-        b.rrect(right - cw, y + HINT_H / 2.0 - 15.0, cw, 30.0, 15.0, Color(29, 29, 29, 209));
+        let cw = (tw + 22.0).max(38.0);
+        b.rrect(right - cw, y + HINT_H / 2.0 - 19.0, cw, 38.0, 19.0, Color(29, 29, 29, 209));
         arrow_text(b, right - cw + (cw - tw) / 2.0, y + HINT_H / 2.0 - cap_st.line_px() / 2.0, cap, &cap_st, true);
-        right -= cw + 22.0;
+        right -= cw + 26.0;
     }
 }
 
@@ -1334,8 +1361,8 @@ fn row_info(row: &Row, v: &View, _ui_vol: u8) -> RowInfo {
 /// The options popup (Y on a window): frosted, ink outline and shadow.
 fn draw_ctx(b: &mut B, pal: &Pal, c: &Ctx, g: &Glass) {
     let a = c.op.x.clamp(0.0, 1.0);
-    let rh = 56.0;
-    let (x, y, w) = (CTX_X - (1.0 - c.op.x) * 20.0, CTX_Y, 300.0);
+    let rh = 64.0;
+    let (x, y, w) = (CTX_X - (1.0 - c.op.x) * 20.0, CTX_Y, 340.0);
     b.push_alpha(a);
     let h = rh * c.items.len() as f32;
     b.rect(x + 8.0, y + 8.0, w, h, pal.dark);
@@ -1347,8 +1374,8 @@ fn draw_ctx(b: &mut B, pal: &Pal, c: &Ctx, g: &Glass) {
         if on {
             b.rect(x, ry, w, rh, if warn { pal.orange } else { pal.lime });
         }
-        let st = ts(Face::Body400, 22.0, if on { pal.dark } else { pal.ink });
-        b.text(x + 18.0, ry + rh / 2.0 - st.line_px() / 2.0, it.name(), &st);
+        let st = ts(Face::Body400, 28.0, if on { pal.dark } else { pal.ink });
+        b.text(x + 20.0, ry + rh / 2.0 - st.line_px() / 2.0, it.name(), &st);
     }
     b.frame(x, y, w, h, 2.0, pal.dark);
     b.pop_alpha();

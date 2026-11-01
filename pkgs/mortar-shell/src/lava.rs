@@ -35,7 +35,7 @@ pub const FH: usize = (LH / CELL) as usize;
 /// Ink edge, px.
 pub const EDGE: f32 = 2.0;
 /// Metaball union softness (px): gaps narrower than ~1.4x this close up.
-pub const MERGE: f32 = 12.0;
+pub const MERGE: f32 = 16.0;
 /// Each primitive's distance is clamped to +-CLAMP before the union.
 const CLAMP: f32 = 60.0;
 /// The mockup's lamp mapped into ours: x' = CX + (x - 800) * SCALE.

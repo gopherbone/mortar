@@ -221,9 +221,9 @@ fn chan_state(c: Chan, v: &View, prefs: &Prefs) -> (u8, bool, bool) {
     }
 }
 
-const ROW_H: f32 = 62.0;
-const LBL_H: f32 = 36.0;
-const ROWS_TOP: f32 = 170.0;
+const ROW_H: f32 = 84.0;
+const LBL_H: f32 = 44.0;
+const ROWS_TOP: f32 = 176.0;
 const ROWS_BOTTOM: f32 = H - HINT_H;
 const CH_W: f32 = 168.0;
 const CH_GAP: f32 = 18.0;
@@ -527,7 +527,7 @@ impl ShellUi {
         let lava_dx = (1.0 - m.page_x.x) * W;
         let accent = m.cat.accent(pal);
         let prims = m.lava_visible().then(|| m.lamp.prims());
-        glass(b, pal, g, 0.0, y0, W, h, 0.62, prims.as_ref().map(|p| (p, accent, lava_dx)));
+        glass(b, pal, g, 0.0, y0, W, h, 0.62, prims.as_ref().map(|p| (p, super::cross::lava_fill(pal, m.cat), lava_dx)));
         // header: serif title, a mono line, an icon block with a hard shadow
         let (title, line, icon) = match s.kind {
             SubKind::Wifi => ("Wi-Fi", wifi_line(v), Ic::Wifi),
@@ -537,7 +537,7 @@ impl ShellUi {
         let tst = ts(Face::SerifItalic, 64.0, pal.ink).line_height(1.0);
         let top = y0 + 22.0;
         let tw = b.text(40.0, top, title, &tst);
-        let mono = ts(Face::Mono400, 14.0, pal.soft);
+        let mono = ts(Face::Mono400, 18.0, pal.soft);
         let base = top + 64.0 * 0.82;
         let lw = W - 40.0 - 64.0 - 24.0 - (40.0 + tw + 18.0);
         let line = b.fit(&line, &mono, lw);
@@ -580,8 +580,8 @@ impl ShellUi {
         let sel_col = Cat::Settings.accent(pal);
         for r in &rows {
             if let SRow::Label(t) = r {
-                let st = ts(Face::Mono400, 13.0, pal.soft).tracking(0.08);
-                b.text(40.0, y + 14.0, &t.to_uppercase(), &st);
+                let st = ts(Face::Mono400, 16.0, pal.soft).tracking(0.08);
+                b.text(40.0, y + 16.0, &t.to_uppercase(), &st);
                 y += LBL_H;
                 continue;
             }
@@ -600,8 +600,8 @@ impl ShellUi {
             let dis = matches!(r, SRow::Note(..));
             let ink = if on { pal.dark } else { pal.ink };
             b.push_alpha(if dis { 0.4 } else { 1.0 });
-            let tst = if on { ts(Face::SerifItalic, 32.0, ink).line_height(1.0) } else { ts(Face::Body600, 22.0, ink).line_height(1.1) };
-            let sst = ts(Face::Mono400, 13.0, if on { pal.dark } else { pal.soft });
+            let tst = if on { ts(Face::SerifItalic, 42.0, ink).line_height(1.0) } else { ts(Face::Body600, 30.0, ink).line_height(1.1) };
+            let sst = ts(Face::Mono400, 18.0, if on { pal.dark } else { pal.soft });
             let ttop = y + ROW_H / 2.0 - (tst.line_px() + sst.line_px()) / 2.0;
             let rw = self.draw_row_right(b, pal, v, r, on, y);
             let maxw = W - 40.0 - rw - 40.0 - 16.0;
@@ -698,15 +698,15 @@ impl ShellUi {
     fn draw_row_right(&self, b: &mut B, pal: &Pal, v: &View, r: &SRow, on: bool, y: f32) -> f32 {
         let cy = y + ROW_H / 2.0;
         let right = W - 40.0;
-        let mono = ts(Face::Mono400, 14.0, if on { pal.dark } else { pal.ink });
+        let mono = ts(Face::Mono400, 18.0, if on { pal.dark } else { pal.ink });
         let ink = if on { pal.dark } else { pal.ink };
         let wifi = v.net.map(|n| &n.wifi);
         match r {
             SRow::Toggle => {
                 let is_bt = self.menu.as_ref().and_then(|m| m.sub.as_ref()).is_some_and(|s| s.kind == SubKind::Bluetooth);
                 let state = if is_bt { bt_on(v) } else { wifi_on(v) };
-                pill(b, pal, right - 52.0, cy - 14.0, state);
-                52.0
+                pill(b, pal, right - 64.0, cy - 17.0, state);
+                64.0
             }
             SRow::Conn => {
                 let ssid = wifi.and_then(|w| w.ssid.clone()).unwrap_or_default();
@@ -718,40 +718,40 @@ impl ShellUi {
                 sig(b, pal, right, cy, bars, ink)
             }
             SRow::Details | SRow::Other => {
-                let ch = ts(Face::Mono400, 22.0, ink);
+                let ch = ts(Face::Mono400, 30.0, ink);
                 b.text_right(right, cy - ch.line_px() / 2.0, "›", &ch)
             }
             SRow::Dev(addr) => {
                 let conn = v.net.and_then(|n| n.bt.devices.iter().find(|d| d.address == *addr)).is_some_and(|d| d.connected);
                 let mut x = right;
                 if on {
-                    let lab = ts(Face::Mono400, 14.0, pal.dark);
+                    let lab = ts(Face::Mono400, 18.0, pal.dark);
                     x -= b.text_right(x, cy - lab.line_px() / 2.0, "Forget", &lab) + 8.0;
-                    let cap = ts(Face::Mono600, 13.0, DAY.ground);
-                    b.rrect(x - 30.0, cy - 15.0, 30.0, 30.0, 15.0, Color(29, 29, 29, 209));
-                    b.text_center(x - 15.0, cy - cap.line_px() / 2.0, "X", &cap);
-                    x -= 30.0 + 14.0;
+                    let cap = ts(Face::Mono600, 17.0, DAY.ground);
+                    b.rrect(x - 38.0, cy - 19.0, 38.0, 38.0, 19.0, Color(29, 29, 29, 209));
+                    b.text_center(x - 19.0, cy - cap.line_px() / 2.0, "X", &cap);
+                    x -= 38.0 + 14.0;
                 }
                 let t = if conn { "On" } else { "Off" };
                 let tw = b.measure(t, &mono) + 16.0;
                 let th = mono.line_px() + 4.0;
                 b.rect(x - tw, cy - th / 2.0, tw, th, DAY.ground);
                 b.frame(x - tw, cy - th / 2.0, tw, th, 2.0, pal.dark);
-                b.text(x - tw + 8.0, cy - mono.line_px() / 2.0, t, &ts(Face::Mono400, 14.0, pal.dark));
+                b.text(x - tw + 8.0, cy - mono.line_px() / 2.0, t, &ts(Face::Mono400, 18.0, pal.dark));
                 right - (x - tw)
             }
             SRow::Scan => {
                 let disc = v.net.is_some_and(|n| n.bt.discovering);
-                let ch = ts(Face::Mono400, 22.0, ink);
+                let ch = ts(Face::Mono400, 30.0, ink);
                 if disc {
                     // a slow turning ring while it searches
                     let a = (self.t as f32 * 4.0) % std::f32::consts::TAU;
                     let pts: Vec<P> = (0..=20).map(|i| {
                         let t = a + i as f32 / 20.0 * 4.4;
-                        (right - 10.0 + 8.0 * t.cos(), cy + 8.0 * t.sin())
+                        (right - 12.0 + 11.0 * t.cos(), cy + 11.0 * t.sin())
                     }).collect();
                     b.stroke(&pts, false, 2.0, ink);
-                    20.0
+                    26.0
                 } else {
                     b.text_right(right, cy - ch.line_px() / 2.0, "›", &ch)
                 }
@@ -768,7 +768,7 @@ impl ShellUi {
         let avail = W - 80.0;
         let sx = if total <= avail { 0.0 } else { ((sel as f32 + 0.5) * (CH_W + CH_GAP) - avail / 2.0).clamp(0.0, total - avail) };
         let y = ROWS_TOP + 18.0;
-        let hgt = 359.0;
+        let hgt = 372.0;
         b.clip(Some([0.0, ROWS_TOP, W, ROWS_BOTTOM - ROWS_TOP]));
         for (i, c) in ch.iter().enumerate() {
             let x = 40.0 + i as f32 * (CH_W + CH_GAP) - sx;
@@ -791,12 +791,12 @@ impl ShellUi {
             }
             b.push_alpha(if live { 1.0 } else { 0.4 });
             let cx = x + CH_W / 2.0;
-            let nst = if on { ts(Face::SerifItalic, 26.0, pal.ink).line_height(1.2) } else { ts(Face::Body600, 18.0, pal.ink).line_height(1.2) };
+            let nst = if on { ts(Face::SerifItalic, 32.0, pal.ink).line_height(1.2) } else { ts(Face::Body600, 22.0, pal.ink).line_height(1.2) };
             let nm = b.fit(&name, &nst, CH_W - 16.0);
-            b.text_center(cx, y + 14.0 + (31.0 - nst.line_px()) / 2.0, &nm, &nst);
+            b.text_center(cx, y + 14.0 + (40.0 - nst.line_px()) / 2.0, &nm, &nst);
             // the fader: a track, the level in the channel's colour, a knob
-            let (fx, fy, fh) = (cx - 35.0, y + 14.0 + 31.0 + 10.0, 230.0);
-            let lv = level.min(100) as f32 * 2.3;
+            let (fx, fy, fh) = (cx - 35.0, y + 14.0 + 40.0 + 10.0, 220.0);
+            let lv = level.min(100) as f32 * fh / 100.0;
             b.rect(fx + 22.0, fy, 14.0, fh, with_a(DAY.ground, 0.6));
             b.frame(fx + 22.0, fy, 14.0, fh, 2.0, pal.dark);
             if lv > 0.0 {
@@ -809,7 +809,7 @@ impl ShellUi {
             b.rect(fx + 10.0, ky + 4.0, 46.0, 20.0, pal.dark);
             b.rect(fx + 6.0, ky, 46.0, 20.0, DAY.ground);
             b.frame(fx + 6.0, ky, 46.0, 20.0, 2.0, pal.dark);
-            let vst = ts(Face::Mono400, 15.0, pal.ink);
+            let vst = ts(Face::Mono400, 20.0, pal.ink);
             let vy = fy + fh + 10.0;
             let vt = if !live {
                 "no sound".to_string()
@@ -819,10 +819,10 @@ impl ShellUi {
                 format!("{level}%")
             };
             b.text_center(cx, vy, &vt, &vst);
-            let mst = ts(Face::Mono400, 13.0, pal.dark);
-            let (mw, mh) = (34.0, 24.0);
+            let mst = ts(Face::Mono400, 17.0, pal.dark);
+            let (mw, mh) = (44.0, 30.0);
             let my = vy + vst.line_px() + 10.0;
-            let pts = crate::scene::rrect_pts(cx - mw / 2.0, my, mw, mh, 12.0);
+            let pts = crate::scene::rrect_pts(cx - mw / 2.0, my, mw, mh, 15.0);
             b.poly(&pts, if muted { pal.orange } else { DAY.ground });
             b.stroke(&pts, true, 2.0, pal.dark);
             b.text_center(cx, my + mh / 2.0 - mst.line_px() / 2.0, "M", &mst);
@@ -880,20 +880,20 @@ fn bt_line(v: &View) -> String {
 
 /// An on/off switch, 52 x 28.
 fn pill(b: &mut B, pal: &Pal, x: f32, y: f32, on: bool) {
-    let pts = crate::scene::rrect_pts(x, y, 52.0, 28.0, 14.0);
+    let pts = crate::scene::rrect_pts(x, y, 64.0, 34.0, 17.0);
     b.poly(&pts, if on { pal.dark } else { DAY.ground });
     b.stroke(&pts, true, 2.0, pal.dark);
-    let kx = if on { x + 27.0 + 9.0 } else { x + 3.0 + 9.0 };
-    b.ellipse(kx, y + 14.0, 9.0, 9.0, if on { pal.lime } else { pal.dark });
+    let kx = if on { x + 64.0 - 4.0 - 11.0 } else { x + 4.0 + 11.0 };
+    b.ellipse(kx, y + 17.0, 11.0, 11.0, if on { pal.lime } else { pal.dark });
 }
 
 /// Signal bars (0..4), right-aligned at `right`. Returns the width.
 fn sig(b: &mut B, pal: &Pal, right: f32, cy: f32, bars: u8, ink: Color) -> f32 {
-    let w = 4.0 * 5.0 + 3.0 * 2.0;
+    let w = 4.0 * 7.0 + 3.0 * 3.0;
     for i in 0..4 {
-        let h = 5.0 + i as f32 * 4.0;
-        let x = right - w + i as f32 * 7.0;
-        b.rect(x, cy + 9.0 - h, 5.0, h, if (i as u8) < bars { ink } else { pal.faint });
+        let h = 7.0 + i as f32 * 5.0;
+        let x = right - w + i as f32 * 10.0;
+        b.rect(x, cy + 11.0 - h, 7.0, h, if (i as u8) < bars { ink } else { pal.faint });
     }
     w
 }

@@ -78,8 +78,12 @@ pub enum Src {
     Blur(u32),
     /// A CPU-drawn layer (mortar-ui toolkit screens).
     Layer(Layer),
-    /// The lava lamp's distance field (quarter resolution, see lava.rs).
+    /// The lava lamp's distance field (1/6 resolution, see lava.rs).
     Lava,
+    /// The home screen blurred (the MENU's backdrop when no app is in
+    /// front): rendered once when it is first needed, blurred like
+    /// `Blur`, kept while frames keep using it.
+    HomeBlur,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -185,6 +189,11 @@ impl Scene {
             Item::Lava(l) => Some(&l.prims),
             _ => None,
         })
+    }
+
+    /// The frame shows the blurred home screen.
+    pub fn home_blur(&self) -> bool {
+        self.items.iter().any(|i| matches!(i, Item::Image { src: Src::HomeBlur, .. }))
     }
 
     /// The apps this frame shows blurred.

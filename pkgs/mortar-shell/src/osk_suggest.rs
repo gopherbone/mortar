@@ -193,7 +193,7 @@ impl Strip {
 
 /// Height of the strip.
 pub fn strip_h(ui: &Ui) -> f32 {
-    ui.cq(5.0).round()
+    ui.cq(6.8).round()
 }
 
 const PINK: Color = Color::hex(0xff77a8);
@@ -225,11 +225,11 @@ fn short(label: &str, max: usize) -> String {
 pub fn draw(ui: &mut Ui, area: Rect, strip: &Strip) {
     let t = mortar_ui::theme::get();
     let hw = toolkit::hair(ui);
-    let pad = ui.cq(1.0);
-    let ch = ui.cq(3.4).round();
+    let pad = ui.cq(1.2);
+    let ch = ui.cq(4.7).round();
     let cy = area.y + pad / 2.0 + (area.h - pad / 2.0) / 2.0;
     let top = (cy - ch / 2.0).round();
-    let st_hint = toolkit::st_body(ui, 1.9, t.line_soft);
+    let st_hint = toolkit::st_body(ui, 2.6, t.line_soft);
 
     // hints on the right
     let hints: Vec<(&str, &str)> = if strip.chips.is_empty() {
@@ -257,14 +257,14 @@ pub fn draw(ui: &mut Ui, area: Rect, strip: &Strip) {
     }
 
     // chips, scrolled so the focused one shows
-    let gap = ui.cq(0.8);
+    let gap = ui.cq(1.0);
     let tag_w = ch;
     let widths: Vec<f32> = strip
         .chips
         .iter()
         .map(|c| {
-            let max = if c.kind == Kind::History { 34 } else { 24 };
-            tag_w + ui.cq(1.2) * 2.0 + ui.measure(&short(&c.label, max), &chip_style(ui, false))
+            let max = if c.kind == Kind::History { 26 } else { 18 };
+            tag_w + ui.cq(1.6) * 2.0 + ui.measure(&short(&c.label, max), &chip_style(ui, false))
         })
         .collect();
     let avail = chips_right - (area.x + pad);
@@ -288,13 +288,13 @@ pub fn draw(ui: &mut Ui, area: Rect, strip: &Strip) {
         let tr = Rect::new(r.x, r.y, tag_w, ch);
         ui.fill_block(tr, fill);
         ui.fill_block(Rect::new(tr.right() - hw, r.y, hw, ch), t.line);
-        let gst = TextStyle::new(Face::Mono600, ui.cq(2.0), ink);
+        let gst = TextStyle::new(Face::Mono600, ui.cq(2.8), ink);
         let gw = ui.measure(glyph, &gst);
         ui.text_vcenter(tr.x + (tag_w - gw) / 2.0, cy, glyph, &gst);
         ui.outline(r, hw, t.line);
-        let max = if c.kind == Kind::History { 34 } else { 24 };
+        let max = if c.kind == Kind::History { 26 } else { 18 };
         let label = short(&c.label, max);
-        let lx = tr.right() + ui.cq(1.2);
+        let lx = tr.right() + ui.cq(1.6);
         let st = chip_style(ui, sel);
         // the history line: what is typed already is dim
         let n = c.label.chars().count();
@@ -315,7 +315,7 @@ pub fn draw(ui: &mut Ui, area: Rect, strip: &Strip) {
 
 fn chip_style(ui: &Ui, sel: bool) -> TextStyle {
     let t = mortar_ui::theme::get();
-    TextStyle::new(if sel { Face::Mono600 } else { Face::Mono400 }, ui.cq(2.1), if sel { t.lime_ink } else { t.line })
+    TextStyle::new(if sel { Face::Mono600 } else { Face::Mono400 }, ui.cq(2.9), if sel { t.lime_ink } else { t.line })
 }
 
 /// Chips for previews: `git ch` typed after `git status` in history.

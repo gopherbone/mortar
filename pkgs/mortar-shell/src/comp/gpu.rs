@@ -84,6 +84,8 @@ pub struct GpuUi {
     pub lava_ms: f32,
     lava_frames: u64,
     lava_at: Option<Instant>,
+    /// The blurred home screen: (Shell::home_gen it shows, result, scratch).
+    home: Option<(u64, Fbo, Fbo)>,
 }
 
 /// Every this many lava frames, the field pass is timed.
@@ -114,6 +116,7 @@ impl GpuUi {
             lava_ms: 0.0,
             lava_frames: 0,
             lava_at: None,
+            home: None,
         };
         for _ in 0..2 {
             match me.alloc(size) {
@@ -215,6 +218,7 @@ impl GpuUi {
             .collect();
         let blur = &self.blur;
         let lava = &self.lava;
+        let home = &self.home;
         let lookup = |src: Src| -> Option<(u32, bool, bool, i32, i32)> {
             let t = match src {
                 Src::App(u) => {
@@ -229,6 +233,10 @@ impl GpuUi {
                 Src::Lava => {
                     let f = lava.as_ref()?;
                     return Some((f.tex, false, false, f.w, f.h));
+                }
+                Src::HomeBlur => {
+                    let (_, a, _) = home.as_ref()?;
+                    return Some((a.tex, false, true, a.w, a.h));
                 }
             };
             Some((t.tex, t.swizzle, t.opaque, t.w, t.h))
@@ -310,6 +318,7 @@ impl GpuUi {
         }
         self.prepare_blur(shell, scene);
         self.prepare_lava(scene);
+        self.prepare_home(shell);
         // CPU layers
         for (l, pm) in [(Layer::Osk, shell.cpu_imgs.osk.as_ref()), (Layer::Page, shell.cpu_imgs.page.as_ref())] {
             let Some(pm) = pm else {
@@ -388,6 +397,55 @@ impl GpuUi {
                 self.blur_ms = t0.elapsed().as_secs_f32() * 1000.0;
             }
             Err(e) => tracing::warn!("blur: {e}"),
+        }
+    }
+
+    /// The blurred home screen behind the MENU: the home scene drawn
+    /// straight into a quarter-size FBO, then the gaussian rounds. Once per
+    /// new home scene (the MENU opening over home); freed with it.
+    fn prepare_home(&mut self, shell: &Shell) {
+        let Some(hs) = shell.home_scene.as_ref() else {
+            if let Some((_, a, b)) = self.home.take() {
+                self.gl.drop_fbo(a);
+                self.gl.drop_fbo(b);
+            }
+            return;
+        };
+        if self.home.as_ref().is_some_and(|h| h.0 == shell.home_gen) {
+            return;
+        }
+        if self.home.is_none() {
+            let (w, h) = ((shell.size.0 / 4).max(1), (shell.size.1 / 4).max(1));
+            let a = match self.gl.fbo(w, h) {
+                Ok(a) => a,
+                Err(e) => return tracing::warn!("home blur: {e}"),
+            };
+            match self.gl.fbo(w, h) {
+                Ok(b) => self.home = Some((0, a, b)),
+                Err(e) => {
+                    self.gl.drop_fbo(a);
+                    return tracing::warn!("home blur: {e}");
+                }
+            }
+        }
+        let Some((_, a, b)) = self.home.take() else { return };
+        let (cw, ch) = (shell.size.0 as f32, shell.size.1 as f32);
+        let t0 = Instant::now();
+        let r = match shell.typo.as_ref() {
+            Some(t) => self.gl.render_into(&a, cw, ch, hs, t).and_then(|_| self.gl.blur_in_place(&a, &b)),
+            None => Err("no fonts".into()),
+        };
+        match r {
+            Ok(()) => {
+                self.blur_count += 1;
+                self.gl.finish();
+                self.blur_ms = t0.elapsed().as_secs_f32() * 1000.0;
+                self.home = Some((shell.home_gen, a, b));
+            }
+            Err(e) => {
+                tracing::warn!("home blur: {e}");
+                self.home = Some((0, a, b));
+            }
         }
     }
 
@@ -477,6 +535,10 @@ impl GpuUi {
         if let Some(b) = self.blur.take() {
             self.gl.drop_fbo(b.a);
             self.gl.drop_fbo(b.b);
+        }
+        if let Some((_, a, b)) = self.home.take() {
+            self.gl.drop_fbo(a);
+            self.gl.drop_fbo(b);
         }
         if let Some(f) = self.lava.take() {
             self.gl.drop_fbo(f);
