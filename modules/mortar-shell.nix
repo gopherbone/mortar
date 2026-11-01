@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 # Mortar shell: a controller-driven Wayland compositor (pkgs/mortar-shell)
-# that runs several apps at once. Every app is fullscreen; MENU switches,
-# closes and launches apps and opens quick settings. Background apps keep
+# that runs several apps at once. Every app is fullscreen; MENU opens a
+# cross menu over the app (Running, Apps, Games, Music, Quick, Power) that
+# switches, closes and launches apps and holds quick settings. Background apps keep
 # running (the M8 keeps playing while you use the terminal).
 #
 # Off by default: importing this module changes nothing until
@@ -36,7 +37,7 @@ let
         name = mkOption {
           type = types.str;
           default = name;
-          description = "Name on the launcher tile and in the app switcher.";
+          description = "Name on the launcher tile and in the MENU.";
         };
         description = mkOption {
           type = types.str;
@@ -52,8 +53,8 @@ let
           type = types.nullOr (types.enum arts);
           default = null;
           description = ''
-            Isometric illustration on the home tile and in the Launch grid
-            (`null`: guessed from the id, name and icon).
+            Isometric illustration on the home tile (and the icon in the
+            MENU; `null`: guessed from the id, name and icon).
           '';
         };
         command = mkOption {
@@ -84,6 +85,17 @@ let
           default = true;
           description = "Starting it again switches to the running copy.";
         };
+        category = mkOption {
+          type = types.nullOr (types.enum categories);
+          default = null;
+          description = ''
+            Where it shows in the MENU besides Apps (which lists every
+            entry): `games` or `music` (`apps`: only under Apps). `null`:
+            `mortar.shell.categories.<id>`, else guessed from the
+            illustration and name (M8 and trackers are music; PICO-8,
+            PuzzleScript and emulators are games).
+          '';
+        };
         order = mkOption {
           type = types.int;
           default = 100;
@@ -94,6 +106,7 @@ let
   );
 
   arts = [ "m8" "pico8" "games" "claude" "puzzle" "term" "generic" ];
+  categories = [ "apps" "games" "music" ];
 
   argv = c: if builtins.isString c then [ "${pkgs.runtimeShell}" "-c" c ] else c;
 
@@ -136,12 +149,14 @@ let
     command = cfg.terminal.command;
     env = { };
     art = "term";
+    category = "apps";
   };
 
   fromGreeter = lib.mapAttrs (
     id: s: {
       inherit (s) name description icon env order;
       art = null;
+      category = null;
       command = s.command;
       gamepad = "forward";
       singleInstance = true;
@@ -167,10 +182,18 @@ let
 
   configFile = pkgs.writeText "mortar-shell.json" (
     builtins.toJSON {
-      apps = map (a: {
-        inherit (a) id name description icon env gamepad singleInstance;
-        command = argv a.command;
-      } // lib.optionalAttrs (a.art or null != null) { inherit (a) art; }) sorted;
+      apps = map (
+        a:
+        let
+          category = if a.category or null != null then a.category else cfg.categories.${a.id} or null;
+        in
+        {
+          inherit (a) id name description icon env gamepad singleInstance;
+          command = argv a.command;
+        }
+        // lib.optionalAttrs (a.art or null != null) { inherit (a) art; }
+        // lib.optionalAttrs (category != null) { inherit category; }
+      ) sorted;
       ui = {
         inherit (cfg.ui) renderer motion reduceMotion sounds soundVolume haptics bootAnimation screenshotDir cardFps msaa audioDevice suspend;
         hapticMs = cfg.ui.hapticMs;
@@ -185,7 +208,7 @@ let
       # Wayland clients (mortar-wlegl dma-bufs, scanned out directly),
       # otherwise on software GL.
       env = { MORTAR_SDL = if cfg.gpuApps then "wayland-gpu" else "software"; } // cfg.environment;
-      # Settings > Wi-Fi / Remote access (modules/mortar-setup.nix)
+      # MENU > Quick > Wi-Fi and Settings… > Remote access (modules/mortar-setup.nix)
       setupSocket = if config.mortar ? setup && config.mortar.setup.enable then "/run/mortar-setup/control.sock" else null;
     }
   );
@@ -230,6 +253,16 @@ in
         }
       '';
       description = "Launcher entries, keyed by id (added to the imported greeter sessions and the terminal).";
+    };
+
+    categories = mkOption {
+      type = types.attrsOf (types.enum categories);
+      default = { };
+      example = { m8 = "music"; pico8 = "games"; };
+      description = ''
+        MENU category by app id, for entries that do not set `category`
+        themselves (e.g. the imported greeter sessions).
+      '';
     };
 
     importGreeterSessions = mkOption {
@@ -298,7 +331,7 @@ in
         type = types.enum [ "auto" "gpu" "cpu" ];
         default = "auto";
         description = ''
-          What draws the shell's own screens (home, drawer, transitions,
+          What draws the shell's own screens (home, MENU, transitions,
           OSD, toasts): `auto`/`gpu` use GLES on the PowerVR when
           `mortar.gpu.enable` and it initialises (falling back to the CPU on
           any error), `cpu` always draws with tiny-skia (slower animations).
@@ -308,7 +341,7 @@ in
       motion = mkOption {
         type = types.enum [ "bouncy" "calm" "snappy" ];
         default = "bouncy";
-        description = "Default spring preset (Settings > Motion changes it per user).";
+        description = "Default spring preset (MENU > Quick > Settings… > Motion changes it per user).";
       };
       reduceMotion = mkOption {
         type = types.bool;
@@ -356,7 +389,7 @@ in
         type = types.bool;
         default = false;
         description = ''
-          Sleep (power key tap, Settings > Sleep, the power menu) blanks the
+          Sleep (power key tap, MENU > Quick or Power > Sleep, the power menu) blanks the
           screen and backlight and occludes the front app. With this on it
           also runs `systemctl suspend` once the screen is dark. Off: real
           suspend-to-RAM is untested on the Brick (see DESIGN.md).
@@ -375,7 +408,7 @@ in
       cardFps = mkOption {
         type = types.ints.unsigned;
         default = 15;
-        description = "Frame callbacks per second for apps while their live cards show in the MENU drawer.";
+        description = "Frame callbacks per second for the app whose live preview shows in the MENU (Running).";
       };
       msaa = mkOption {
         type = types.enum [ 0 4 ];
@@ -481,7 +514,7 @@ in
           IdleAction = lib.mkDefault "ignore";
         };
 
-        # Brightness from quick settings (same rule as the greeter).
+        # Brightness from MENU > Quick (same rule as the greeter).
         services.udev.extraRules = ''
           ACTION=="add", SUBSYSTEM=="backlight", RUN+="${pkgs.coreutils}/bin/chgrp video /sys/class/backlight/%k/brightness", RUN+="${pkgs.coreutils}/bin/chmod g+w /sys/class/backlight/%k/brightness"
         '';

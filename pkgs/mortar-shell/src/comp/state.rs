@@ -98,7 +98,7 @@ pub struct Shell {
     pub apps: Apps<Window>,
     /// Launched by a user action and should be shown when it maps.
     pub pending_focus: Option<u32>,
-    /// The shell UI (home, drawer, transitions, OSD, toasts, boot).
+    /// The shell UI (home, MENU, transitions, OSD, toasts, boot).
     pub sui: ShellUi,
     /// Fonts for scenes (taken out while a renderer borrows the shell).
     pub typo: Option<crate::scene::Typo>,
@@ -123,6 +123,10 @@ pub struct Shell {
     pub last_cover: (bool, bool),
     last_ambient: Instant,
     last_card_tick: Instant,
+    /// Wi-Fi and Bluetooth switches (MENU > Quick), read with the status.
+    pub radios: crate::shellui::Radios,
+    /// Apps closing to be started again (MENU > Y > Restart): uid, entry.
+    pub restarts: Vec<(u32, String)>,
     /// Volume keys held (up, down), and whether they made a screenshot.
     vol_held: [bool; 2],
     vol_combo: bool,
@@ -261,6 +265,8 @@ impl Shell {
             last_cover: (false, false),
             last_ambient: Instant::now(),
             last_card_tick: Instant::now(),
+            radios: Default::default(),
+            restarts: Vec::new(),
             vol_held: [false; 2],
             vol_combo: false,
             host,
@@ -301,7 +307,7 @@ impl Shell {
     // ----------------------------------------------------- what's shown ----
 
     /// The shell's own screens take the buttons and cover the app (home,
-    /// the drawer, a transition, the boot screen).
+    /// the MENU, a transition, the boot screen).
     pub fn shell_screen(&self) -> bool {
         self.sui.captures_input(self.visible_app().is_some())
     }
@@ -498,7 +504,7 @@ impl Shell {
         if let Some(p) = self.page_tick {
             t = t.min(p.saturating_duration_since(now));
         }
-        if self.sui.cards_visible() && self.cfg.ui.card_fps > 0 {
+        if self.sui.live_preview().is_some() && self.cfg.ui.card_fps > 0 {
             t = t.min(Duration::from_millis(1000 / self.cfg.ui.card_fps as u64));
         }
         if self.slow_redraw {
@@ -543,6 +549,15 @@ impl Shell {
             if had_vis.is_some_and(|v| gone.contains(&v)) {
                 self.refocus();
             }
+            // MENU > Y > Restart: the old instance is gone, start it again
+            let (again, keep): (Vec<_>, Vec<_>) = std::mem::take(&mut self.restarts).into_iter().partition(|(u, _)| gone.contains(u));
+            self.restarts = keep;
+            for (_, id) in again {
+                if let Err(e) = self.launch(&id) {
+                    tracing::warn!("restart {id}: {e}");
+                    self.sui.show_toast(crate::shellui::Toast::info(format!("Restart failed: {e}")));
+                }
+            }
         }
         // the shell UI: time, transitions, toasts
         self.ui_step();
@@ -560,17 +575,15 @@ impl Shell {
             }
             self.sys_at = Instant::now();
         }
-        // live cards in the drawer: their apps keep drawing (slowly)
-        if self.sui.cards_visible()
+        // the MENU's live preview: that app keeps drawing (slowly)
+        if let Some(uid) = self.sui.live_preview()
             && self.cfg.ui.card_fps > 0
             && self.last_card_tick.elapsed() >= Duration::from_millis(1000 / self.cfg.ui.card_fps as u64)
         {
             self.last_card_tick = Instant::now();
             let t = self.start.elapsed();
-            for a in &self.apps.list {
-                if let Some(w) = a.windows.last() {
-                    w.send_frame(&self.output, t, Some(Duration::ZERO), |_, _| None);
-                }
+            if let Some(w) = self.apps.get(uid).and_then(|a| a.windows.last()) {
+                w.send_frame(&self.output, t, Some(Duration::ZERO), |_, _| None);
             }
         }
         // background apps: throttled frame callbacks
@@ -728,6 +741,7 @@ impl Shell {
                 Routed::ToggleOverlay => {
                     self.sys = Sys::read();
                     self.volume = self.read_volume();
+                    self.radios = super::ui::read_radios();
                     self.ui_menu_key();
                 }
                 Routed::Overlay(b, down) => {

@@ -409,6 +409,7 @@ in
               description = "Emulators · libretro";
               icon = "pad";
               order = 8;
+              category = "games";
               gamepad = "forward";
               command = [ "${launcher}/bin/mortar-play-launch" ];
             };

@@ -212,7 +212,8 @@ fn state(shell: &Shell) -> String {
     json!({
         "socket": shell.socket_name,
         "overlay": shell.sui.menu_open() || shell.sui.page_open(),
-        "tab": shell.sui.tab().map(|t| format!("{t:?}")),
+        "category": shell.sui.menu_category().map(|c| c.name()),
+        "settings": shell.sui.settings_open(),
         "home": shell.visible_app().is_none() && !shell.sui.menu_open(),
         "ui": {
             "layer": shell.ui_layer(),

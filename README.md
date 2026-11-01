@@ -18,7 +18,7 @@ over SSH.
 | Area | State |
 |---|---|
 | Boot | U-Boot SPL → TF-A → U-Boot → `extlinux.conf` → Linux 7.3 → NixOS. All 4 cores. |
-| Shell | `mortar-shell`, a Wayland compositor (Rust, Smithay). Apps run fullscreen side by side; **MENU** opens a drawer with live app cards, a launcher and settings. Its UI is drawn on the GPU with spring animations, synthesized UI sounds and haptic ticks. |
+| Shell | `mortar-shell`, a Wayland compositor (Rust, Smithay). Apps run fullscreen side by side; **MENU** opens a cross menu over the running app: running apps with a live preview, launchers by category, quick settings and power. Its UI is drawn on the GPU with spring animations, synthesized UI sounds and haptic ticks. |
 | GPU | PowerVR GE8300 on TrimUI's stock DDK 1.19 userspace. GPU apps inside the shell render into dma-bufs (`mortar-wlegl`) that the shell scans out directly; outside the shell, `brick_dc_drm` flips them at 60 fps. A busy M8 screen costs ~12% CPU. |
 | Greeter | `mortar-ui` greeter (greetd): pick **Mortar** (the shell) or launch an app directly. |
 | Apps | M8 (m8c; plug the M8 into the top port), ChooChooTracker, PICO-8 (your own licensed copy), PuzzleScript, Games (emulators), Terminal, Claude Code. |
@@ -34,7 +34,7 @@ over SSH.
 | Updates | `nix run .#mortar -- deploy`: build, copy, switch. Every generation stays in the boot menu. |
 | Debug | Each boot saves logs to `mortar-logs/` on the card's FAT partition. |
 
-The power key sleeps (screen off; any button wakes); hold it for Sleep / Restart / Power off. Set the time zone in Settings.
+The power key sleeps (screen off; any button wakes); hold it for Sleep / Restart / Power off. Set the time zone in MENU > Quick > Settings….
 
 Not yet: suspend to RAM, charging configuration, LED effects.
 
@@ -45,8 +45,12 @@ On the greeter, choose **Mortar**. In the shell:
 | Button | Does |
 |---|---|
 | D-pad, A, B | Move, open, back |
-| MENU | Drawer: Apps (live cards; X closes an app), Launch, Settings |
+| MENU | The cross menu over the app: categories across (Running, Apps, Games, Music, Quick, Power), items down; MENU or B closes it |
 | MENU, then A | Flip back to the previous app |
+| In the MENU: ◀▶ / L1, R1 | Next category / jump to the first or last (on a Quick value row ◀▶ change the value) |
+| In the MENU, on a running app: A, X, Y | Switch to it, close it, options (switch, restart, close) |
+| In the MENU, Quick | Brightness and volume (◀▶), Wi-Fi and Bluetooth on/off (A on Wi-Fi: networks), Sleep, Settings… (sounds, motion, palette, time zone, remote access, log out) |
+| In the MENU, Power | Sleep, Restart, Power off (press A twice) |
 | VOL+ / VOL− | Volume (the shell owns these keys) |
 | VOL+ and VOL− together | Screenshot, saved to `~/Pictures/Screenshots` |
 | SELECT + MENU (or F1) | In Games: the game menu (save/load state, reset, quit) |

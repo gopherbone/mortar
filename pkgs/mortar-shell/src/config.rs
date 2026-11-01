@@ -44,6 +44,36 @@ pub struct AppEntry {
     /// Tile illustration (default: guessed from id, name and icon).
     #[serde(default)]
     pub art: Option<crate::art::Art>,
+    /// Where it shows in the MENU's cross besides Apps (default: guessed
+    /// from the illustration and name).
+    #[serde(default)]
+    pub category: Option<Category>,
+}
+
+/// A launcher entry's place in the MENU: every entry is under Apps; games
+/// and music apps are also under Games / Music.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Category {
+    #[default]
+    Apps,
+    Games,
+    Music,
+}
+
+impl Category {
+    /// For entries that do not say: from the illustration and the name.
+    pub fn guess(art: crate::art::Art, id: &str, name: &str) -> Category {
+        use crate::art::Art;
+        let s = format!("{id} {name}").to_ascii_lowercase();
+        match art {
+            Art::M8 => Category::Music,
+            Art::Pico8 | Art::Games | Art::Puzzle => Category::Games,
+            _ if ["tracker", "synth", "music", "midi", "choochoo"].iter().any(|k| s.contains(k)) => Category::Music,
+            _ if ["game", "retro", "emulat"].iter().any(|k| s.contains(k)) => Category::Games,
+            _ => Category::Apps,
+        }
+    }
 }
 
 fn default_icon() -> Icon {
@@ -149,7 +179,7 @@ pub enum Renderer {
     Cpu,
 }
 
-/// Defaults for the user settings (the Settings tab overrides them, saved
+/// Defaults for the user settings (the settings screen overrides them, saved
 /// in $XDG_STATE_HOME/mortar-shell/prefs.json) and the fixed UI options.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields, default)]
@@ -172,8 +202,8 @@ pub struct UiConfig {
     pub audio_device: String,
     /// Where screenshots go ("~" is the home directory).
     pub screenshot_dir: String,
-    /// Frame callbacks per second for apps whose live card shows in the
-    /// MENU drawer.
+    /// Frame callbacks per second for the app whose live preview shows in
+    /// the MENU (Running).
     pub card_fps: u32,
     /// After the screen-off sleep goes dark, also run `actions.sleep`
     /// (suspend-to-RAM). Off: untested on the Brick.
@@ -361,8 +391,20 @@ mod tests {
         assert_eq!(c.ui.haptic_ms.tick, 12);
         assert_eq!(c.ui.haptic_ms.long, 60);
         assert_eq!(c.apps[0].art, Some(crate::art::Art::Claude));
+        assert_eq!(c.apps[0].category, None);
         let p = c.default_prefs();
         assert!(p.night && p.motion == crate::motion::Preset::Snappy && p.sound_volume == 30);
+    }
+
+    #[test]
+    fn categories() {
+        use crate::art::Art;
+        let c: Config = serde_json::from_str(r#"{"apps":[{"id":"x","name":"X","command":["x"],"category":"music"}]}"#).unwrap();
+        assert_eq!(c.apps[0].category, Some(Category::Music));
+        assert_eq!(Category::guess(Art::M8, "m8", "M8"), Category::Music);
+        assert_eq!(Category::guess(Art::Generic, "choochoo", "ChooChoo"), Category::Music);
+        assert_eq!(Category::guess(Art::Puzzle, "games", "PuzzleScript"), Category::Games);
+        assert_eq!(Category::guess(Art::Term, "terminal", "Terminal"), Category::Apps);
     }
 
     #[test]
