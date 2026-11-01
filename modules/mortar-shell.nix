@@ -220,6 +220,11 @@ let
       actions = lib.optionalAttrs config.services.pipewire.enable {
         volumeSet = [ "${pkgs.wireplumber}/bin/wpctl" "set-volume" "-l" "1.0" "@DEFAULT_AUDIO_SINK@" "{step}" ];
         volumeGet = [ "${pkgs.wireplumber}/bin/wpctl" "get-volume" "@DEFAULT_AUDIO_SINK@" ];
+        volumeMute = [ "${pkgs.wireplumber}/bin/wpctl" "set-mute" "@DEFAULT_AUDIO_SINK@" "{mute}" ];
+        # MENU > Music / Settings > Mixer: each app's output streams
+        pwDump = [ "${config.services.pipewire.package}/bin/pw-dump" ];
+        streamVolume = [ "${pkgs.wireplumber}/bin/wpctl" "set-volume" "{id}" "{vol}" ];
+        streamMute = [ "${pkgs.wireplumber}/bin/wpctl" "set-mute" "{id}" "{mute}" ];
       };
       # MENU > Quick > Settings… > Wi-Fi networks / Remote access /
       # Bluetooth devices (modules/mortar-setup.nix)

@@ -163,13 +163,36 @@ runCommand "mortar-shell-headless-test"
     ctl state | jq . > $out/state.json
     jq -e '.apps | length == 2' $out/state.json || echo "FAIL: two apps" >> $out/result
 
-    echo "== MENU, Quick (R1: the last category, Power; Left: Quick)"
+    echo "== MENU, R1: the cross on Settings (lava lamp), then its glass pages"
     ctl press menu
     ctl press r1
-    ctl press left
-    wait_for '.category == "Quick"'
+    wait_for '.category == "Settings"'
     sleep 0.8
-    shot 08-menu-quick
+    shot 08-menu-settings
+    ctl press down
+    ctl press down
+    ctl press a
+    wait_for '.menu_page == "mixer"'
+    sleep 0.6
+    shot 08b-mixer
+    ctl press b
+    wait_for '.menu_page == null'
+    ctl press down
+    ctl press a
+    wait_for '.menu_page == "wifi"'
+    sleep 0.6
+    shot 08c-wifi
+    ctl press b
+    wait_for '.menu_page == null'
+    ctl press down
+    ctl press a
+    wait_for '.menu_page == "bluetooth"'
+    sleep 0.6
+    shot 08d-bluetooth
+    ctl press b
+    wait_for '.menu_page == null'
+    ctl press l1
+    wait_for '.category == "Running"'
     ctl press b
     wait_for '.ui.layer == false'
 
@@ -197,6 +220,13 @@ runCommand "mortar-shell-headless-test"
     tshot 50 menu-050
     tshot 100 menu-150
     tshot 600 menu-750
+    ctl press right   # Running slides off, the cross slides in
+    tshot 120 cross-in-120
+    tshot 600 cross-in-720
+    ctl press down    # the lava sloshes
+    tshot 300 lava-0300
+    tshot 1500 lava-1800
+    tshot 4000 lava-5800
     ctl press b
     tshot 80 menu-close-080
     tshot 600 menu-close-680
@@ -239,16 +269,16 @@ runCommand "mortar-shell-headless-test"
     tshot 60 close-100
     tshot 800 close-done
 
-    # MENU > Quick > Settings… (the last Quick row)
+    # MENU > Settings > More settings (Brightness, Volume, Mixer, Wi-Fi,
+    # Bluetooth, Sleep, More settings: no keyboard app in front)
     settings() {
       ctl press menu
       ctl press r1
-      ctl press left
-      for _ in 1 2 3 4 5 6 7 8; do ctl press down >/dev/null; done
+      for _ in 1 2 3 4 5 6; do ctl press down >/dev/null; done
       ctl press a
     }
 
-    echo "== night palette (MENU > Quick > Settings…), saved"
+    echo "== night palette (MENU > Settings > More settings), saved"
     settings
     tshot 800 settings
     jq -e '.settings == true' <(ctl state) >/dev/null || echo "FAIL: settings screen" >> $out/result

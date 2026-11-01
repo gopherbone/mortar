@@ -269,7 +269,7 @@ void main() {
     vec4 c = u_b[i * 4]; vec4 up = u_b[i * 4 + 1]; vec4 lo = u_b[i * 4 + 2]; vec4 hm = u_b[i * 4 + 3];
     float qy = p.y - c.y;
     float lx = p.x - c.x + qy * c.w * 0.5;
-    vec3 sc = qy > 0.0 ? lo.xyz : up.xyz;
+    vec3 sc = mix(up.xyz, lo.xyz, clamp(qy / (c.z * 0.6) + 0.5, 0.0, 1.0));
     vec2 uu = vec2(lx / sc.x, qy / sc.y);
     float s0 = uu.y / max(length(uu), 0.001);
     float tf = 1.0 - sc.z * abs(s0);

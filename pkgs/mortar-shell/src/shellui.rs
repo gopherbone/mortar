@@ -18,7 +18,12 @@
 
 #[path = "cross.rs"]
 mod cross;
+#[path = "menupages.rs"]
+mod menupages;
 pub use cross::Cat;
+#[cfg(test)]
+use menupages::SubKind;
+use cross::Glass;
 
 use crate::art::{self, Art, Pal, DAY, NIGHT};
 use crate::config::Category;
@@ -125,6 +130,30 @@ pub struct View<'a> {
     pub radios: Radios,
     /// Over-the-air updates (None: mortar.update is off).
     pub update: Option<&'a UpdateView>,
+    /// The default sink is muted.
+    pub muted: bool,
+    /// Wi-Fi and Bluetooth from mortar-setupd (None: no setup service).
+    pub net: Option<&'a NetState>,
+    /// The running apps' PipeWire streams (the Mixer).
+    pub mixer: &'a [MixChan],
+}
+
+/// mortar-setupd's view of Wi-Fi (iwd) and Bluetooth (BlueZ).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct NetState {
+    pub wifi: mortar_setup::control::WifiView,
+    pub bt: mortar_setup::control::BtView,
+    /// The service did not answer.
+    pub error: Option<String>,
+}
+
+/// One app's sound in the Mixer: its PipeWire output streams together.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct MixChan {
+    pub uid: u32,
+    /// Percent, on wpctl's (cubic) scale.
+    pub level: u8,
+    pub muted: bool,
 }
 
 /// Settings > Updates, from mortar-update's status file.
@@ -179,6 +208,15 @@ pub enum Out {
     UpdateCheck,
     /// Settings > Auto-check daily.
     UpdateAuto(bool),
+    /// A request to mortar-setupd (Wi-Fi, Bluetooth), sent off the loop.
+    Setup(mortar_setup::control::Request),
+    /// Join a secured network: the setup service's password keyboard.
+    WifiPassword(String),
+    /// The Mixer: an app's streams to a level (percent), muted or not.
+    MixLevel(u32, u8),
+    MixMute(u32, bool),
+    /// The default sink muted or not.
+    MasterMute(bool),
 }
 
 /// Rows of the settings screen (MENU > Quick > Settings…). Volume,
@@ -448,6 +486,8 @@ pub enum Pace {
     Full,
     /// Only the slow background drift: ~20 fps is plenty.
     Ambient,
+    /// Only the lava lamp's slow flow: ~30 fps.
+    Lava,
     /// Nothing moves: redraw on change only.
     Idle,
 }
@@ -464,7 +504,7 @@ pub struct ShellUi {
     trans: Option<Trans>,
     menu: Option<cross::Cross>,
     /// Each MENU category's selected row (kept between openings).
-    cross_sel: [usize; 6],
+    cross_sel: [usize; 5],
     settings: Option<SettingsPanel>,
     page: Option<SetupUi>,
     tz: Option<TzPicker>,
@@ -496,7 +536,7 @@ impl ShellUi {
             lp: Spring::new(0.0),
             trans: None,
             menu: None,
-            cross_sel: [0; 6],
+            cross_sel: [0; 5],
             settings: None,
             page: None,
             tz: None,
@@ -564,7 +604,7 @@ impl ShellUi {
 
     /// The MENU's category (while it shows).
     pub fn menu_category(&self) -> Option<Cat> {
-        self.menu.as_ref().filter(|m| !m.closing).map(|m| m.cat)
+        self.menu.as_ref().filter(|m| !m.closing).map(|m| if m.on_cross() { m.cat } else { Cat::Running })
     }
 
     pub fn settings_open(&self) -> bool {
@@ -811,6 +851,10 @@ impl ShellUi {
         if !has_app && over_home && self.drifting() {
             return Pace::Ambient;
         }
+        // the lava lamp flows while the cross shows (Reduce motion: still)
+        if !self.prefs.reduce_motion && self.page.is_none() && self.settings.is_none() && self.tz.is_none() && self.menu.as_ref().is_some_and(|m| m.lava_visible()) {
+            return Pace::Lava;
+        }
         Pace::Idle
     }
 
@@ -899,6 +943,11 @@ impl ShellUi {
             let mut s = self.springs_mut();
             motion::step_all(&mut s, dt as f32, p);
         }
+        // the lava only while it is on screen (nothing when the MENU is shut
+        // or covered)
+        if self.page.is_none() && self.settings.as_ref().is_none_or(|p| p.closing) && self.tz.is_none() {
+            self.step_lava(dt as f32);
+        }
         self.timers(v);
         std::mem::take(&mut self.out)
     }
@@ -951,6 +1000,7 @@ impl ShellUi {
         }
         // the MENU: in step with the apps; gone once faded out
         self.sync_menu(v);
+        self.sync_sub();
         if self.settings.as_ref().is_some_and(|p| p.closing && p.x.x > W - 8.0) {
             self.settings = None;
             self.dirty = true;
@@ -1260,8 +1310,8 @@ impl ShellUi {
             }
             Button::B | Button::Up | Button::Down => self.fx(Sfx::Deny, None),
             Button::L1 | Button::R1 | Button::Select => {
-                // shortcuts: the MENU on Apps (L1, SELECT) or Quick (R1)
-                self.open_menu_on(if b == Button::R1 { Cat::Quick } else { Cat::Apps }, v);
+                // shortcuts: the MENU on Apps (L1, SELECT) or Settings (R1)
+                self.open_menu_on(if b == Button::R1 { Cat::Settings } else { Cat::Apps }, v);
             }
             _ => {}
         }
@@ -1664,7 +1714,8 @@ impl ShellUi {
         }
         // the MENU fades out under the transition it started
         if let Some(m) = &self.menu {
-            self.draw_menu(&mut b, &pal, v, m, frost > 0.0);
+            let g = Glass { app: frost_app.filter(|_| frost > 0.0), veil: frost * FROST_VEIL };
+            self.draw_menu(&mut b, &pal, v, m, &g);
         }
         self.draw_trans(&mut b, &pal, v);
         if let Some(p) = &self.settings {
@@ -2026,7 +2077,7 @@ impl ShellUi {
         b.rect(0.0, 0.0, W, 118.0, pal.ground);
         b.rect(0.0, 118.0, W, 1.0, pal.ink);
         let sub = ts(Face::Mono400, 15.0, pal.soft);
-        b.text(40.0, 26.0, "MENU · QUICK · SETTINGS", &sub);
+        b.text(40.0, 26.0, "MENU · SETTINGS · MORE", &sub);
         b.text_right(W - 40.0, 26.0, &format!("{} / {}", sel + 1, n), &sub);
         let title = ts(Face::SerifItalic, 54.0, pal.ink).line_height(1.0);
         b.text(40.0, 50.0, "Settings", &title);
@@ -2326,6 +2377,9 @@ mod tests {
             timezone: "Europe/Lisbon",
             radios: Radios { wifi: Some(true), bluetooth: None },
             update: None,
+            muted: false,
+            net: None,
+            mixer: &[],
         }
     }
     fn settle(ui: &mut ShellUi, v: &View) -> Vec<Out> {
@@ -2343,18 +2397,19 @@ mod tests {
     }
     fn sel_row(ui: &ShellUi) -> Option<cross::Row> {
         let m = ui.menu.as_ref()?;
-        m.sel_key(ui.cross_sel[m.cat as usize])
+        m.sel_key(ui.cross_sel[m.cat.i()])
     }
-    /// MENU, then to Quick (R1 jumps to Power, ◀ is Quick).
+    /// MENU, then R1: the cross on Settings.
     fn to_quick(ui: &mut ShellUi, v: &View) {
         ui.menu_key(v);
-        press(ui, v, &[Button::R1, Button::Left]);
-        assert_eq!(ui.menu_category(), Some(Cat::Quick));
+        press(ui, v, &[Button::R1]);
+        assert_eq!(ui.menu_category(), Some(Cat::Settings));
     }
+    /// Settings > More settings: the full settings screen.
     fn to_settings(ui: &mut ShellUi, v: &View) {
         to_quick(ui, v);
-        press(ui, v, &[Button::Down; 8]);
-        assert_eq!(sel_row(ui), Some(cross::Row::Settings));
+        press(ui, v, &[Button::Down; 6]);
+        assert_eq!(sel_row(ui), Some(cross::Row::MoreSettings));
         ui.button(Button::A, false, v);
         assert!(ui.settings_open());
     }
@@ -2457,16 +2512,25 @@ mod tests {
         let v = view(&[], &l, &sys, None);
         let mut ui = ShellUi::new(Prefs::default(), false);
         ui.menu_key(&v);
-        assert_eq!(cross::cats(&v).len(), 6);
+        assert_eq!(cross::cats(&v), vec![Cat::Apps, Cat::Games, Cat::Music, Cat::Settings]);
+        // ▶ from Running: the cross on Apps
         press(&mut ui, &v, &[Button::Right, Button::Down, Button::Down]);
         assert_eq!(ui.menu_category(), Some(Cat::Apps));
         assert_eq!(sel_row(&ui), Some(cross::Row::Launch("pico".into())));
         press(&mut ui, &v, &[Button::Right]);
         assert_eq!(ui.menu_category(), Some(Cat::Games));
         assert_eq!(sel_row(&ui), Some(cross::Row::Launch("pico".into())));
+        // Music starts with the Mixer
+        press(&mut ui, &v, &[Button::Right]);
+        assert_eq!(sel_row(&ui), Some(cross::Row::Mixer));
         press(&mut ui, &v, &[Button::R1]);
-        assert_eq!(ui.menu_category(), Some(Cat::Power));
+        assert_eq!(ui.menu_category(), Some(Cat::Settings));
         press(&mut ui, &v, &[Button::L1]);
+        assert_eq!(ui.menu_category(), Some(Cat::Running));
+        // ◀ from Apps goes back to Running too; ◀ on Running goes nowhere
+        press(&mut ui, &v, &[Button::Right, Button::Left]);
+        assert_eq!(ui.menu_category(), Some(Cat::Running));
+        assert!(press(&mut ui, &v, &[Button::Left, Button::L1]).is_empty());
         assert_eq!(ui.menu_category(), Some(Cat::Running));
         // closed and opened again: Apps is still on its third row
         ui.menu_key(&v);
@@ -2476,10 +2540,49 @@ mod tests {
         press(&mut ui, &v, &[Button::Right]);
         assert_eq!(sel_row(&ui), Some(cross::Row::Launch("pico".into())));
         assert_eq!(press(&mut ui, &v, &[Button::A]), vec![Out::Launch("pico".into())]);
-        // Games and Music only show with something in them
+        // Games only shows with something in it; Music always has the Mixer
         let l2: Vec<LauncherInfo> = l.into_iter().filter(|x| x.category == Category::Apps).collect();
         let v2 = view(&[], &l2, &sys, None);
-        assert_eq!(cross::cats(&v2), vec![Cat::Running, Cat::Apps, Cat::Quick, Cat::Power]);
+        assert_eq!(cross::cats(&v2), vec![Cat::Apps, Cat::Music, Cat::Settings]);
+    }
+
+    #[test]
+    fn running_page_scrolls_and_flips() {
+        let sys = Sys::demo(None);
+        let l = launcher();
+        let r = [run(2, "term"), run(1, "m8")];
+        let v = view(&r, &l, &sys, Some(2));
+        let mut ui = ShellUi::new(Prefs::default(), false);
+        ui.menu_key(&v);
+        // Home, the app on screen, the previous one (selected)
+        assert_eq!(sel_row(&ui), Some(cross::Row::App(1)));
+        assert_eq!(ui.live_previews(), vec![2, 1], "the selected window and its neighbour run live");
+        assert!(press(&mut ui, &v, &[Button::Down]).is_empty(), "the end of the stack");
+        press(&mut ui, &v, &[Button::Up]);
+        assert_eq!(sel_row(&ui), Some(cross::Row::App(2)));
+        press(&mut ui, &v, &[Button::Up]);
+        assert_eq!(sel_row(&ui), Some(cross::Row::Home));
+        // R1 from Running: straight to Settings; the lamp shows and flows
+        press(&mut ui, &v, &[Button::R1]);
+        assert_eq!(ui.menu_category(), Some(Cat::Settings));
+        settle(&mut ui, &v);
+        assert!(ui.live_previews().is_empty(), "no live windows once the cross covers them");
+        assert_eq!(ui.pace(true), Pace::Lava);
+        let before = ui.menu.as_ref().unwrap().lamp.prims();
+        ui.step(0.03, &v);
+        assert_ne!(ui.menu.as_ref().unwrap().lamp.prims(), before, "the wax moves");
+        // Reduce motion freezes it, and nothing redraws
+        ui.prefs.reduce_motion = true;
+        let still = ui.menu.as_ref().unwrap().lamp.prims();
+        ui.step(0.03, &v);
+        assert_eq!(ui.menu.as_ref().unwrap().lamp.prims(), still);
+        assert_eq!(ui.pace(true), Pace::Idle);
+        ui.prefs.reduce_motion = false;
+        // closed: gone, nothing simulated
+        ui.menu_key(&v);
+        settle(&mut ui, &v);
+        assert!(ui.menu.is_none());
+        assert_eq!(ui.pace(true), Pace::Idle);
     }
 
     #[test]
@@ -2501,7 +2604,7 @@ mod tests {
     }
 
     #[test]
-    fn quick_values_and_toggles() {
+    fn settings_values_and_pages() {
         let sys = Sys::demo(None);
         let l = launcher();
         let r = [run(2, "term")];
@@ -2509,34 +2612,34 @@ mod tests {
         let mut ui = ShellUi::new(Prefs::default(), false);
         to_quick(&mut ui, &v);
         assert_eq!(sel_row(&ui), Some(cross::Row::Brightness));
-        // ◀▶ always change category, also on a value row
+        // ◀▶ change category, also on a value row
         assert!(press(&mut ui, &v, &[Button::Left]).is_empty());
         assert_eq!(ui.menu_category(), Some(Cat::Music));
         press(&mut ui, &v, &[Button::Right]);
-        assert_eq!(ui.menu_category(), Some(Cat::Quick));
+        assert_eq!(ui.menu_category(), Some(Cat::Settings));
         // A: adjust mode; ◀▶ change the value; A or B leave it
         assert!(press(&mut ui, &v, &[Button::A]).is_empty());
         assert_eq!(press(&mut ui, &v, &[Button::Right]), vec![Out::Brightness(10)]);
         assert_eq!(press(&mut ui, &v, &[Button::Left]), vec![Out::Brightness(-10)]);
         assert!(press(&mut ui, &v, &[Button::B]).is_empty());
         assert!(ui.menu_open(), "B leaves adjust mode, not the MENU");
-        press(&mut ui, &v, &[Button::Right]);
-        assert_eq!(ui.menu_category(), Some(Cat::Power));
-        press(&mut ui, &v, &[Button::Left]);
         // ▲▼ in adjust mode leave it and move
         assert_eq!(press(&mut ui, &v, &[Button::Down, Button::A, Button::Left]), vec![Out::Volume(-10)]);
         assert!(press(&mut ui, &v, &[Button::Down]).is_empty());
-        assert_eq!(sel_row(&ui), Some(cross::Row::Wifi));
-        assert_eq!(ui.menu_category(), Some(Cat::Quick));
-        // toggles: A switches; ◀▶ still change category
-        assert_eq!(press(&mut ui, &v, &[Button::A]), vec![Out::Radio(Radio::Wifi, false)]);
-        press(&mut ui, &v, &[Button::Right]);
-        assert_eq!(ui.menu_category(), Some(Cat::Power));
-        press(&mut ui, &v, &[Button::Left]);
-        // no Bluetooth switch on this device: nothing to toggle
-        assert!(press(&mut ui, &v, &[Button::Down, Button::A]).is_empty());
+        assert_eq!(sel_row(&ui), Some(cross::Row::Mixer));
+        // the pages: A opens, B closes (the MENU stays)
+        for (row, kind) in [(cross::Row::Mixer, SubKind::Mixer), (cross::Row::Wifi, SubKind::Wifi), (cross::Row::Bluetooth, SubKind::Bluetooth)] {
+            assert_eq!(sel_row(&ui), Some(row));
+            press(&mut ui, &v, &[Button::A]);
+            assert_eq!(ui.menu_sub(), Some(kind));
+            press(&mut ui, &v, &[Button::B]);
+            settle(&mut ui, &v);
+            assert_eq!(ui.menu_sub(), None);
+            assert!(ui.menu_open());
+            press(&mut ui, &v, &[Button::Down]);
+        }
         // Sleep closes the MENU and sleeps
-        assert_eq!(press(&mut ui, &v, &[Button::Down, Button::A]), vec![Out::Sleep]);
+        assert_eq!(press(&mut ui, &v, &[Button::A]), vec![Out::Sleep]);
         assert!(!ui.menu_open());
     }
 
@@ -2547,13 +2650,112 @@ mod tests {
         let v = view(&[], &l, &sys, None);
         let mut ui = ShellUi::new(Prefs::default(), false);
         ui.menu_key(&v);
-        press(&mut ui, &v, &[Button::R1, Button::Down]);
+        press(&mut ui, &v, &[Button::R1]);
+        press(&mut ui, &v, &[Button::Down; 7]);
         assert_eq!(sel_row(&ui), Some(cross::Row::Restart));
         assert!(press(&mut ui, &v, &[Button::A]).is_empty());
         assert_eq!(press(&mut ui, &v, &[Button::A]), vec![Out::Reboot]);
         // moving away forgets the first press
         assert!(press(&mut ui, &v, &[Button::Down, Button::A, Button::Up, Button::Down, Button::A]).is_empty());
         assert_eq!(press(&mut ui, &v, &[Button::A]), vec![Out::PowerOff]);
+    }
+
+    fn net_demo() -> NetState {
+        use mortar_setup::control::{BtDeviceView, BtView, NetView, WifiView};
+        let n = |ssid: &str, sec: &str, known: bool, connected: bool| NetView { ssid: ssid.into(), bars: 3, security: sec.into(), known, connected };
+        NetState {
+            wifi: WifiView {
+                available: true,
+                state: "connected".into(),
+                ssid: Some("Home".into()),
+                address: Some("192.0.2.7".into()),
+                networks: vec![n("Home", "psk", true, true), n("Open", "open", false, false), n("Locked", "psk", false, false)],
+                ..Default::default()
+            },
+            bt: BtView {
+                available: true,
+                powered: true,
+                devices: vec![
+                    BtDeviceView { address: "AA".into(), name: "Pad".into(), kind: "gamepad".into(), paired: true, connected: true, ..Default::default() },
+                    BtDeviceView { address: "BB".into(), name: "Keys".into(), kind: "keyboard".into(), paired: false, ..Default::default() },
+                ],
+                ..Default::default()
+            },
+            error: None,
+        }
+    }
+
+    #[test]
+    fn wifi_and_bluetooth_pages() {
+        use mortar_setup::control::Request;
+        let sys = Sys::demo(None);
+        let l = launcher();
+        let net = net_demo();
+        let v = View { net: Some(&net), radios: Radios { wifi: Some(true), bluetooth: Some(true) }, ..view(&[], &l, &sys, None) };
+        let mut ui = ShellUi::new(Prefs::default(), false);
+        to_quick(&mut ui, &v);
+        assert!(ui.wants_net());
+        press(&mut ui, &v, &[Button::Down; 3]);
+        // opening Wi-Fi scans
+        assert_eq!(press(&mut ui, &v, &[Button::A]), vec![Out::Setup(Request::WifiScan)]);
+        // toggle, connected network, Details, Forget, Open, Locked, Other
+        assert_eq!(press(&mut ui, &v, &[Button::A]), vec![Out::Radio(Radio::Wifi, false)]);
+        press(&mut ui, &v, &[Button::Down, Button::Down, Button::Down]);
+        assert_eq!(press(&mut ui, &v, &[Button::A]), vec![Out::Setup(Request::WifiForget { ssid: "Home".into() })]);
+        // forgetting goes back to the switch (the network leaves the list)
+        press(&mut ui, &v, &[Button::Down; 4]);
+        assert_eq!(press(&mut ui, &v, &[Button::A]), vec![Out::Setup(Request::WifiConnect { ssid: "Open".into(), passphrase: None })]);
+        press(&mut ui, &v, &[Button::Down]);
+        // a secured network it does not know: the password keyboard
+        assert_eq!(press(&mut ui, &v, &[Button::A]), vec![Out::WifiPassword("Locked".into())]);
+        press(&mut ui, &v, &[Button::Down]);
+        assert_eq!(press(&mut ui, &v, &[Button::A]), vec![Out::OpenSetup(SetupPage::Wifi)]);
+        assert!(press(&mut ui, &v, &[Button::Down]).is_empty(), "the end of the list");
+        press(&mut ui, &v, &[Button::B]);
+        settle(&mut ui, &v);
+        // Bluetooth: toggle, the paired pad (A disconnects, X forgets),
+        // Pair new device (scan), the keyboard found (A pairs)
+        press(&mut ui, &v, &[Button::Down, Button::A]);
+        assert_eq!(ui.menu_sub(), Some(SubKind::Bluetooth));
+        press(&mut ui, &v, &[Button::Down]);
+        assert_eq!(press(&mut ui, &v, &[Button::A]), vec![Out::Setup(Request::BtDisconnect { address: "AA".into() })]);
+        assert_eq!(press(&mut ui, &v, &[Button::X]), vec![Out::Setup(Request::BtForget { address: "AA".into() })]);
+        press(&mut ui, &v, &[Button::Down]);
+        assert_eq!(press(&mut ui, &v, &[Button::A]), vec![Out::Setup(Request::BtScan { on: true })]);
+        press(&mut ui, &v, &[Button::Down]);
+        assert_eq!(press(&mut ui, &v, &[Button::A]), vec![Out::Setup(Request::BtPair { address: "BB".into() })]);
+        // the toggle: off with rfkill
+        press(&mut ui, &v, &[Button::Up, Button::Up, Button::Up]);
+        assert_eq!(press(&mut ui, &v, &[Button::A]), vec![Out::Radio(Radio::Bluetooth, false)]);
+    }
+
+    #[test]
+    fn mixer_channels() {
+        let sys = Sys::demo(None);
+        let l = launcher();
+        let r = [run(2, "term"), run(1, "m8")];
+        let mix = [MixChan { uid: 1, level: 70, muted: false }];
+        let v = View { mixer: &mix, ..view(&r, &l, &sys, Some(2)) };
+        let mut ui = ShellUi::new(Prefs::default(), false);
+        ui.menu_key(&v);
+        press(&mut ui, &v, &[Button::Right, Button::Right, Button::Right]);
+        assert_eq!(ui.menu_category(), Some(Cat::Music));
+        press(&mut ui, &v, &[Button::A]);
+        assert!(ui.wants_mixer());
+        // Master, term (front, selected; no sound), m8, UI sounds
+        assert!(press(&mut ui, &v, &[Button::Up]).is_empty(), "no stream: nothing to set");
+        press(&mut ui, &v, &[Button::Right]);
+        assert_eq!(press(&mut ui, &v, &[Button::Up]), vec![Out::MixLevel(1, 75)]);
+        assert_eq!(press(&mut ui, &v, &[Button::A]), vec![Out::MixMute(1, true)]);
+        press(&mut ui, &v, &[Button::Left, Button::Left]);
+        assert_eq!(press(&mut ui, &v, &[Button::Down]), vec![Out::Volume(-5)]);
+        assert_eq!(press(&mut ui, &v, &[Button::A]), vec![Out::MasterMute(true)]);
+        // UI sounds are the shell's own setting
+        press(&mut ui, &v, &[Button::Right, Button::Right, Button::Right]);
+        assert_eq!(press(&mut ui, &v, &[Button::Down]), vec![Out::Prefs]);
+        assert_eq!(ui.prefs.sound_volume, 55);
+        assert_eq!(press(&mut ui, &v, &[Button::A]), vec![Out::Prefs]);
+        assert!(!ui.prefs.sounds);
     }
 
     #[test]
@@ -2676,8 +2878,8 @@ mod tests {
     }
 
     fn to_settings_from_menu(ui: &mut ShellUi, v: &View) {
-        press(ui, v, &[Button::R1, Button::Left]);
-        press(ui, v, &[Button::Down; 8]);
+        press(ui, v, &[Button::R1]);
+        press(ui, v, &[Button::Down; 6]);
         ui.button(Button::A, false, v);
         assert!(ui.settings_open());
     }
@@ -2695,6 +2897,9 @@ mod tests {
         for _ in 0..(40 * 60) {
             ui.step(1.0 / 60.0, &v);
         }
+        // only the lava lamp flows (30 fps); with Reduce motion nothing moves
+        assert_eq!(ui.pace(false), Pace::Lava);
+        ui.prefs.reduce_motion = true;
         assert_eq!(ui.pace(false), Pace::Idle);
     }
 

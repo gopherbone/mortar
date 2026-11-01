@@ -112,6 +112,33 @@ pub struct Actions {
     /// Set the time zone; "{zone}" is replaced by e.g. "Europe/Lisbon".
     #[serde(default = "d_timezone_set")]
     pub timezone_set: Vec<String>,
+    /// Mute or unmute the default sink; "{mute}" is "1" or "0".
+    #[serde(default = "d_volume_mute")]
+    pub volume_mute: Vec<String>,
+    /// Print PipeWire's objects as JSON (the Mixer finds each app's
+    /// output streams there). Empty: no per-app channels.
+    #[serde(default = "d_pw_dump")]
+    pub pw_dump: Vec<String>,
+    /// Set a stream's volume: "{id}" (node id), "{vol}" (0.00-1.00, cubic,
+    /// as wpctl shows it).
+    #[serde(default = "d_stream_volume")]
+    pub stream_volume: Vec<String>,
+    /// Mute a stream: "{id}", "{mute}" ("1" or "0").
+    #[serde(default = "d_stream_mute")]
+    pub stream_mute: Vec<String>,
+}
+
+fn d_volume_mute() -> Vec<String> {
+    argv(&["amixer", "-q", "-c", "Codec", "sset", "DAC", "toggle"])
+}
+fn d_pw_dump() -> Vec<String> {
+    argv(&["pw-dump"])
+}
+fn d_stream_volume() -> Vec<String> {
+    argv(&["wpctl", "set-volume", "{id}", "{vol}"])
+}
+fn d_stream_mute() -> Vec<String> {
+    argv(&["wpctl", "set-mute", "{id}", "{mute}"])
 }
 
 fn argv(v: &[&str]) -> Vec<String> {
@@ -145,6 +172,10 @@ impl Default for Actions {
             volume_set: d_volume_set(),
             volume_get: d_volume_get(),
             timezone_set: d_timezone_set(),
+            volume_mute: d_volume_mute(),
+            pw_dump: d_pw_dump(),
+            stream_volume: d_stream_volume(),
+            stream_mute: d_stream_mute(),
         }
     }
 }

@@ -235,6 +235,7 @@ fn state(shell: &Shell) -> String {
         "overlay": shell.sui.menu_open() || shell.sui.page_open(),
         "category": shell.sui.menu_category().map(|c| c.name()),
         "settings": shell.sui.settings_open(),
+        "menu_page": shell.sui.menu_sub().map(|s| s.name()),
         "home": shell.visible_app().is_none() && !shell.sui.menu_open(),
         "ui": {
             "layer": shell.ui_layer(),

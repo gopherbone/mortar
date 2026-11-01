@@ -149,10 +149,13 @@ pub fn run(o: &Opts) -> Result<(), String> {
     let prefs = Prefs { night: o.night, ..Prefs::default() };
     let s = o.screen.as_str();
     let mut ui = ShellUi::new(prefs, s == "boot");
-    let over_app = s.starts_with("menu") || matches!(s, "settings" | "app" | "osd" | "osd-mute" | "osd-bri" | "osd-home" | "toast" | "achievement" | "flash" | "osk" | "close" | "swap" | "remote" | "wifi");
+    let over_app = s.starts_with("menu") || s.starts_with("cross") || matches!(s, "running" | "lava" | "mixer" | "bluetooth" | "setup-wifi" | "setup-bluetooth" | "settings" | "app" | "osd" | "osd-mute" | "osd-bri" | "osd-home" | "toast" | "achievement" | "flash" | "osk" | "close" | "swap" | "remote" | "wifi");
     let mut current = if over_app { Some(2) } else { None };
     let run_ref: &[RunningInfo] = if s == "home-empty" { &none } else { &running };
     let host = "brick";
+    let demo_st = { use mortar_setup::ui::Device; mortar_setup::ui::demo::DemoDevice::settings().status().clone() };
+    let net = crate::shellui::NetState { wifi: demo_st.wifi.clone(), bt: demo_st.bluetooth.clone(), error: None };
+    let mixer = vec![crate::shellui::MixChan { uid: 2, level: 40, muted: false }, crate::shellui::MixChan { uid: 1, level: 70, muted: false }];
     let update = crate::shellui::UpdateView { message: "Restart to update".into(), ready: true, busy: false, auto_check: true };
     let mk = |current: Option<u32>, osk_h: f32| View {
         running: run_ref,
@@ -164,8 +167,11 @@ pub fn run(o: &Opts) -> Result<(), String> {
         osk_h,
         host,
         timezone: "Europe/Lisbon",
-        radios: Radios { wifi: Some(true), bluetooth: Some(false) },
+        radios: Radios { wifi: Some(true), bluetooth: Some(true) },
         update: Some(&update),
+        muted: false,
+        net: Some(&net),
+        mixer: &mixer,
     };
     let dt = 1.0 / 120.0;
     let settle = |ui: &mut ShellUi, v: &View, secs: f64| {
@@ -179,52 +185,56 @@ pub fn run(o: &Opts) -> Result<(), String> {
     settle(&mut ui, &v0, 0.05);
     match s {
         "boot" | "home" | "home-empty" | "home-charging" | "home-low" | "app" => {}
-        "menu" | "menu-running" => {
+        "menu" | "menu-running" | "running" => {
             ui.menu_key(&v0);
         }
-        "menu-apps" | "menu-games" | "menu-music" | "menu-quick" | "menu-adjust" | "menu-power" | "menu-confirm" => {
+        "menu-apps" | "cross-apps" | "menu-games" | "menu-music" => {
             ui.menu_key(&v0);
-            match s {
-                "menu-apps" => ui.button(Button::Right, false, &v0),
-                "menu-games" | "menu-music" => {
-                    let n = if s == "menu-games" { 2 } else { 3 };
-                    (0..n).flat_map(|_| ui.button(Button::Right, false, &v0)).collect()
-                }
-                "menu-quick" | "menu-adjust" => {
-                    ui.button(Button::R1, false, &v0);
-                    ui.button(Button::Left, false, &v0);
-                    if s == "menu-adjust" {
-                        ui.button(Button::A, false, &v0);
-                    }
-                    Vec::new()
-                }
-                _ => ui.button(Button::R1, false, &v0),
+            let n = match s {
+                "menu-games" => 2,
+                "menu-music" => 3,
+                _ => 1,
             };
-            if s == "menu-confirm" {
+            for _ in 0..n {
+                ui.button(Button::Right, false, &v0);
+            }
+        }
+        "menu-settings" | "cross-settings" | "lava" | "menu-adjust" | "menu-confirm" | "settings" | "wifi" | "bluetooth" | "mixer" => {
+            // MENU, R1: Settings (Brightness, Volume, Mixer, Wi-Fi,
+            // Bluetooth, Sleep, Keyboard, More settings, Restart, Power off)
+            ui.menu_key(&v0);
+            ui.button(Button::R1, false, &v0);
+            let (down, a) = match s {
+                "menu-adjust" => (1, 1),
+                "menu-confirm" => (8, 1),
+                "settings" => (7, 1),
+                "mixer" => (2, 1),
+                "wifi" => (3, 1),
+                "bluetooth" => (4, 1),
+                _ => (0, 0),
+            };
+            for _ in 0..down {
                 ui.button(Button::Down, false, &v0);
+            }
+            for _ in 0..a {
                 ui.button(Button::A, false, &v0);
+            }
+            if s == "lava" {
+                // the wax has flowed for a while
+                settle(&mut ui, &v0, 9.0);
             }
         }
         "menu-options" => {
             ui.menu_key(&v0);
             ui.button(Button::Y, false, &v0);
         }
-        "settings" => {
-            ui.menu_key(&v0);
-            ui.button(Button::R1, false, &v0);
-            ui.button(Button::Left, false, &v0);
-            for _ in 0..8 {
-                ui.button(Button::Down, false, &v0);
-            }
-            ui.button(Button::A, false, &v0);
-        }
-        "remote" | "wifi" | "bluetooth" => {
+        "remote" | "setup-wifi" | "setup-bluetooth" => {
             use mortar_setup::ui::{demo::DemoDevice, SetupUi};
             ui.menu_key(&v0);
             let dev = Box::new(DemoDevice::settings());
             ui.open_page(match s {
-                "wifi" => SetupUi::wifi(dev, sys.clone()),
-                "bluetooth" => SetupUi::bluetooth(dev, sys.clone()),
+                "setup-wifi" => SetupUi::wifi(dev, sys.clone()),
+                "setup-bluetooth" => SetupUi::bluetooth(dev, sys.clone()),
                 _ => SetupUi::remote_access(dev, sys.clone()),
             });
         }
@@ -297,7 +307,7 @@ pub fn run(o: &Opts) -> Result<(), String> {
         }
         other => {
             return Err(format!(
-                "unknown preview screen '{other}' (boot, home, home-empty, app, menu, menu-apps, menu-games, menu-music, menu-quick, menu-adjust, menu-power, menu-confirm, menu-options, settings, remote, wifi, bluetooth, timezone, timezone-zones, launch, close, swap, osd, osd-mute, osd-bri, osd-home, toast, achievement, flash, osk, power)"
+                "unknown preview screen '{other}' (boot, home, home-empty, app, running, cross-apps, menu-games, menu-music, cross-settings, menu-adjust, menu-confirm, menu-options, wifi, bluetooth, mixer, lava, settings, remote, setup-wifi, setup-bluetooth, timezone, timezone-zones, launch, close, swap, osd, osd-mute, osd-bri, osd-home, toast, achievement, flash, osk, power)"
             ))
         }
     }

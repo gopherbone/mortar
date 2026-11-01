@@ -30,7 +30,7 @@ pub const FH: usize = (LH / 4.0) as usize;
 pub const EDGE: f32 = 3.0;
 pub const SHADOW: f32 = 12.0;
 /// Smooth-union radius: how far apart two pieces start to merge.
-pub const MERGE: f32 = 26.0;
+pub const MERGE: f32 = 32.0;
 
 /// Wax pieces: (x offset as a fraction of 260 px, phase, radius).
 const BLOBS: [(f32, f32, f32); 5] = [(0.0, 0.0, 50.0), (0.32, 1.7, 38.0), (-0.3, 3.1, 44.0), (0.12, 4.4, 30.0), (-0.12, 5.6, 34.0)];
@@ -301,7 +301,10 @@ impl BlobPrim {
     pub fn dist(&self, px: f32, py: f32) -> f32 {
         let qy = py - self.y;
         let lx = px - self.x + qy * self.lean * 0.5;
-        let [sx, sy, pinch] = if qy > 0.0 { self.lower } else { self.upper };
+        // the upper and lower halves differ; blend them across the middle
+        // (no seam)
+        let k = (qy / (self.r * 0.6) + 0.5).clamp(0.0, 1.0);
+        let [sx, sy, pinch]: [f32; 3] = std::array::from_fn(|i| self.upper[i] + (self.lower[i] - self.upper[i]) * k);
         let (ux, uy) = (lx / sx, qy / sy);
         let l0 = (ux * ux + uy * uy).sqrt().max(1e-3);
         let s0 = uy / l0;

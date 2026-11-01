@@ -200,6 +200,14 @@ pub struct Shell {
     pub muted: bool,
     /// Sets and reads the volume off the event loop.
     pub volume_worker: super::ui::VolumeWorker,
+    /// mortar-setupd (Wi-Fi, Bluetooth) off the loop; None without the
+    /// setup service. Its newest snapshot, for the MENU pages.
+    pub net_worker: Option<super::bg::NetWorker>,
+    pub net: Option<crate::shellui::NetState>,
+    /// PipeWire streams (pw-dump, wpctl) off the loop, and per app.
+    pub mixer_worker: super::bg::MixerWorker,
+    pub mixer: Vec<crate::shellui::MixChan>,
+    pub streams: Vec<crate::mixer::Stream>,
     /// Last volume-step haptic: held keys tick at most every 150 ms.
     pub volume_haptic_at: Option<std::time::Instant>,
     last_bg_tick: Instant,
@@ -250,6 +258,8 @@ impl Shell {
 
         let viewporter_dh = dh.clone();
         let volume_worker = super::ui::VolumeWorker::new(cfg.actions.volume_set.clone(), cfg.actions.volume_get.clone());
+        let net_worker = cfg.setup_socket.clone().map(super::bg::NetWorker::new);
+        let mixer_worker = super::bg::MixerWorker::new(cfg.actions.pw_dump.clone());
         let mut shell = Shell {
             dh,
             loop_handle,
@@ -335,6 +345,11 @@ impl Shell {
             muted: false,
             volume_worker,
             volume_haptic_at: None,
+            net_worker,
+            net: None,
+            mixer_worker,
+            mixer: Vec::new(),
+            streams: Vec::new(),
             last_bg_tick: Instant::now(),
             update: Default::default(),
         };
@@ -541,6 +556,7 @@ impl Shell {
             match self.sui.pace(self.visible_app().is_some()) {
                 Pace::Full => t = t.min(Duration::from_millis(8)),
                 Pace::Ambient => t = t.min(AMBIENT.saturating_sub(self.last_ambient.elapsed())),
+                Pace::Lava => t = t.min(LAVA_EVERY.saturating_sub(self.last_ambient.elapsed())),
                 Pace::Idle => {}
             }
             if let Some(d) = self.sui.next_deadline() {
@@ -562,7 +578,7 @@ impl Shell {
         if let Some(p) = self.page_tick {
             t = t.min(p.saturating_duration_since(now));
         }
-        if self.sui.live_preview().is_some() && self.cfg.ui.card_fps > 0 {
+        if !self.sui.live_previews().is_empty() && self.cfg.ui.card_fps > 0 {
             t = t.min(Duration::from_millis(1000 / self.cfg.ui.card_fps as u64));
         }
         if self.slow_redraw {
@@ -620,6 +636,7 @@ impl Shell {
         }
         // the shell UI: time, transitions, toasts
         self.volume_poll();
+        self.bg_poll();
         self.ui_step();
         self.power_hold_tick();
         match self.sui.sleep_phase() {
@@ -639,14 +656,14 @@ impl Shell {
             self.sys_at = Instant::now();
         }
         // the MENU's live preview: that app keeps drawing (slowly)
-        if let Some(uid) = self.sui.live_preview()
-            && self.cfg.ui.card_fps > 0
-            && self.last_card_tick.elapsed() >= Duration::from_millis(1000 / self.cfg.ui.card_fps as u64)
-        {
+        let live = self.sui.live_previews();
+        if !live.is_empty() && self.cfg.ui.card_fps > 0 && self.last_card_tick.elapsed() >= Duration::from_millis(1000 / self.cfg.ui.card_fps as u64) {
             self.last_card_tick = Instant::now();
             let t = self.start.elapsed();
-            if let Some(w) = self.apps.get(uid).and_then(|a| a.windows.last()) {
-                w.send_frame(&self.output, t, Some(Duration::ZERO), |_, _| None);
+            for uid in live {
+                if let Some(w) = self.apps.get(uid).and_then(|a| a.windows.last()) {
+                    w.send_frame(&self.output, t, Some(Duration::ZERO), |_, _| None);
+                }
             }
         }
         // background apps: throttled frame callbacks
@@ -679,6 +696,10 @@ impl Shell {
                 match self.sui.pace(has_app) {
                     Pace::Full => self.needs_redraw = true,
                     Pace::Ambient if self.last_ambient.elapsed() >= AMBIENT => {
+                        self.last_ambient = Instant::now();
+                        self.needs_redraw = true;
+                    }
+                    Pace::Lava if self.last_ambient.elapsed() >= LAVA_EVERY => {
                         self.last_ambient = Instant::now();
                         self.needs_redraw = true;
                     }
@@ -1284,6 +1305,8 @@ const SLOW_COMPOSITE: Duration = Duration::from_millis(200);
 const POWER_HOLD: f32 = 0.8;
 /// Frame interval when only the background drifts.
 const AMBIENT: Duration = Duration::from_millis(50);
+/// The lava lamp alone flows at ~30 fps (its slow wax needs no more).
+const LAVA_EVERY: Duration = Duration::from_millis(33);
 
 /// The surface's current buffer is a dmabuf (a GPU app).
 fn is_dmabuf(s: &WlSurface) -> bool {

@@ -2,6 +2,7 @@
 //! The compositor (Linux only).
 
 pub mod backend;
+pub mod bg;
 pub mod ctl;
 pub mod drm;
 pub mod gl;

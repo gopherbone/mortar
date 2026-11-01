@@ -274,6 +274,9 @@ impl Shell {
             timezone: &timezone,
             radios: self.radios,
             update: update.as_ref(),
+            muted: self.muted,
+            net: self.net.as_ref(),
+            mixer: &self.mixer,
         };
         f(&mut self.sui, &v)
     }
@@ -440,6 +443,40 @@ impl Shell {
                         self.update.asked = true;
                     }
                 }
+                Out::Setup(req) => match &self.net_worker {
+                    Some(w) => w.send(req),
+                    None => {
+                        self.sui.show_toast(Toast::info("Needs the setup service (mortar.setup.enable)"));
+                        self.play_sfx(Sfx::Deny);
+                    }
+                },
+                Out::WifiPassword(ssid) => self.open_wifi_password(&ssid),
+                Out::MixLevel(uid, level) => {
+                    let ids = self.app_streams(uid);
+                    for id in &ids {
+                        let argv = fill(&self.cfg.actions.stream_volume, &[("{id}", &id.to_string()), ("{vol}", &format!("{:.2}", level as f32 / 100.0))]);
+                        self.mixer_worker.run(argv);
+                    }
+                    if let Some(c) = self.mixer.iter_mut().find(|c| c.uid == uid) {
+                        c.level = level;
+                    }
+                }
+                Out::MixMute(uid, m) => {
+                    let ids = self.app_streams(uid);
+                    for id in &ids {
+                        let argv = fill(&self.cfg.actions.stream_mute, &[("{id}", &id.to_string()), ("{mute}", if m { "1" } else { "0" })]);
+                        self.mixer_worker.run(argv);
+                    }
+                    if let Some(c) = self.mixer.iter_mut().find(|c| c.uid == uid) {
+                        c.muted = m;
+                    }
+                }
+                Out::MasterMute(m) => {
+                    let argv = fill(&self.cfg.actions.volume_mute, &[("{mute}", if m { "1" } else { "0" })]);
+                    self.mixer_worker.run(argv);
+                    self.muted = m;
+                    self.ui_dirty = true;
+                }
                 Out::UpdateAuto(on) => {
                     if let Some(u) = &self.cfg.update {
                         let argv: Vec<String> = u.auto.iter().map(|a| a.replace("{on}", if on { "on" } else { "off" })).collect();
@@ -467,6 +504,71 @@ impl Shell {
         let t = if self.sui.prefs.night { mortar_ui::theme::DARK } else { mortar_ui::theme::LIGHT };
         mortar_ui::theme::set(t);
         self.osk_dirty = true;
+        self.page_dirty = true;
+    }
+
+    /// The MENU pages' backends: keep polling while they show, take the
+    /// newest snapshots (Wi-Fi/Bluetooth from mortar-setupd, the apps'
+    /// PipeWire streams).
+    pub fn bg_poll(&mut self) {
+        let want_net = self.sui.wants_net();
+        if let Some(w) = &mut self.net_worker {
+            w.set_active(want_net);
+            if let Some(n) = w.take()
+                && n != self.net
+            {
+                self.net = n;
+                self.ui_dirty = true;
+            }
+        }
+        self.mixer_worker.set_active(self.sui.wants_mixer());
+        if let Some(s) = self.mixer_worker.take() {
+            self.streams = s;
+            let mix = self.mix_channels();
+            if mix != self.mixer {
+                self.mixer = mix;
+                self.ui_dirty = true;
+            }
+        }
+    }
+
+    /// The running apps' sound: each stream belongs to the app whose pid
+    /// is the stream client's or an ancestor of it; an app's level is its
+    /// loudest stream's, muted when all are.
+    fn mix_channels(&self) -> Vec<crate::shellui::MixChan> {
+        let mut out: Vec<crate::shellui::MixChan> = Vec::new();
+        for s in &self.streams {
+            let Some(uid) = s.pid.and_then(|p| self.apps.for_pid(p, crate::apps::proc_parent)) else { continue };
+            match out.iter_mut().find(|c| c.uid == uid) {
+                Some(c) => {
+                    c.level = c.level.max(s.level);
+                    c.muted &= s.muted;
+                }
+                None => out.push(crate::shellui::MixChan { uid, level: s.level, muted: s.muted }),
+            }
+        }
+        out
+    }
+
+    /// PipeWire node ids of an app's output streams.
+    fn app_streams(&self, uid: u32) -> Vec<u32> {
+        self.streams.iter().filter(|s| s.pid.and_then(|p| self.apps.for_pid(p, crate::apps::proc_parent)) == Some(uid)).map(|s| s.id).collect()
+    }
+
+    /// The setup service's password keyboard for one network, over the MENU.
+    fn open_wifi_password(&mut self, ssid: &str) {
+        use mortar_setup::ui::{SetupUi, SocketDevice};
+        let Some(sock) = self.cfg.setup_socket.clone() else {
+            self.sui.show_toast(Toast::info("Wi-Fi settings need mortar.setup.enable"));
+            return;
+        };
+        let dev = Box::new(SocketDevice::new(&sock));
+        if let Some(e) = &dev.error {
+            self.sui.show_toast(Toast::info(format!("Setup service: {e}")));
+            return;
+        }
+        self.sui.open_page(SetupUi::wifi_password(ssid, dev, self.sys.clone()));
+        self.page_tick = Some(Instant::now() + Duration::from_secs(1));
         self.page_dirty = true;
     }
 
@@ -856,4 +958,9 @@ pub fn save_rgb_png(pm: &Pixmap, path: &Path) -> Result<(), String> {
     enc.set_color(png::ColorType::Rgb);
     enc.set_depth(png::BitDepth::Eight);
     enc.write_header().and_then(|mut wr| wr.write_image_data(&rgb)).map_err(|e| e.to_string())
+}
+
+/// An action's argv with its placeholders filled in.
+fn fill(argv: &[String], subs: &[(&str, &str)]) -> Vec<String> {
+    argv.iter().map(|a| subs.iter().fold(a.clone(), |s, (k, v)| s.replace(k, v))).collect()
 }
