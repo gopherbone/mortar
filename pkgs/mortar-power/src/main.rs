@@ -367,7 +367,8 @@ fn main() {
                     Event::Plugged => {
                         let full = s.ttf_s.map(|t| format!(" · full in about {}", minutes(t))).unwrap_or_default();
                         let sub = capacity.map(|c| format!("{c}%{full}")).unwrap_or_default();
-                        let _ = toast("Charging", &sub, None, "tick", 2.6);
+                        let shown = toast("Charging", &sub, None, "tick", 2.6);
+                        eprintln!("plugged in: Charging {sub} (toast {})", if shown { "shown" } else { "no shell" });
                     }
                 }
             }
