@@ -12,7 +12,7 @@
 //! the night variant, which keeps the same accent blocks and their inks.
 
 use crate::gfx::Color;
-use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU8, Ordering};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Theme {
@@ -82,19 +82,28 @@ impl Theme {
     }
 }
 
-static CURRENT: OnceLock<Theme> = OnceLock::new();
+static LIGHT_THEME: Theme = LIGHT;
+static DARK_THEME: Theme = DARK;
+/// 0: not chosen yet, 1: light, 2: dark.
+static CURRENT: AtomicU8 = AtomicU8::new(0);
 
-/// Choose the theme before anything draws. Returns false if one was already
-/// fixed (by an earlier `set` or `get`).
+/// Choose the theme. It can change at runtime (mortar-shell's palette
+/// setting); screens pick it up on their next draw. Always returns true
+/// (kept for callers written against the set-once version).
 pub fn set(t: Theme) -> bool {
-    CURRENT.set(t).is_ok()
+    CURRENT.store(if t.name == "dark" { 2 } else { 1 }, Ordering::Relaxed);
+    true
 }
 
 /// The active theme: `set`, else `$MORTAR_UI_THEME`, else light.
 pub fn get() -> &'static Theme {
-    CURRENT.get_or_init(|| {
-        std::env::var("MORTAR_UI_THEME").ok().and_then(|n| Theme::by_name(&n)).unwrap_or(LIGHT)
-    })
+    let mut v = CURRENT.load(Ordering::Relaxed);
+    if v == 0 {
+        let t = std::env::var("MORTAR_UI_THEME").ok().and_then(|n| Theme::by_name(&n)).unwrap_or(LIGHT);
+        set(t);
+        v = CURRENT.load(Ordering::Relaxed);
+    }
+    if v == 2 { &DARK_THEME } else { &LIGHT_THEME }
 }
 
 // --------------------------------------------------------------- type ----

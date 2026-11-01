@@ -24,7 +24,7 @@ let
   inherit (lib) mkOption mkEnableOption types;
   cfg = config.mortar.greeter;
 
-  icons = [ "wifi" "bat" "usb" "cable" "file" "skip" "term" "folder" "pad" "gear" "link" "check" "lock" "power" ];
+  icons = [ "wifi" "bat" "usb" "cable" "file" "skip" "term" "folder" "pad" "gear" "link" "check" "lock" "power" "claude" ];
 
   sessionType = types.submodule (
     { name, ... }:

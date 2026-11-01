@@ -27,7 +27,7 @@ impl Color {
         let m = |a: u8, b: u8| (a as f32 * p + b as f32 * (1.0 - p)).round() as u8;
         Color(m(self.0, other.0), m(self.1, other.1), m(self.2, other.2), 255)
     }
-    fn sk(self) -> SkColor {
+    pub fn sk(self) -> SkColor {
         SkColor::from_rgba8(self.0, self.1, self.2, self.3)
     }
     fn css(self) -> String {
@@ -154,6 +154,10 @@ impl Fonts {
             faces.insert(face, font);
         }
         Ok(Fonts { faces })
+    }
+    /// The font for a face (for programs that lay out text themselves).
+    pub fn face(&self, f: Face) -> &fontdue::Font {
+        &self.faces[&f]
     }
 }
 
