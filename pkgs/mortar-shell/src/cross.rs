@@ -513,14 +513,14 @@ impl ShellUi {
     /// A button with the MENU up; the lava lamp feels the navigation.
     pub(super) fn menu_button(&mut self, b: Button, repeat: bool, v: &View) {
         self.sync_menu(v);
-        let before = self.menu.as_ref().map(|m| (m.on_cross, m.cat, self.cross_sel[m.cat.i()], m.sub.is_some(), m.ctx.is_some(), m.adjusting));
+        let before = self.menu.as_ref().map(|m| (m.on_cross, m.cat, self.cross_sel[m.cat.i()], m.sub.as_ref().is_some_and(|s| !s.closing), m.ctx.is_some(), m.adjusting));
         self.menu_button_inner(b, repeat, v);
         let Some((cross0, cat0, s0, sub0, ctx0, adj0)) = before else { return };
         if self.prefs.reduce_motion {
             return;
         }
         let Some(m) = &mut self.menu else { return };
-        if m.closing || sub0 || ctx0 || m.sub.is_some() {
+        if m.closing || sub0 || ctx0 || m.sub.as_ref().is_some_and(|s| !s.closing) {
             return;
         }
         let s = self.cross_sel[m.cat.i()];
@@ -560,7 +560,8 @@ impl ShellUi {
             self.ctx_button(b, repeat, v);
             return;
         }
-        if m.sub.is_some() {
+        // a page sliding out no longer takes buttons
+        if m.sub.as_ref().is_some_and(|s| !s.closing) {
             self.sub_button(b, repeat, v);
             return;
         }

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //! The shell's own UI, after the approved motion prototype
-//! (plan/mortar-motion) and cross menu (plan/mortar-cross): boot, home, the
-//! MENU cross (cross.rs: Running, Apps, Games, Music, Quick, Power), the
+//! (plan/mortar-motion) and Cross Menu 2 (plan/mortar-cross-2): boot, home, the
+//! MENU (cross.rs: Running, then Apps, Games, Music, Settings; menupages.rs), the
 //! settings screen, launch/close/switch transitions, the volume OSD, toasts
 //! and the screenshot flash.
 //!
@@ -219,7 +219,7 @@ pub enum Out {
     MasterMute(bool),
 }
 
-/// Rows of the settings screen (MENU > Quick > Settings…). Volume,
+/// Rows of the settings screen (MENU > Settings > More settings). Volume,
 /// brightness, sleep and power live in the MENU itself.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SetupPage {
@@ -1357,7 +1357,7 @@ impl ShellUi {
         self.fx(Sfx::Close, Some(Haptic::Tick));
     }
 
-    /// MENU > Quick > Settings…: the settings screen slides in.
+    /// MENU > Settings > More settings: the settings screen slides in.
     fn open_settings(&mut self) {
         let mut x = Spring::new(W);
         x.set(0.0);
@@ -1981,7 +1981,7 @@ impl ShellUi {
         b.pop();
     }
 
-    /// The settings screen (MENU > Quick > Settings…), full screen.
+    /// The settings screen (MENU > Settings > More settings), full screen.
     fn draw_settings(&self, b: &mut B, pal: &Pal, v: &View, p: &SettingsPanel) {
         b.push(Xf::translate(p.x.x, 0.0));
         b.block(0.0, 0.0, W + 2.0, H, pal.ground, pal.ink);
@@ -2633,9 +2633,9 @@ mod tests {
             press(&mut ui, &v, &[Button::A]);
             assert_eq!(ui.menu_sub(), Some(kind));
             press(&mut ui, &v, &[Button::B]);
-            settle(&mut ui, &v);
             assert_eq!(ui.menu_sub(), None);
             assert!(ui.menu_open());
+            // the page is still sliding out: the next press is the cross's
             press(&mut ui, &v, &[Button::Down]);
         }
         // Sleep closes the MENU and sleeps
