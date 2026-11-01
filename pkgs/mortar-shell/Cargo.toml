@@ -12,6 +12,7 @@ lto = "thin"
 
 [dependencies]
 mortar-ui = { path = "../mortar-ui", default-features = false }
+mortar-setup = { path = "../mortar-setup", default-features = false }
 libc = "0.2.191"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"

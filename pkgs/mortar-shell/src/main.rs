@@ -60,7 +60,7 @@ commands:
                key CODE | launch ID | focus ID | close ID | home |
                screenshot PATH | quit      (--ctl PATH before CMD)
   preview    render a shell screen to PNG without a compositor
-               --screen home|home-settings|menu|menu-launch|menu-settings|osk|osd
+               --screen home|home-settings|menu|menu-launch|menu-settings|remote|wifi|osk|osd
                --out FILE [--keys a,down,...] [--theme light|dark]
 
 environment:

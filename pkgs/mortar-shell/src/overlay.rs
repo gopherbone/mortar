@@ -9,6 +9,10 @@
 //!     Settings  brightness, volume, keyboard, Wi-Fi, remote access, sleep,
 //!               log out, power off
 //!
+//! Wi-Fi and Remote access open the setup screens from mortar-setup
+//! (network list + keyboard; mockup 8 with pairing and keys) as a full-screen
+//! page, talking to the setup daemon over its control socket.
+//!
 //! Pure UI state; the compositor applies the returned `Action`s.
 
 use mortar_ui::gfx::{Rect, Ui};
@@ -16,6 +20,8 @@ use mortar_ui::icons::Icon;
 use mortar_ui::input::Button;
 use mortar_ui::status::Sys;
 use mortar_ui::toolkit::{self, hint, Glyph, ListState, MenuItem, PillKind, Row, RowValue};
+use mortar_setup::ui::{SetupUi, SocketDevice};
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 #[derive(Clone, Debug)]
@@ -97,6 +103,11 @@ pub struct Overlay {
     settings: ListState,
     confirm: Option<(String, Instant)>,
     toast: Option<(String, Instant)>,
+    /// mortar-setup's control socket (Settings > Wi-Fi / Remote access).
+    pub setup_socket: Option<PathBuf>,
+    /// An open setup page (Wi-Fi, Remote access), drawn full screen.
+    page: Option<SetupUi>,
+    page_tick: Option<Instant>,
 }
 
 impl Default for Overlay {
@@ -109,6 +120,9 @@ impl Default for Overlay {
             settings: ListState::default(),
             confirm: None,
             toast: None,
+            setup_socket: None,
+            page: None,
+            page_tick: None,
         }
     }
 }
@@ -132,6 +146,31 @@ impl Overlay {
         self.tab = Tab::Apps;
         self.running.sel = if v.running.len() > 1 { 1 } else { 0 };
         self.confirm = None;
+        self.page = None;
+    }
+
+    pub fn with_setup_socket(setup_socket: Option<PathBuf>) -> Overlay {
+        Overlay { setup_socket, ..Overlay::default() }
+    }
+
+    /// Show a setup page (also used by the preview with a demo device).
+    pub fn open_page(&mut self, page: SetupUi) {
+        self.page = Some(page);
+        self.page_tick = Some(Instant::now() + Duration::from_secs(1));
+    }
+
+    fn open_setup(&mut self, v: &View, wifi: bool) {
+        let Some(sock) = self.setup_socket.clone() else {
+            self.toast(if wifi { "Wi-Fi settings need mortar.setup.enable" } else { "Remote access settings need mortar.setup.enable" });
+            return;
+        };
+        let dev = Box::new(SocketDevice::new(&sock));
+        if let Some(e) = &dev.error {
+            self.toast(format!("Setup service: {e}"));
+            return;
+        }
+        let page = if wifi { SetupUi::wifi(dev, v.sys.clone()) } else { SetupUi::remote_access(dev, v.sys.clone()) };
+        self.open_page(page);
     }
 
     pub fn toast(&mut self, msg: impl Into<String>) {
@@ -142,12 +181,31 @@ impl Overlay {
         self.toast = None;
     }
 
-    /// When the overlay next needs a redraw for a timeout (toast expiry).
+    /// When the overlay next needs a redraw for a timeout (toast expiry,
+    /// the open setup page's once-a-second refresh).
     pub fn deadline(&self) -> Option<Instant> {
-        self.toast.as_ref().map(|t| t.1)
+        let t = self.toast.as_ref().map(|t| t.1);
+        match (t, self.page.as_ref().and(self.page_tick)) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        }
     }
-    /// Drop expired toasts; true if something changed.
+    /// Drop expired toasts, refresh an open setup page; true if something
+    /// changed.
     pub fn expire(&mut self) -> bool {
+        if let Some(p) = &mut self.page
+            && self.page_tick.is_some_and(|t| Instant::now() >= t)
+        {
+            self.page_tick = Some(Instant::now() + p.next_tick());
+            let changed = p.tick();
+            if p.exited() {
+                self.page = None;
+                return true;
+            }
+            if changed {
+                return true;
+            }
+        }
         if self.toast.as_ref().is_some_and(|t| Instant::now() >= t.1) {
             self.toast = None;
             return true;
@@ -170,6 +228,17 @@ impl Overlay {
     }
 
     pub fn button(&mut self, b: Button, v: &View) -> Action {
+        if let Some(p) = &mut self.page {
+            // MENU leaves the page (and, over an app, the overlay)
+            if b == Button::Menu {
+                self.page = None;
+                return if Self::home(v) { Action::None } else { Action::Hide };
+            }
+            if p.button(b) {
+                self.page = None;
+            }
+            return Action::None;
+        }
         let tabs: Vec<Tab> = if Self::home(v) { vec![Tab::Launch, Tab::Settings] } else { TABS.iter().map(|t| t.0).collect() };
         if !tabs.contains(&self.tab) {
             self.tab = tabs[0];
@@ -263,7 +332,8 @@ impl Overlay {
                         return Action::PowerOff;
                     }
                 }
-                Setting::Wifi | Setting::Remote => self.toast("Wi-Fi and SSH settings arrive with the Settings screens"),
+                Setting::Wifi => self.open_setup(v, true),
+                Setting::Remote => self.open_setup(v, false),
                 Setting::Brightness | Setting::Volume => {}
             },
             _ => {}
@@ -274,6 +344,14 @@ impl Overlay {
     // ------------------------------------------------------------ draw ----
 
     pub fn draw(&mut self, ui: &mut Ui, v: &View) {
+        if let Some(p) = &mut self.page {
+            p.cx.sys = v.sys.clone();
+            p.draw(ui);
+            if let Some((m, _)) = &self.toast {
+                toolkit::toast(ui, m);
+            }
+            return;
+        }
         let home = Self::home(v);
         let tabs: Vec<(Tab, &str)> = TABS.iter().copied().filter(|(t, _)| !home || *t != Tab::Apps).collect();
         if !tabs.iter().any(|t| t.0 == self.tab) {
@@ -422,17 +500,17 @@ impl Overlay {
                     Setting::Brightness => Row::new("Brightness", RowValue::Text(pct(v.sys.brightness))),
                     Setting::Volume => Row::new("Volume", RowValue::Text(pct(v.volume))),
                     Setting::Keyboard => Row::new("On-screen keyboard", txt("START in the app ›")),
-                    Setting::Wifi => Row::new("Wi-Fi", txt(if v.sys.wifi { "Connected" } else { "Off" })),
+                    Setting::Wifi => Row::new("Wi-Fi", txt(if v.sys.wifi { "Connected ›" } else { "Not connected ›" })),
                     Setting::Remote => Row::new(
                         "Remote access",
                         RowValue::Text(if v.sys.sshd_listening {
                             match v.sys.ssh_sessions {
-                                0 => "On".to_string(),
-                                1 => "On · 1 session".to_string(),
-                                n => format!("On · {n} sessions"),
+                                0 => "On ›".to_string(),
+                                1 => "On · 1 session ›".to_string(),
+                                n => format!("On · {n} sessions ›"),
                             }
                         } else {
-                            "Off".into()
+                            "Off ›".into()
                         }),
                     ),
                     Setting::Sleep => Row::new("Sleep", txt("Power key")),
@@ -507,5 +585,29 @@ mod tests {
         assert_eq!(o.tab, Tab::Settings);
         o.button(Button::Right, &v);
         assert_eq!(o.button(Button::Right, &v), Action::Brightness(10));
+    }
+
+    #[test]
+    fn remote_access_page_opens_and_closes() {
+        use mortar_setup::ui::{demo::DemoDevice, SetupUi};
+        let running = [run(2, "Terminal", true)];
+        let sys = Sys::demo(None);
+        let v = View { running: &running, launcher: &[], sys: &sys, volume: None, current: Some(&running[0]), keyboard_app: false };
+        let mut o = Overlay::default();
+        o.open(&v);
+        o.tab = Tab::Settings;
+        // without the setup service the row only explains itself
+        o.settings.sel = settings(&v).iter().position(|s| *s == Setting::Remote).unwrap();
+        assert_eq!(o.button(Button::A, &v), Action::None);
+        assert!(o.page.is_none() && o.toast.is_some());
+        // with it, the page takes the buttons until it is left with B
+        o.open_page(SetupUi::remote_access(Box::new(DemoDevice::settings()), sys.clone()));
+        assert_eq!(o.button(Button::Down, &v), Action::None);
+        assert_eq!(o.button(Button::B, &v), Action::None);
+        assert!(o.page.is_none());
+        // MENU over an app leaves the page and the overlay
+        o.open_page(SetupUi::remote_access(Box::new(DemoDevice::settings()), sys.clone()));
+        assert_eq!(o.button(Button::Menu, &v), Action::Hide);
+        assert!(o.page.is_none());
     }
 }

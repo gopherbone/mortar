@@ -1,0 +1,27 @@
+# Mortar setup file. Edit it before the first boot (any text editor works),
+# or leave it as it is and set things up on the Brick's screen.
+# Blank values are ignored. Format: docs/setup-file.md in the Mortar repo.
+
+# Name on the network: <hostname>.local (letters, digits and dashes).
+hostname = ""
+
+[wifi]
+ssid = ""
+# Stored on the Brick at boot, then removed from this file.
+password = ""
+# Two-letter country code for Wi-Fi channels, e.g. "US", "DE", "GB".
+country = ""
+# hidden = true    # the network does not broadcast its name
+
+[ssh]
+# Public keys allowed to log in as root. Paste whole lines, or drop .pub
+# files into the ssh-keys/ folder next to this file.
+authorized_keys = [
+]
+# true: the pairing code on the screen also works as root's SSH password
+# over the USB cable, until the first key is added.
+password_login = true
+
+[usb]
+# The Brick shows up on your computer as a network adapter (10.55.0.1).
+network = true

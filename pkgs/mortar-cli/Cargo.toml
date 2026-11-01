@@ -6,6 +6,7 @@ description = "Build Mortar on this computer and put it on a TrimUI Brick over S
 license = "GPL-2.0-or-later"
 
 [dependencies]
+mortar-pair = { path = "../mortar-pair" }
 
 [profile.release]
 opt-level = "s"

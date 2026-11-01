@@ -28,8 +28,12 @@ Updates are built on your computer and pushed over SSH.
 | Apps | PuzzleScript, m8c (M8 tracker client; plug the M8 into the top port; its audio is routed to the codec). Greeter sessions. SDL3 apps render on the GPU (`mortar-sdl-run`: SDL's vivante backend on the stock EGL; a busy M8 screen at ~10% CPU), falling back to Mesa's software GL (~2 cores). |
 | Debug | Each boot saves logs to `mortar-logs/` on the card's FAT partition. |
 
-Not yet: the controller-driven greeter and setup screens, charging
-configuration, suspend, a volume control.
+First-boot setup (opt-in, `mortar.setup.enable`): a `mortar.toml` setup file
+on the card, setup screens on the panel, and `mortar pair`, which puts your
+key on the Brick using a code on its screen (docs/setup-file.md,
+docs/pairing.md).
+
+Not yet: charging configuration, suspend.
 
 ## Getting started
 
@@ -78,6 +82,7 @@ modules/
   brick-gpu.nix           pvrsrvkm + brick_dc_drm, GPU userspace, GPU tests
   mortar-apps.nix         built-in apps
   mortar-ai.nix           Claude Code: tmux session, controller UI, Remote Control (off by default)
+  mortar-setup.nix        first-boot setup: mortar.toml, pairing, setup screens (opt-in)
 pkgs/
   linux-trimui-brick.nix  jkingston's Linux 7.3 Brick tree, pinned, + patches/kernel/
   brick-dc-drm/           display-class driver: GPU frames → DRM atomic flips
@@ -85,10 +90,12 @@ pkgs/
   mortar-ai/              controller UI for Claude Code + sign-in helper (Rust), see DESIGN.md
   mortar-wlegl/           Wayland EGL platform on the stock EGL (GPU apps in mortar-shell)
   mortar-shell/           multitasking Wayland compositor (Rust, Smithay)
+  mortar-setup/           setup file, pairing service, setup screens (Rust)
+  mortar-pair/            the pairing protocol, shared with mortar-cli
   trimui-brick-firmware.nix, m8c/, mortar-cli/ (Rust), mortar-gpu-tests/
 firmware/mainline/        U-Boot SPL + TF-A + U-Boot, with jkingston's patches
 image/build-image-mainline.nix   SD image (bootloader at 128 KiB, FAT /boot, ext4 /)
-docs/                     mortar.md, firmware.md
+docs/                     mortar.md, firmware.md, setup-file.md, pairing.md
 ```
 
 The original Liontron-DTB configuration (`nixosConfigurations.trimui-brick`,

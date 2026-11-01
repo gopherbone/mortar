@@ -11,10 +11,13 @@ opt-level = 3
 lto = "thin"
 
 # The library (toolkit, theme, gfx, input mapping) needs only the first four
-# dependencies; the greeter binary needs the "app" feature (default).
+# dependencies; "backend" adds the display/input backends (KMS + evdev on
+# Linux, a window on macOS, headless) for programs that own the screen
+# (the greeter, mortar-setup); the greeter binary needs "app" (default).
 [features]
 default = ["app"]
-app = ["dep:greetd_ipc", "dep:serde_json", "dep:drm", "dep:evdev", "dep:minifb"]
+backend = ["dep:drm", "dep:evdev", "dep:minifb"]
+app = ["backend", "dep:greetd_ipc", "dep:serde_json"]
 
 [[bin]]
 name = "mortar-ui"

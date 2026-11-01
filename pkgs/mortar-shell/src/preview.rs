@@ -68,7 +68,15 @@ pub fn run(screen: &str, keys: &[Button], out: &Path, size: (u32, u32)) -> Resul
             o.tab = Tab::Settings;
         }
         "osk" | "osd" => {}
-        s => return Err(format!("unknown preview screen '{s}' (home, home-settings, menu, menu-launch, menu-settings, osk, osd)")),
+        // Settings > Remote access / Wi-Fi (mortar-setup pages, demo data)
+        "remote" | "wifi" => {
+            use mortar_setup::ui::{demo::DemoDevice, SetupUi};
+            o.open(&v);
+            o.tab = Tab::Settings;
+            let dev = Box::new(DemoDevice::settings());
+            o.open_page(if screen == "wifi" { SetupUi::wifi(dev, sys.clone()) } else { SetupUi::remote_access(dev, sys.clone()) });
+        }
+        s => return Err(format!("unknown preview screen '{s}' (home, home-settings, menu, menu-launch, menu-settings, remote, wifi, osk, osd)")),
     }
     if screen == "osk" || screen == "osd" {
         // a stand-in "app" (terminal-ish night block) with the keyboard
