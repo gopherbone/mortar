@@ -1,0 +1,23 @@
+[package]
+name = "mortar-ai"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-2.0-or-later"
+description = "Controller-driven Claude Code front end (approvals with A/B) for Mortar on the TrimUI Brick"
+publish = false
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+
+[dependencies]
+mortar-ui = { path = "../mortar-ui", default-features = false }
+libc = "0.2.191"
+serde_json = "1.0.154"
+qrcode = { version = "0.14", default-features = false }
+
+# The Wayland window is Linux-only; the model, protocol and preview build
+# (and unit-test) on macOS.
+[target.'cfg(target_os = "linux")'.dependencies]
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client"] }
