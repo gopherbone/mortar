@@ -19,7 +19,7 @@
       # Vendor SCP blob (not redistributable) and the U-Boot image embedding it.
       # Build locally only; never push these to a public cache.
       mortarUnfree = pkg: builtins.elem (nixpkgs.lib.getName pkg)
-        [ "trimui-brick-scp" "u-boot-trimui-brick-mainline" "trimui-brick-firmware" "pvr-ddk-userspace" ];
+        [ "trimui-brick-scp" "u-boot-trimui-brick-mainline" "trimui-brick-firmware" "pvr-ddk-userspace" "claude-code" ];
     in {
       nixosConfigurations.trimui-brick = nixpkgs.lib.nixosSystem {
         system = targetSystem;
@@ -53,6 +53,8 @@
           ./modules/mortar-greeter.nix
           ./modules/mortar-shell.nix
           { mortar.shell.enable = true; }
+          ./modules/mortar-ai.nix
+          { mortar.ai.enable = true; }
           ({ config, pkgs, ... }: {
             mortar.greeter.enable = true;
             mortar.greeter.sessions = {
