@@ -191,10 +191,22 @@ blocks with 1 px ink outlines, isometric illustrations.
   background app (SDL apps see OCCLUDED and can idle). Apps keep running:
   audio from the M8 (m8c keeps its capture running) continues. Waking
   turns the backlight on first, then fades back in; the waking press does
-  nothing else. Real suspend-to-RAM is a hook only: `ui.suspend` runs
-  `actions.sleep` (`systemctl suspend`) once the screen is dark; it is off
-  and untested on the Brick (jkingston's tree has native-deep DTB
-  variants and a config fragment for it).
+  nothing else.
+- Suspend (Settings > Sleep = Suspend, the default on the Brick; module
+  default `ui.suspend`): once the screen has been dark for
+  `ui.suspendGraceMs` (3 s, so a second tap just wakes the screen) the
+  shell runs `actions.sleep` (`systemctl suspend`, mem/deep through the
+  SCP, see modules/trimui-brick.nix). Only the power key wakes the
+  Brick from it. The shell notices the resume as a jump of
+  CLOCK_BOOTTIME against CLOCK_MONOTONIC (UI time does not move while
+  suspended), wakes the screen, swallows the waking power press (its
+  release would otherwise sleep again), redraws and sends every app a
+  frame callback. It stays DRM master throughout; the kernel restores
+  the last committed state. Apps are frozen while suspended: m8c and
+  ChooChoo audio stops, USB devices (the M8) may re-enumerate.
+- Settings > Sleep when idle (Off, 1-30 min; module default
+  `ui.idleMinutes` = 0): no button or key input for that long sleeps
+  like a power tap (and then suspends with Sleep = Suspend).
 
 ### Motion
 

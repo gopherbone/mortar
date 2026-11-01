@@ -337,7 +337,8 @@ impl Shell {
                 }
                 Out::SetTimeZone(zone) => self.set_timezone(&zone),
                 Out::Sleep => {
-                    // the screen-off sleep; real suspend only behind ui.suspend
+                    // fade to dark; with Settings > Sleep = Suspend the
+                    // compositor then suspends to RAM (state.rs suspend_tick)
                     self.sui.sleep();
                     self.sync_cover();
                 }

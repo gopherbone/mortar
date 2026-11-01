@@ -50,13 +50,21 @@ pub struct Prefs {
     pub motion: Preset,
     pub reduce_motion: bool,
     pub night: bool,
+    /// Sleep suspends to RAM once the screen is dark (else screen off only).
+    pub suspend: bool,
+    /// Sleep after this many minutes without input (0: never).
+    pub idle_minutes: u32,
 }
 
 impl Default for Prefs {
     fn default() -> Self {
-        Prefs { sounds: true, sound_volume: 60, haptics: true, motion: Preset::Bouncy, reduce_motion: false, night: false }
+        Prefs { sounds: true, sound_volume: 60, haptics: true, motion: Preset::Bouncy, reduce_motion: false, night: false, suspend: false, idle_minutes: 0 }
     }
 }
+
+/// Settings > Sleep when idle: the choices, in minutes (0: never).
+pub const IDLE_CHOICES: [u32; 6] = [0, 1, 2, 5, 10, 30];
+const IDLE_LABELS: [&str; 6] = ["Off", "1m", "2m", "5m", "10m", "30m"];
 
 // ----------------------------------------------------------------- view ----
 
@@ -161,12 +169,14 @@ enum Setting {
     TimeZone,
     Wifi,
     Remote,
+    SleepMode,
+    IdleSleep,
     Logout,
 }
 
-const SETTINGS: [Setting; 9] = {
+const SETTINGS: [Setting; 11] = {
     use Setting::*;
-    [Sounds, Haptics, Motion, ReduceMotion, Palette, TimeZone, Wifi, Remote, Logout]
+    [Sounds, Haptics, Motion, ReduceMotion, Palette, TimeZone, Wifi, Remote, SleepMode, IdleSleep, Logout]
 };
 
 /// The settings screen: a list that slides in from the right.
@@ -1273,6 +1283,13 @@ impl ShellUi {
             (Setting::Haptics, _) if horiz || b == Button::A => self.prefs.haptics = !self.prefs.haptics,
             (Setting::ReduceMotion, _) if horiz || b == Button::A => self.prefs.reduce_motion = !self.prefs.reduce_motion,
             (Setting::Palette, _) if horiz || b == Button::A => self.prefs.night = !self.prefs.night,
+            (Setting::SleepMode, _) if horiz || b == Button::A => self.prefs.suspend = !self.prefs.suspend,
+            (Setting::IdleSleep, _) if horiz || b == Button::A => {
+                let n = IDLE_CHOICES.len() as i32;
+                let i = IDLE_CHOICES.iter().position(|m| *m == self.prefs.idle_minutes).unwrap_or(0) as i32;
+                let d = if b == Button::Left { -1 } else { 1 };
+                self.prefs.idle_minutes = IDLE_CHOICES[(i + d).rem_euclid(n) as usize];
+            }
             (Setting::Motion, _) if horiz || b == Button::A => {
                 let i = Preset::ALL.iter().position(|p| *p == self.prefs.motion).unwrap_or(0) as i32;
                 let d = if b == Button::Left { -1 } else { 1 };
@@ -1689,6 +1706,11 @@ impl ShellUi {
                 Setting::Motion => ("Motion", Ok((Preset::ALL.iter().map(|p| p.name()).collect(), Preset::ALL.iter().position(|p| *p == self.prefs.motion).unwrap_or(0)))),
                 Setting::ReduceMotion => ("Reduce motion", Ok((vec!["Off", "On"], self.prefs.reduce_motion as usize))),
                 Setting::Palette => ("Palette", Ok((vec!["Day", "Night"], self.prefs.night as usize))),
+                Setting::SleepMode => ("Sleep", Ok((vec!["Suspend", "Screen off"], if self.prefs.suspend { 0 } else { 1 }))),
+                Setting::IdleSleep => (
+                    "Sleep when idle",
+                    Ok((IDLE_LABELS.to_vec(), IDLE_CHOICES.iter().position(|m| *m == self.prefs.idle_minutes).unwrap_or(0))),
+                ),
                 Setting::TimeZone => ("Time zone", Err(format!("{} · {} ›", crate::tz::pretty(v.timezone).0, v.sys.time))),
                 Setting::Wifi => ("Wi-Fi networks", Err(if v.sys.wifi { "Connected ›".into() } else { "Not connected ›".into() })),
                 Setting::Remote => (
@@ -1862,7 +1884,13 @@ impl ShellUi {
             }
             let lab = ts(Face::Body500, 26.0, fg);
             b.text(px + 46.0, y + 36.0 - lab.line_px() / 2.0, name, &lab);
-            let d = if confirm { format!("Press A again to {}", name.to_lowercase()) } else { desc.to_string() };
+            let d = if confirm {
+                format!("Press A again to {}", name.to_lowercase())
+            } else if i == 0 && self.prefs.suspend {
+                "Suspend · power key wakes".to_string()
+            } else {
+                desc.to_string()
+            };
             let st = ts(Face::Mono400, 15.0, if on || confirm { fg } else { pal.soft });
             b.text_right(px + pw - 46.0, y + 36.0 - st.line_px() / 2.0, &d, &st);
         }
@@ -2243,6 +2271,15 @@ mod tests {
         press(&mut ui, &v, &[Button::Down; 10]);
         assert!(press(&mut ui, &v, &[Button::A]).is_empty());
         assert_eq!(press(&mut ui, &v, &[Button::A]), vec![Out::Logout]);
+        // Sleep when idle, then Sleep (Suspend / Screen off), above Log out
+        assert!(!ui.prefs.suspend);
+        ui.button(Button::Up, false, &v);
+        assert!(ui.button(Button::Right, false, &v).contains(&Out::Prefs));
+        assert_eq!(ui.prefs.idle_minutes, 1);
+        press(&mut ui, &v, &[Button::Left, Button::Left]);
+        assert_eq!(ui.prefs.idle_minutes, 30, "wraps around");
+        press(&mut ui, &v, &[Button::Up, Button::A]);
+        assert!(ui.prefs.suspend);
         // B: back to the MENU; MENU closes everything
         ui.button(Button::B, false, &v);
         settle(&mut ui, &v);

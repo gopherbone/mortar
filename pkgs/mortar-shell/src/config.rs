@@ -205,9 +205,14 @@ pub struct UiConfig {
     /// Frame callbacks per second for the app whose live preview shows in
     /// the MENU (Running).
     pub card_fps: u32,
-    /// After the screen-off sleep goes dark, also run `actions.sleep`
-    /// (suspend-to-RAM). Off: untested on the Brick.
+    /// Default for Settings > Sleep: after the screen-off sleep goes dark
+    /// (and `suspend_grace_ms` passes), run `actions.sleep` (suspend to RAM).
     pub suspend: bool,
+    /// How long the screen stays dark before suspending: a second tap of
+    /// the power key within it just wakes the screen.
+    pub suspend_grace_ms: u64,
+    /// Default for Settings > Sleep when idle, minutes (0: never).
+    pub idle_minutes: u32,
     /// tzdata (zone1970.tab and the zone files) for Settings > Time zone.
     pub zoneinfo: String,
     /// The local-time link naming the current zone ("~" allowed).
@@ -232,6 +237,8 @@ impl Default for UiConfig {
             screenshot_dir: "~/Pictures/Screenshots".into(),
             card_fps: 15,
             suspend: false,
+            suspend_grace_ms: 3000,
+            idle_minutes: 0,
             zoneinfo: "/etc/zoneinfo".into(),
             localtime: "/etc/localtime".into(),
         }
@@ -292,6 +299,8 @@ impl Config {
             motion: u.motion,
             reduce_motion: u.reduce_motion,
             night,
+            suspend: u.suspend,
+            idle_minutes: u.idle_minutes,
         }
     }
 }

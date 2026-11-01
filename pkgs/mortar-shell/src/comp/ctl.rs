@@ -226,6 +226,7 @@ fn state(shell: &Shell) -> String {
         "osk": shell.osk.visible,
         "sleep": format!("{:?}", shell.sui.sleep_phase()),
         "power_menu": shell.sui.power_menu_open(),
+        "resumes": shell.resumes,
         "timezone": shell.timezone,
         "held": shell.router.held(),
         "apps": apps,
