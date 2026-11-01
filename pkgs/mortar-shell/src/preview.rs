@@ -172,7 +172,7 @@ pub fn run(o: &Opts) -> Result<(), String> {
         "menu" | "menu-running" => {
             ui.menu_key(&v0);
         }
-        "menu-apps" | "menu-games" | "menu-music" | "menu-quick" | "menu-power" | "menu-confirm" => {
+        "menu-apps" | "menu-games" | "menu-music" | "menu-quick" | "menu-adjust" | "menu-power" | "menu-confirm" => {
             ui.menu_key(&v0);
             match s {
                 "menu-apps" => ui.button(Button::Right, false, &v0),
@@ -180,9 +180,13 @@ pub fn run(o: &Opts) -> Result<(), String> {
                     let n = if s == "menu-games" { 2 } else { 3 };
                     (0..n).flat_map(|_| ui.button(Button::Right, false, &v0)).collect()
                 }
-                "menu-quick" => {
+                "menu-quick" | "menu-adjust" => {
                     ui.button(Button::R1, false, &v0);
-                    ui.button(Button::Left, false, &v0)
+                    ui.button(Button::Left, false, &v0);
+                    if s == "menu-adjust" {
+                        ui.button(Button::A, false, &v0);
+                    }
+                    Vec::new()
                 }
                 _ => ui.button(Button::R1, false, &v0),
             };
@@ -273,7 +277,7 @@ pub fn run(o: &Opts) -> Result<(), String> {
         }
         other => {
             return Err(format!(
-                "unknown preview screen '{other}' (boot, home, home-empty, app, menu, menu-apps, menu-games, menu-music, menu-quick, menu-power, menu-confirm, menu-options, settings, remote, wifi, timezone, timezone-zones, launch, close, swap, osd, toast, achievement, flash, osk, power)"
+                "unknown preview screen '{other}' (boot, home, home-empty, app, menu, menu-apps, menu-games, menu-music, menu-quick, menu-adjust, menu-power, menu-confirm, menu-options, settings, remote, wifi, timezone, timezone-zones, launch, close, swap, osd, toast, achievement, flash, osk, power)"
             ))
         }
     }

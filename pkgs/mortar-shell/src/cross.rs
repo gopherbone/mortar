@@ -67,9 +67,13 @@ pub(super) enum Row {
 }
 
 impl Row {
-    /// ◀▶ changes it in place.
-    fn adjustable(&self) -> bool {
-        matches!(self, Row::Brightness | Row::Volume | Row::Wifi | Row::Bluetooth)
+    /// A level: A enters an adjust mode where ◀▶ change it.
+    fn level(&self) -> bool {
+        matches!(self, Row::Brightness | Row::Volume)
+    }
+    /// On or off: A switches it.
+    fn toggle(&self) -> bool {
+        matches!(self, Row::Wifi | Row::Bluetooth)
     }
     /// Needs a second A.
     fn warn(&self) -> bool {
@@ -123,6 +127,8 @@ pub(super) struct Cross {
     confirm: Option<Row>,
     /// Apps closed with X, hidden until they are gone.
     hidden: Vec<u32>,
+    /// A level row is being adjusted (◀▶ change it instead of category).
+    adjusting: bool,
     pub closing: bool,
 }
 
@@ -201,6 +207,7 @@ impl Cross {
 
     /// Point every row's springs at its place for selection `s`.
     fn layout(&mut self, s: usize) {
+        self.adjusting = false;
         for (j, r) in self.rows.iter_mut().enumerate() {
             r.y.set(slot_y(j, s));
             r.sc.set(if j == s { 1.0 } else { 0.86 });
@@ -277,7 +284,7 @@ impl ShellUi {
         let mut cat_x = Spring::new(60.0);
         cat_x.set(0.0);
         let cat_sc = std::array::from_fn(|i| Spring::new(if i == 0 { 1.0 } else { 0.72 }));
-        let mut m = Cross { cat: Cat::Running, op, cat_x, cat_sc, rows: Vec::new(), pv: Spring::new(0.0), ctx: None, confirm: None, hidden: Vec::new(), closing: false };
+        let mut m = Cross { cat: Cat::Running, op, cat_x, cat_sc, rows: Vec::new(), pv: Spring::new(0.0), ctx: None, confirm: None, hidden: Vec::new(), adjusting: false, closing: false };
         let s = self.cross_sel[0];
         m.set_rows(keys, s, false);
         m.pv.snap(m.pv.t);
@@ -375,11 +382,27 @@ impl ShellUi {
         let cat = m.cat;
         let s = self.cross_sel[cat.i()];
         let row = m.sel_row(s).cloned();
+        if m.adjusting {
+            match b {
+                Button::Left | Button::Right => {
+                    if let Some(r) = row {
+                        self.adjust(r, b == Button::Right, v);
+                    }
+                    return;
+                }
+                Button::A | Button::B => {
+                    if !repeat {
+                        m.adjusting = false;
+                        self.fx(Sfx::Tab, Some(Haptic::Tick));
+                    }
+                    return;
+                }
+                // anything else leaves adjust mode and does what it does
+                _ => m.adjusting = false,
+            }
+        }
         match b {
             Button::B if !repeat => self.close_menu(),
-            Button::Left | Button::Right if row.as_ref().is_some_and(|r| r.adjustable()) => {
-                self.adjust(row.unwrap(), b == Button::Right, v);
-            }
             Button::Left | Button::Right | Button::L1 | Button::R1 => {
                 if repeat && matches!(b, Button::L1 | Button::R1) {
                     return;
@@ -469,7 +492,7 @@ impl ShellUi {
         }
     }
 
-    /// ◀▶ on a value or toggle row.
+    /// ◀▶ while adjusting a level, A on a toggle.
     fn adjust(&mut self, row: Row, up: bool, v: &View) {
         let d = if up { 10 } else { -10 };
         match row {
@@ -510,12 +533,17 @@ impl ShellUi {
                     }
                 }
             }
-            Row::Brightness | Row::Volume => self.fx(Sfx::Deny, None),
-            Row::Wifi => {
-                self.out.push(Out::OpenSetup { wifi: true });
-                self.fx(Sfx::Tab, Some(Haptic::Tick));
+            Row::Brightness | Row::Volume => {
+                let has = if row == Row::Brightness { v.sys.brightness.is_some() } else { v.volume.is_some() };
+                match &mut self.menu {
+                    Some(m) if has => {
+                        m.adjusting = true;
+                        self.fx(Sfx::Tab, Some(Haptic::Tick));
+                    }
+                    _ => self.fx(Sfx::Deny, None),
+                }
             }
-            Row::Bluetooth => self.adjust(row, true, v),
+            Row::Wifi | Row::Bluetooth => self.adjust(row, true, v),
             Row::Sleep => {
                 self.close_menu();
                 self.out.push(Out::Sleep);
@@ -620,7 +648,7 @@ impl ShellUi {
         }
         draw_status(b, pal, v);
         let row = m.sel_row(sel);
-        hints(b, pal, H - 64.0, &menu_hints(row, v));
+        hints(b, pal, H - 64.0, &menu_hints(row, v, m.adjusting));
         b.pop_alpha();
         b.pop();
     }
@@ -668,9 +696,25 @@ impl ShellUi {
         let ic_ink = if confirm { pal.dark } else { pal.ink };
         draw_icon(b, info.icon, 32.0, 32.0, 40.0, pal, ic_ink);
         let mut right = ROW_W;
-        if let Some(val) = &info.value {
-            let (fill, ink) = if on { (pal.yellow, pal.dark) } else { (pal.ground, pal.ink) };
-            right -= chip(b, ROW_W, 32.0, val, 17.0, (10.0, 3.0), fill, ink) + 12.0;
+        let adjusting = on && m.adjusting;
+        match (&info.value, info.level) {
+            (Some(_), Some(lv)) if adjusting => {
+                // the chip becomes a short slider: a yellow bar on a track
+                let (tw, th) = (120.0, 18.0);
+                let x = ROW_W - tw;
+                b.block(x, 32.0 - th / 2.0, tw, th, pal.ground, pal.ink);
+                let fw = (tw - 2.0) * (lv.min(100) as f32 / 100.0);
+                b.rect(x + 1.0, 32.0 - th / 2.0 + 1.0, fw, th - 2.0, pal.yellow);
+                b.rect(x + 1.0 + fw, 32.0 - th / 2.0 + 1.0, 1.0, th - 2.0, pal.ink);
+                let st = ts(Face::Mono600, 17.0, pal.ink);
+                let w = b.text_right(x - 10.0, 32.0 - st.line_px() / 2.0, &format!("{lv}%"), &st);
+                right -= tw + 10.0 + w + 12.0;
+            }
+            (Some(val), _) => {
+                let (fill, ink) = if on { (pal.yellow, pal.dark) } else { (pal.ground, pal.ink) };
+                right -= chip(b, ROW_W, 32.0, val, 17.0, (10.0, 3.0), fill, ink) + 12.0;
+            }
+            _ => {}
         }
         if previews(Some(row)) {
             // keep clear of the live preview
@@ -687,6 +731,8 @@ impl ShellUi {
         }
         let s = if confirm {
             format!("Press A again to {}", info.title.to_lowercase())
+        } else if adjusting {
+            "◀▶ to change".to_string()
         } else {
             info.sub
         };
@@ -754,11 +800,13 @@ struct RowInfo {
     sub: String,
     icon: Ic,
     value: Option<String>,
+    /// Level rows: the value as a number (the slider).
+    level: Option<u8>,
     live: bool,
 }
 
 fn row_info(row: &Row, v: &View) -> RowInfo {
-    let ri = |title: &str, sub: String, icon: Ic| RowInfo { title: title.to_string(), sub, icon, value: None, live: false };
+    let ri = |title: &str, sub: String, icon: Ic| RowInfo { title: title.to_string(), sub, icon, value: None, level: None, live: false };
     let pct = |x: Option<u8>| Some(x.map(|x| format!("{x}%")).unwrap_or_else(|| "n/a".into()));
     let toggle = |x: Option<bool>| {
         Some(match x {
@@ -791,14 +839,14 @@ fn row_info(row: &Row, v: &View) -> RowInfo {
             }
             None => ri(id, String::new(), Ic::Apps),
         },
-        Row::Brightness => RowInfo { value: pct(v.sys.brightness), ..ri("Brightness", "◀▶ to change".into(), Ic::Sun) },
-        Row::Volume => RowInfo { value: pct(v.volume), ..ri("Volume", "◀▶ to change".into(), Ic::Vol) },
+        Row::Brightness => RowInfo { value: pct(v.sys.brightness), level: v.sys.brightness, ..ri("Brightness", "A to adjust".into(), Ic::Sun) },
+        Row::Volume => RowInfo { value: pct(v.volume), level: v.volume, ..ri("Volume", "A to adjust".into(), Ic::Vol) },
         Row::Wifi => {
             let sub = match v.radios.wifi {
                 None => "No Wi-Fi switch",
                 Some(false) => "Radio off",
-                Some(true) if v.sys.wifi => "Connected · A for networks",
-                Some(true) => "Not connected · A for networks",
+                Some(true) if v.sys.wifi => "Connected",
+                Some(true) => "Not connected · networks in Settings…",
             };
             RowInfo { value: toggle(v.radios.wifi), ..ri("Wi-Fi", sub.into(), Ic::Wifi) }
         }
@@ -814,17 +862,18 @@ fn row_info(row: &Row, v: &View) -> RowInfo {
     }
 }
 
-fn menu_hints(row: Option<&Row>, v: &View) -> Vec<(&'static str, &'static str)> {
+fn menu_hints(row: Option<&Row>, v: &View, adjusting: bool) -> Vec<(&'static str, &'static str)> {
+    if adjusting {
+        return vec![("◀▶", "Adjust"), ("A/B", "Done"), ("MENU", "Close")];
+    }
     let mut h = vec![("◀▶", "Category"), ("▲▼", "Choose")];
     match row {
         Some(Row::App(_)) => h.extend([("X", "Close"), ("Y", "Options"), ("A", "Switch")]),
         Some(Row::Home) => h.push(("A", "Go home")),
-        Some(r) if r.adjustable() => {
-            h[0] = ("L1/R1", "Category");
-            h.push(("◀▶", "Change"));
-            if *r == Row::Wifi {
-                h.push(("A", "Networks"));
-            }
+        Some(r) if r.level() => h.push(("A", "Adjust")),
+        Some(r) if r.toggle() => {
+            let on = if *r == Row::Wifi { v.radios.wifi } else { v.radios.bluetooth };
+            h.push(("A", if on == Some(true) { "Turn off" } else { "Turn on" }));
         }
         Some(Row::Launch(id)) => {
             let running = v.launcher.iter().find(|l| l.id == *id).is_some_and(|l| l.running && l.single_instance);

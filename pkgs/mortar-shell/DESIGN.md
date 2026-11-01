@@ -115,8 +115,8 @@ blocks with 1 px ink outlines, isometric illustrations.
   - Categories run across: Running (with a count badge), Apps, Games,
     Music, Quick, Power. The selected one is bigger and lime and sits at
     the left column; its items run down beneath it. Games and Music only
-    show when an entry is in them. ◀▶ move one category, L1/R1 jump to
-    the first / last.
+    show when an entry is in them. ◀▶ always move one category (on every
+    row), L1/R1 jump to the first / last.
   - Items: the selected one is larger with its name in the serif italic;
     the ones above it fade out, up to four show below. ▲▼ move. Each
     category remembers its selection (across openings too).
@@ -134,13 +134,15 @@ blocks with 1 px ink outlines, isometric illustrations.
     guessed: M8 and trackers are music, PICO-8, PuzzleScript and
     emulators games). A launches (zooming from the row); a running
     single-instance entry switches to its app instead.
-  - Quick: Brightness and Volume (◀▶ change them in steps of 10 in
-    place; the row's value chip shows the level and the volume OSD stays
-    away), Wi-Fi and Bluetooth (◀▶ switch the radio with rfkill, see
-    radio.rs; A on Wi-Fi opens the mortar-setup networks page), Sleep,
+  - Quick: Brightness and Volume show their level in a value chip; A
+    enters an adjust mode where the chip becomes a short yellow slider,
+    ◀▶ change the level in steps of 10 (vol blip, haptic tick; the
+    volume OSD stays away) and the hint bar reads "◀▶ Adjust · A/B
+    Done". A or B leave adjust mode, ▲▼ leave it and move, MENU closes
+    the menu. Wi-Fi and Bluetooth: A switches the radio with rfkill (see
+    radio.rs); the Wi-Fi networks page is under Settings…. Then Sleep,
     Keyboard (keyboard apps: the on-screen keyboard), and Settings…, which
-    opens the settings screen. On value rows ◀▶ change the value, so
-    L1/R1 change category (the hint bar says so).
+    opens the settings screen.
   - Power: Sleep, Restart, Power off. Restart and Power off need a second
     A: the swatch turns orange and the subtitle reads "Press A again to
     …"; moving away cancels.
@@ -573,7 +575,7 @@ shell through it; over SSH it gives remote screenshots and app control
 - Unit tests (`cargo test`, also on macOS): config parsing, pid ancestry,
   MRU, button routing (MENU chord, releases on retarget, keyboard mode),
   OSK layout and typing, the MENU (previous app, categories and their
-  memory, Quick values and toggles, Power confirm, options popup,
+  memory, ◀▶ on every row, Quick adjust mode and toggles, Power confirm, options popup,
   settings screen, time zone picker), rfkill state, gamepad blacklist.
 - `passthru.tests.headless`: the compositor on the headless backend in
   the build sandbox; weston-fullscreen (wl_shm) and foot started from the

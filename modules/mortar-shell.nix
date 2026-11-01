@@ -208,7 +208,7 @@ let
       # Wayland clients (mortar-wlegl dma-bufs, scanned out directly),
       # otherwise on software GL.
       env = { MORTAR_SDL = if cfg.gpuApps then "wayland-gpu" else "software"; } // cfg.environment;
-      # MENU > Quick > Wi-Fi and Settings… > Remote access (modules/mortar-setup.nix)
+      # MENU > Quick > Settings… > Wi-Fi networks / Remote access (modules/mortar-setup.nix)
       setupSocket = if config.mortar ? setup && config.mortar.setup.enable then "/run/mortar-setup/control.sock" else null;
     }
   );

@@ -2174,18 +2174,32 @@ mod tests {
         let mut ui = ShellUi::new(Prefs::default(), false);
         to_quick(&mut ui, &v);
         assert_eq!(sel_row(&ui), Some(cross::Row::Brightness));
-        assert_eq!(press(&mut ui, &v, &[Button::Right]), vec![Out::Brightness(10)]);
-        assert_eq!(press(&mut ui, &v, &[Button::Down, Button::Left]), vec![Out::Volume(-10)]);
-        // ◀▶ change the value; L1/R1 still change category
+        // ◀▶ always change category, also on a value row
+        assert!(press(&mut ui, &v, &[Button::Left]).is_empty());
+        assert_eq!(ui.menu_category(), Some(Cat::Music));
+        press(&mut ui, &v, &[Button::Right]);
         assert_eq!(ui.menu_category(), Some(Cat::Quick));
-        press(&mut ui, &v, &[Button::L1]);
-        assert_eq!(ui.menu_category(), Some(Cat::Running));
-        press(&mut ui, &v, &[Button::R1, Button::Left]);
-        assert_eq!(sel_row(&ui), Some(cross::Row::Volume));
-        assert_eq!(press(&mut ui, &v, &[Button::Down, Button::Right]), vec![Out::Radio(Radio::Wifi, false)]);
-        assert_eq!(press(&mut ui, &v, &[Button::A]), vec![Out::OpenSetup { wifi: true }]);
+        // A: adjust mode; ◀▶ change the value; A or B leave it
+        assert!(press(&mut ui, &v, &[Button::A]).is_empty());
+        assert_eq!(press(&mut ui, &v, &[Button::Right]), vec![Out::Brightness(10)]);
+        assert_eq!(press(&mut ui, &v, &[Button::Left]), vec![Out::Brightness(-10)]);
+        assert!(press(&mut ui, &v, &[Button::B]).is_empty());
+        assert!(ui.menu_open(), "B leaves adjust mode, not the MENU");
+        press(&mut ui, &v, &[Button::Right]);
+        assert_eq!(ui.menu_category(), Some(Cat::Power));
+        press(&mut ui, &v, &[Button::Left]);
+        // ▲▼ in adjust mode leave it and move
+        assert_eq!(press(&mut ui, &v, &[Button::Down, Button::A, Button::Left]), vec![Out::Volume(-10)]);
+        assert!(press(&mut ui, &v, &[Button::Down]).is_empty());
+        assert_eq!(sel_row(&ui), Some(cross::Row::Wifi));
+        assert_eq!(ui.menu_category(), Some(Cat::Quick));
+        // toggles: A switches; ◀▶ still change category
+        assert_eq!(press(&mut ui, &v, &[Button::A]), vec![Out::Radio(Radio::Wifi, false)]);
+        press(&mut ui, &v, &[Button::Right]);
+        assert_eq!(ui.menu_category(), Some(Cat::Power));
+        press(&mut ui, &v, &[Button::Left]);
         // no Bluetooth switch on this device: nothing to toggle
-        assert!(press(&mut ui, &v, &[Button::Down, Button::Right]).is_empty());
+        assert!(press(&mut ui, &v, &[Button::Down, Button::A]).is_empty());
         // Sleep closes the MENU and sleeps
         assert_eq!(press(&mut ui, &v, &[Button::Down, Button::A]), vec![Out::Sleep]);
         assert!(!ui.menu_open());

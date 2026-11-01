@@ -47,9 +47,9 @@ On the greeter, choose **Mortar**. In the shell:
 | D-pad, A, B | Move, open, back |
 | MENU | The cross menu over the app: categories across (Running, Apps, Games, Music, Quick, Power), items down; MENU or B closes it |
 | MENU, then A | Flip back to the previous app |
-| In the MENU: ◀▶ / L1, R1 | Next category / jump to the first or last (on a Quick value row ◀▶ change the value) |
+| In the MENU: ◀▶ / L1, R1 | Next category / jump to the first or last |
 | In the MENU, on a running app: A, X, Y | Switch to it, close it, options (switch, restart, close) |
-| In the MENU, Quick | Brightness and volume (◀▶), Wi-Fi and Bluetooth on/off (A on Wi-Fi: networks), Sleep, Settings… (sounds, motion, palette, time zone, remote access, log out) |
+| In the MENU, Quick | Brightness and volume (A, then ◀▶ to adjust, A or B when done), Wi-Fi and Bluetooth on/off (A), Sleep, Settings… (sounds, motion, palette, time zone, Wi-Fi networks, remote access, log out) |
 | In the MENU, Power | Sleep, Restart, Power off (press A twice) |
 | VOL+ / VOL− | Volume (the shell owns these keys) |
 | VOL+ and VOL− together | Screenshot, saved to `~/Pictures/Screenshots` |
