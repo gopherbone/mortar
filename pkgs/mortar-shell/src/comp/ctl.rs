@@ -10,7 +10,7 @@
 //! Commands: state | press B | down B | up B | key CODE | launch ID |
 //! focus UID|ID | close UID|ID | screenshot PATH | home | quit, and for the
 //! UI: shot (the screenshot combo: flash, sound, file in screenshotDir),
-//! toast JSON ({"title", "sub", "kind": "info"|"achievement", "sound",
+//! toast JSON ({"title", "sub", "kind": "info"|"achievement", "sound", "haptic",
 //! "secs"}; `mortar-shell toast` builds it), boot (replay the boot screen),
 //! time manual|real|+MS (freeze UI time / step it, for test frames),
 //! prefs (the current settings).

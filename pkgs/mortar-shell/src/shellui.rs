@@ -1428,6 +1428,35 @@ fn chip(b: &mut B, right: f32, cy: f32, text: &str, size: f32, pad: (f32, f32), 
     w
 }
 
+/// The status bar's battery level: plain text (pushed onto `net`), a lime
+/// chip with a bolt while charging, yellow at 15 % and orange at 5 % (the
+/// warning levels). Returns the new right edge.
+fn battery_status(b: &mut B, pal: &Pal, v: &View, mut right: f32, net: &mut Vec<String>) -> f32 {
+    if let Some(bat) = v.sys.battery {
+        let txt = format!("{bat}%");
+        if v.sys.charging {
+            let w = chip(b, right, 28.0, &txt, 15.0, (9.0, 2.0), pal.lime, pal.lime_ink);
+            b.poly_concave(&bolt_pts(right - w - 11.0, 28.0, 18.0), pal.ink);
+            right -= w + 32.0;
+        } else if bat <= 15 {
+            let fill = if bat <= 5 { pal.orange } else { pal.yellow };
+            right -= chip(b, right, 28.0, &txt, 15.0, (9.0, 2.0), fill, pal.dark) + 10.0;
+        } else {
+            net.push(txt);
+        }
+    }
+    right
+}
+
+/// A lightning bolt (the charging mark), `h` tall, centred on (cx, cy);
+/// the same shape as the toolkit's BatCharge icon.
+fn bolt_pts(cx: f32, cy: f32, h: f32) -> Vec<P> {
+    [(12.4, 8.6), (7.6, 12.6), (11.2, 12.6), (9.6, 15.4), (14.4, 11.4), (10.8, 11.4)]
+        .iter()
+        .map(|(x, y)| (cx + (x - 11.0) / 6.8 * h, cy + (y - 12.0) / 6.8 * h))
+        .collect()
+}
+
 fn star_pts(cx: f32, cy: f32, r: f32) -> Vec<P> {
     (0..10)
         .map(|i| {
@@ -1549,7 +1578,10 @@ impl ShellUi {
         b.text(56.0, 80.0, &v.sys.time, &clock);
         let date = ts(Face::Mono400, 18.0, pal.soft).tracking(0.04);
         b.text(62.0, 214.0, &date_line(v.host), &date);
-        let hint = ts(Face::Body400, 18.0, pal.soft).line_height(1.4);
+        if v.sys.plugged {
+            self.draw_charge_line(b, pal, v);
+        }
+        let hint =ts(Face::Body400, 18.0, pal.soft).line_height(1.4);
         let bold = ts(Face::Body600, 18.0, pal.ink).line_height(1.4);
         let (a, m, c) = ("Press ", "MENU", " anytime");
         let wc = b.measure(c, &hint);
@@ -1584,9 +1616,7 @@ impl ShellUi {
         if v.sys.usb_net {
             net.push("USB".to_string());
         }
-        if let Some(bat) = v.sys.battery {
-            net.push(format!("{bat}%"));
-        }
+        right = battery_status(b, pal, v, right, &mut net);
         let net = net.join(" · ");
         if !net.is_empty() {
             right -= b.text_right(right, 28.0 - sb.line_px() / 2.0, &net, &sb) + 10.0;
@@ -1598,6 +1628,29 @@ impl ShellUi {
             chip(b, right, 28.0, &format!("{} running", v.running.len()), 15.0, (9.0, 2.0), pal.lavender, pal.lavender_ink);
         }
         hints(b, pal, H - 64.0, &[("◀▶", "Choose"), ("MENU", "Apps"), ("A", "Open")]);
+    }
+
+    /// On the charger: a thin level line under the date, with a short
+    /// highlight drifting along the filled part while it charges.
+    fn draw_charge_line(&self, b: &mut B, pal: &Pal, v: &View) {
+        let pct = v.sys.battery.unwrap_or(0).min(100);
+        let (x, y, w) = (62.0, 248.0, 200.0);
+        let fill = (w * pct as f32 / 100.0).max(2.0);
+        b.rect(x, y, w, 2.0, pal.ground_2);
+        b.rect(x, y, fill, 2.0, pal.lime);
+        if v.sys.charging && fill > 30.0 {
+            let ph = (self.drift_t / 2.6).fract() as f32;
+            let ease = ph * ph * (3.0 - 2.0 * ph);
+            b.rect(x + (fill - 28.0) * ease, y - 1.0, 28.0, 4.0, with_a(pal.ink, 0.28 * (1.0 - ph)));
+        }
+        let lab = ts(Face::Mono400, 13.0, pal.soft).tracking(0.08);
+        let txt = match (v.sys.charging, v.sys.battery) {
+            (true, Some(p)) => format!("CHARGING · {p}%"),
+            (true, None) => "CHARGING".to_string(),
+            (false, Some(100)) => "CHARGED".to_string(),
+            (false, _) => "ON POWER".to_string(),
+        };
+        b.text(x + w + 14.0, y + 1.0 - lab.line_px() / 2.0, &txt, &lab);
     }
 
     fn draw_tile(&self, b: &mut B, pal: &Pal, v: &View, i: usize) {

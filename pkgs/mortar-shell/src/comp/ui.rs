@@ -581,6 +581,8 @@ impl Shell {
             sound: Option<String>,
             #[serde(default)]
             secs: Option<f32>,
+            #[serde(default)]
+            haptic: Option<String>,
         }
         let t: T = serde_json::from_str(arg).map_err(|e| format!("toast: {e}"))?;
         let mut toast = match t.kind.as_deref() {
@@ -593,6 +595,15 @@ impl Shell {
         }
         if let Some(s) = t.secs {
             toast.secs = s.clamp(0.5, 30.0);
+        }
+        if let Some(h) = t.haptic {
+            toast.haptic = match h.as_str() {
+                "tick" => Some(Haptic::Tick),
+                "double" => Some(Haptic::Double),
+                "long" => Some(Haptic::Long),
+                "none" => None,
+                h => return Err(format!("toast haptic {h}: tick | double | long | none")),
+            };
         }
         self.sui.show_toast(toast);
         let outs = self.sui.take_out();

@@ -900,9 +900,7 @@ fn draw_status(b: &mut B, pal: &Pal, v: &View) {
     if v.sys.usb_net {
         net.push("USB".to_string());
     }
-    if let Some(bat) = v.sys.battery {
-        net.push(format!("{bat}%"));
-    }
+    right = battery_status(b, pal, v, right, &mut net);
     let net = net.join(" · ");
     if !net.is_empty() {
         right -= b.text_right(right, 28.0 - sb.line_px() / 2.0, &net, &sb) + 10.0;

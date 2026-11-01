@@ -134,7 +134,9 @@ pub fn run(o: &Opts) -> Result<(), String> {
     let mut demo = Demo { pix: stand_ins(&dir)? };
     let mut sys = Sys::demo(Some("08:42".into()));
     sys.ssh_sessions = 1;
-    sys.battery = Some(84);
+    sys.battery = Some(if s_low(&o.screen) { 12 } else { 84 });
+    sys.charging = o.screen == "home-charging";
+    sys.plugged = sys.charging;
     let launcher = demo_launcher();
     let running = demo_running();
     let none: Vec<RunningInfo> = Vec::new();
@@ -168,7 +170,7 @@ pub fn run(o: &Opts) -> Result<(), String> {
     let v0 = mk(current, 0.0);
     settle(&mut ui, &v0, 0.05);
     match s {
-        "boot" | "home" | "home-empty" | "app" => {}
+        "boot" | "home" | "home-empty" | "home-charging" | "home-low" | "app" => {}
         "menu" | "menu-running" => {
             ui.menu_key(&v0);
         }
@@ -309,4 +311,9 @@ pub fn run(o: &Opts) -> Result<(), String> {
         settle(&mut ui, &v, o.every_ms as f64 / 1000.0);
     }
     Ok(())
+}
+
+/// The low-battery home preview.
+fn s_low(screen: &str) -> bool {
+    screen == "home-low"
 }

@@ -32,11 +32,12 @@ over SSH.
 | Wi-Fi, Bluetooth | XR829: 2.4 GHz station mode via iwd; BlueZ. |
 | Display | JD9168 DSI panel, 1024×768. |
 | Updates | `nix run .#mortar -- deploy`: build, copy, switch. Every generation stays in the boot menu. |
+| Battery | Charger set up like stock (4.2 V, 960 mA, 128 mA termination, NTC/JEITA windows); the AXP2202 fuel gauge runs TrimUI's battery model. Charging/full shown in the status bars; warnings at 15 % and 5 %; clean power-off at 3 %. USB input: 500 mA from a computer, 2.5 A from a charger. `mortar-power status`. |
 | Debug | Each boot saves logs to `mortar-logs/` on the card's FAT partition. |
 
 Tap the power key to sleep: the screen goes dark and the Brick suspends (s2idle) after 3 s; the power key or any gamepad button wakes it. Settings can also sleep it when idle; hold it for Sleep / Restart / Power off. Set the time zone in MENU > Quick > Settings….
 
-Not yet: deep suspend (it resumes with a fuzzy panel, see modules/trimui-brick.nix), charging configuration, LED effects.
+Not yet: deep suspend (it resumes with a fuzzy panel, see modules/trimui-brick.nix), LED effects.
 
 ## Using it
 
@@ -118,6 +119,7 @@ modules/
   mortar-play.nix         emulators: curated libretro cores + mortar-play
   mortar-ai.nix           Claude Code: tmux session, controller UI, Remote Control
   mortar-setup.nix        first-boot setup: mortar.toml, pairing, setup screens
+  mortar-power.nix        battery policy: USB input current, low-battery warnings, power-off
 pkgs/
   linux-trimui-brick.nix  jkingston's Linux 7.3 Brick tree, pinned, + patches/kernel/
   brick-dc-drm/           display-class driver: GPU frames → DRM atomic flips

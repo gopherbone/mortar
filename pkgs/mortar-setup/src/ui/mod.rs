@@ -115,6 +115,7 @@ impl Cx {
             left: if self.mode == Mode::FirstBoot { "mortar".into() } else { self.sys.time.clone() },
             wifi: st.wifi.state == "connected",
             battery: self.sys.battery,
+            charging: self.sys.charging,
             ssh_sessions: self.sys.ssh_sessions,
             ssh_badge_always: ssh_always,
             note: (st.usb_connected && st.usb_network).then(|| format!("USB {}", st.usb_address)),

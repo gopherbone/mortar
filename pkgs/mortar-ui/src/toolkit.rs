@@ -111,6 +111,8 @@ pub struct StatusInfo {
     pub left: String,
     pub wifi: bool,
     pub battery: Option<u8>,
+    /// Charging: the battery icon gets a bolt and the level a lime tag.
+    pub charging: bool,
     pub ssh_sessions: u32,
     pub ssh_badge_always: bool,
     /// e.g. "USB 10.55.0.1" or "Hotspot on", drawn as a yellow tag.
@@ -139,14 +141,17 @@ pub fn status_bar(ui: &mut Ui, s: &StatusInfo) {
     let mut x = ui.width() - pad_x;
     if let Some(b) = s.battery {
         let txt = format!("{b}%");
-        if b <= 20 {
-            x -= tag(ui, x, cy, &txt, PillKind::Amber);
+        if s.charging {
+            x -= tag(ui, x, cy, &txt, PillKind::Ok);
+        } else if b <= 15 {
+            x -= tag(ui, x, cy, &txt, if b <= 5 { PillKind::Orange } else { PillKind::Amber });
         } else {
             x -= ui.measure(&txt, &st);
             ui.text_vcenter(x, cy, &txt, &st);
         }
         x -= ui.cq(0.8) + icon;
-        ui.icon(Icon::Bat, x, cy - icon / 2.0, icon, t.line, 1.6, false);
+        let bat = if s.charging { Icon::BatCharge } else { Icon::Bat };
+        ui.icon(bat, x, cy - icon / 2.0, icon, t.line, 1.6, false);
         x -= gap;
     }
     if s.wifi {

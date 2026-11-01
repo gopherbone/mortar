@@ -9,6 +9,8 @@ use serde::Deserialize;
 pub enum Icon {
     Wifi,
     Bat,
+    /// The battery with a bolt: charging.
+    BatCharge,
     Usb,
     Cable,
     File,
@@ -30,6 +32,7 @@ impl Icon {
         match self {
             Icon::Wifi => r#"<path d="M2 9a15 15 0 0 1 20 0M5.5 12.5a10 10 0 0 1 13 0M9 16a5 5 0 0 1 6 0" stroke-linecap="round"/><circle cx="12" cy="19.5" r="1" fill="currentColor"/>"#,
             Icon::Bat => r#"<rect x="2" y="7" width="18" height="10" rx="2"/><path d="M22 10.5v3" stroke-linecap="round"/><rect x="4.5" y="9.5" width="11" height="5" fill="currentColor" stroke="none"/>"#,
+            Icon::BatCharge => r#"<rect x="2" y="7" width="18" height="10" rx="2"/><path d="M22 10.5v3" stroke-linecap="round"/><path d="M12.4 8.6L7.6 12.6h3.6l-1.6 2.8 4.8-4h-3.6z" fill="currentColor" stroke="none"/>"#,
             Icon::Usb => r#"<path d="M12 2v16M12 18a2 2 0 1 0 0 .01M8 7l4-4 4 4M7 11v2l5 3M17 9v3l-5 3" stroke-linecap="round" stroke-linejoin="round"/>"#,
             Icon::Cable => r#"<path d="M7 3v5M17 3v5M5 8h14v3a7 7 0 0 1-14 0zM12 18v4"/>"#,
             Icon::File => r#"<path d="M14 3H6v18h12V7zM14 3v4h4M9 12h6M9 16h6"/>"#,

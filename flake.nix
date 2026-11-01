@@ -61,6 +61,8 @@
           { mortar.setup.enable = true; }
           ./modules/mortar-play.nix
           { mortar.play.enable = true; }
+          ./modules/mortar-power.nix
+          { mortar.power.enable = true; }
           ({ config, pkgs, ... }: {
             mortar.apps.pico8.enable = true;
             mortar.greeter.enable = true;

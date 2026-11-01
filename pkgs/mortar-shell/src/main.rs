@@ -151,12 +151,13 @@ fn ctl_cmd(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-/// `mortar-shell toast [--achievement] [--sound S] [--secs N] TITLE [SUB]`
+/// `mortar-shell toast [--achievement] [--sound S] [--haptic H] [--secs N] TITLE [SUB]`
 #[cfg(target_os = "linux")]
 fn toast_cmd(args: &[String]) -> Result<(), String> {
     let mut kind = "info";
     let mut sound: Option<String> = None;
     let mut secs: Option<f32> = None;
+    let mut haptic: Option<String> = None;
     let mut words = Vec::new();
     let mut ctl = comp::ctl::default_path();
     let mut it = args.iter();
@@ -164,6 +165,7 @@ fn toast_cmd(args: &[String]) -> Result<(), String> {
         match a.as_str() {
             "--achievement" => kind = "achievement",
             "--sound" => sound = Some(it.next().ok_or("--sound needs a value")?.clone()),
+            "--haptic" => haptic = Some(it.next().ok_or("--haptic needs a value")?.clone()),
             "--secs" => secs = Some(it.next().ok_or("--secs needs a value")?.parse().map_err(|_| "--secs: a number")?),
             "--ctl" => ctl = PathBuf::from(it.next().ok_or("--ctl needs a path")?),
             w => words.push(w.to_string()),
@@ -173,6 +175,9 @@ fn toast_cmd(args: &[String]) -> Result<(), String> {
     let mut j = serde_json::json!({ "title": title, "sub": words.get(1).cloned().unwrap_or_default(), "kind": kind });
     if let Some(s) = sound {
         j["sound"] = s.into();
+    }
+    if let Some(h) = haptic {
+        j["haptic"] = h.into();
     }
     if let Some(s) = secs {
         j["secs"] = s.into();

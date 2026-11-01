@@ -1,0 +1,13 @@
+[package]
+name = "mortar-power"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-2.0-or-later"
+description = "Battery policy for Mortar on the TrimUI Brick: USB input current, low-battery warnings, clean power-off"
+publish = false
+
+[profile.release]
+opt-level = "s"
+lto = "thin"
+
+[dependencies]

@@ -97,6 +97,13 @@ buildLinux (
         name = "asoc-sun4i-codec-a133-headphone-volume-is-attenuation";
         patch = ../patches/kernel/0004-asoc-sun4i-codec-a133-headphone-volume-is-attenuation.patch;
       }
+      {
+        # Charger and fuel gauge set up like TrimUI's stock driver (4.2 V,
+        # 128 mA termination, NTC/JEITA windows, the stock battery model
+        # loaded into the gauge), and Charging/Full/Discharging status.
+        name = "power-axp2202-stock-charger-setup-gauge-model-charge-state";
+        patch = ../patches/kernel/0005-power-axp2202-stock-charger-setup-gauge-model-charge-state.patch;
+      }
     ];
     # Makefile at this rev is 7.3.0; the defconfig sets CONFIG_LOCALVERSION="-brick-dev"
     # and disables LOCALVERSION_AUTO. The fetched source has no .git, so
