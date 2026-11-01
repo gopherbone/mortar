@@ -128,13 +128,7 @@
       apps = nixpkgs.lib.genAttrs [ "aarch64-darwin" "x86_64-darwin" "x86_64-linux" "aarch64-linux" ] (system:
         let
           pkgs = nixpkgs.legacyPackages.${system};
-          mortar = pkgs.writeShellApplication {
-            name = "mortar";
-            runtimeInputs = with pkgs; [ openssh coreutils ];
-            # remote commands are single-quoted on purpose (expand on the Brick)
-            excludeShellChecks = [ "SC2016" ];
-            text = builtins.readFile ./scripts/mortar.sh;
-          };
+          mortar = pkgs.callPackage ./pkgs/mortar-cli { };
         in {
           mortar = { type = "app"; program = "${mortar}/bin/mortar"; };
           default = self.apps.${system}.mortar;

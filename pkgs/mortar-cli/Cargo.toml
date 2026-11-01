@@ -1,0 +1,12 @@
+[package]
+name = "mortar"
+version = "0.1.0"
+edition = "2021"
+description = "Build Mortar on this computer and put it on a TrimUI Brick over SSH"
+license = "GPL-2.0-or-later"
+
+[dependencies]
+
+[profile.release]
+opt-level = "s"
+strip = true
