@@ -49,6 +49,10 @@
     usbutils pciutils
   ];
 
+  # Compressed swap in RAM: 1 GB is tight for heavier tools (Claude Code
+  # alone uses ~200 MB at startup).
+  zramSwap.enable = true;
+
   services.udisks2.enable = false;
   programs.command-not-found.enable = false;
   systemd.services.systemd-udev-settle.enable = false;

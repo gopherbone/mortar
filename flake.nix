@@ -35,6 +35,7 @@
         modules = [
           ./modules/trimui-brick.nix
           ./modules/mortar-usb.nix
+          ./modules/mortar-usb-watchdog.nix
           ./modules/brick-firmware.nix
           ./modules/mortar-base.nix
           # SD image: mainline SPL + TF-A + U-Boot at 128 KiB, FAT /boot
