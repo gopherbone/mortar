@@ -11,12 +11,15 @@
 //! - Games: Conway's Game of Life on 24 px cells, stepped 4 times a
 //!   second, each cell growing in and shrinking out; reseeded with a
 //!   glider when it settles.
-//! - Music: orbits: small circles going round two centres on ellipses at
-//!   their own speeds, faint rings.
-//! - Settings: a sliding checkerboard whose squares flip as a wave passes.
+//! - Music: an oscilloscope: a Lissajous trace with a fading tail, its
+//!   frequency ratio drifting slowly (generative: the shell has no cheap
+//!   way to read the audio's level).
+//! - Settings: Truchet tiles: quarter-circle arcs on a grid, the tiles
+//!   turning 90 degrees as a wave travels down the diagonal, so the curves
+//!   keep re-routing.
 //!
-//! ▲▼ nudges it (`nudge`): a scroll step, one Life generation, a burst of
-//! orbit or marching speed. Nothing runs while the cross is not on screen; Reduce
+//! ▲▼ nudges it (`nudge`): a burst of marching speed, one Life generation,
+//! the scope's next ratio, the Truchet wave pushed along. Nothing runs while the cross is not on screen; Reduce
 //! motion keeps it still. Everything is drawn with the UI's ordinary
 //! polygons and strokes, so it costs a few hundred small fills a frame.
 
@@ -41,8 +44,8 @@ const ANT_CYCLE: f32 = 7.0;
 pub enum Kind {
     Zigzag,
     Life,
-    Orbits,
-    Checker,
+    Scope,
+    Truchet,
 }
 
 /// A pattern colour: the accent mixed 35% toward the ground, so the menu's
@@ -173,8 +176,9 @@ impl Default for Life {
 pub struct Patterns {
     /// Pattern time (seconds; still with Reduce motion).
     pub t: f32,
-    /// Orbit time: runs faster for a moment after a nudge.
-    orbit_t: f32,
+    /// The scope's frequency ratio (shown, easing to `ratio_to`).
+    ratio: f32,
+    ratio_to: f32,
     /// How far the zig-zags' ants have marched (px); faster after a nudge.
     pub march: f32,
     boost: f32,
@@ -195,14 +199,14 @@ impl Patterns {
         let mut nudge = Spring::new(0.0);
         nudge.k_mul = 0.4;
         // a nice still frame for Reduce motion: some time in
-        Patterns { t: 7.0, orbit_t: 7.0, march: 0.0, boost: 0.0, nudge, life: Life::new(), life_acc: 0.0 }
+        Patterns { t: 7.0, ratio: 2.0, ratio_to: 2.0, march: 0.0, boost: 0.0, nudge, life: Life::new(), life_acc: 0.0 }
     }
 
     /// Advance by `dt` seconds (only while the cross shows).
     pub fn step(&mut self, dt: f32) {
         let dt = dt.clamp(0.0, 0.05);
         self.t += dt;
-        self.orbit_t += dt * (1.0 + 2.5 * self.boost);
+        self.ratio += (self.ratio_to - self.ratio) * (dt * 2.0).min(1.0);
         self.march += dt * ANT_SPEED * (1.0 + 3.0 * self.boost);
         self.boost = (self.boost - dt * 1.2).max(0.0);
         self.life_acc += dt;
@@ -220,8 +224,9 @@ impl Patterns {
                 self.life.step();
                 self.life_acc = 0.0;
             }
-            Kind::Orbits | Kind::Zigzag => self.boost = 1.0,
-            _ => self.nudge.set(self.nudge.t + 28.0 * dir),
+            Kind::Zigzag => self.boost = 1.0,
+            Kind::Scope => self.ratio_to = (self.ratio_to.round() + dir.signum()).clamp(1.0, 6.0),
+            Kind::Truchet => self.nudge.set(self.nudge.t + 120.0 * dir.signum()),
         }
     }
 
@@ -240,8 +245,8 @@ impl Patterns {
         match kind {
             Kind::Zigzag => self.zigzag(b, soft(pal.yellow, pal.ground), edge),
             Kind::Life => self.life_cells(b, soft(pal.lime, pal.ground), edge),
-            Kind::Orbits => self.orbits(b, soft(pal.orange, pal.ground), soft(pal.lavender, pal.ground), pal.ink, edge),
-            Kind::Checker => self.checker(b, soft(pal.pink, pal.ground), edge),
+            Kind::Scope => self.scope(b, soft(pal.orange, pal.ground), pal.ink),
+            Kind::Truchet => self.truchet(b, soft(pal.pink, pal.ground), edge),
         }
         b.pop();
         b.clip(None);
@@ -299,60 +304,68 @@ impl Patterns {
         }
     }
 
-    fn orbits(&self, b: &mut B, a: Color, c: Color, ink: Color, edge: Color) {
-        let ring = with_a(ink, 0.16);
-        let t = self.orbit_t;
-        // (centre, rings: (rx, bodies: (radius, speed rad/s, phase, colour)))
-        let systems: [(P, f32); 2] = [((150.0, 250.0), 0.0), ((130.0, 560.0), 1.3)];
-        for (si, ((cx, cy), ph)) in systems.iter().enumerate() {
-            b.ellipse(*cx, *cy, 9.0, 9.0, a);
-            b.stroke(&crate::scene::ellipse_pts(*cx, *cy, 9.0, 9.0, 24), true, 1.5, edge);
-            for (ri, rx) in [52.0f32, 88.0, 124.0].iter().enumerate() {
-                let ry = rx * 0.52;
-                b.stroke(&crate::scene::ellipse_pts(*cx, *cy, *rx, ry, 56), true, 1.0, ring);
-                let bodies = if ri == 1 { 2 } else { 1 };
-                for k in 0..bodies {
-                    let speed = (0.55 - ri as f32 * 0.14) * if si == 1 { -1.0 } else { 1.0 };
-                    let ang = ph + t * speed + k as f32 * std::f32::consts::PI + ri as f32 * 2.1;
-                    let (x, y) = (cx + rx * ang.cos(), cy + ry * ang.sin());
-                    // a touch smaller behind the centre
-                    let r = (14.0 - ri as f32 * 2.5) * (0.85 + 0.15 * ang.sin());
-                    let col = if (ri + k + si) % 2 == 0 { a } else { c };
-                    b.ellipse(x, y, r, r, col);
-                    b.stroke(&crate::scene::ellipse_pts(x, y, r, r, 24), true, 1.5, edge);
-                }
+    /// An oscilloscope: a Lissajous figure (x at 3x, y at the drifting
+    /// ratio) traced with a tail that thins and fades.
+    fn scope(&self, b: &mut B, col: Color, ink: Color) {
+        let r = self.ratio + 0.5 * (self.t * 0.06).sin();
+        let (cx, cy, ax, ay) = (STRIP_W / 2.0, STRIP_H / 2.0, 110.0, 300.0);
+        // a slow breath in the amplitude
+        let breathe = 0.92 + 0.08 * (self.t * 0.7).sin();
+        let pts: Vec<P> = (0..360)
+            .map(|k| {
+                let s = self.t * 0.9 - k as f32 * 0.016;
+                (cx + ax * breathe * (3.0 * s + 0.6).sin(), cy + ay * breathe * (r * s).sin())
+            })
+            .collect();
+        for (n, ch) in pts.chunks(12).enumerate() {
+            let a = 1.0 - n as f32 / 30.0;
+            let mut seg = ch.to_vec();
+            if let Some(next) = pts.get((n + 1) * 12) {
+                seg.push(*next);
             }
+            b.stroke(&seg, false, 10.0 * a.max(0.3), with_a(col, a));
+            b.stroke(&seg, false, 2.5, with_a(ink, a * 0.8));
         }
+        let (hx, hy) = pts[0];
+        b.ellipse(hx, hy, 6.0, 6.0, ink);
     }
 
-    fn checker(&self, b: &mut B, fill: Color, edge: Color) {
-        let cell = 44.0;
-        let ox = (self.t * 7.0 + self.nudge.x).rem_euclid(cell * 2.0);
-        let oy = (self.t * 4.5).rem_euclid(cell * 2.0);
-        // a flip wave sweeps down the diagonal; each pass swaps the board
-        let span = STRIP_W + STRIP_H + 200.0;
-        let wave = self.t * 60.0;
+    /// Truchet tiles: two quarter-circle arcs per 40 px tile; a wave runs
+    /// down the diagonal and turns each tile 90 degrees as it passes.
+    fn truchet(&self, b: &mut B, col: Color, edge: Color) {
+        let cell = 40.0;
+        let span = STRIP_W + STRIP_H + 160.0;
+        let wave = self.t * 70.0 + self.nudge.x;
         let pass = (wave / span).floor() as i32;
-        let front = wave.rem_euclid(span) - 100.0;
-        let cols = (STRIP_W / cell) as i32 + 3;
-        let rows = (STRIP_H / cell) as i32 + 3;
-        for j in -1..rows {
-            for i in -1..cols {
-                let (x, y) = (i as f32 * cell - ox + cell, j as f32 * cell - oy + cell);
-                let d = x + y;
-                let p = ((front - d) / 90.0).clamp(0.0, 1.0);
-                let flipped = p >= 0.5;
-                let base = (i + j).rem_euclid(2) == pass.rem_euclid(2);
-                let on = base != flipped;
-                // the card turns: thin at the middle of its flip
-                let sx = (p * std::f32::consts::PI).cos().abs();
-                if !on || sx < 0.06 {
-                    continue;
+        let front = wave.rem_euclid(span) - 80.0;
+        let hash = |i: i32, j: i32| {
+            let mut h = (i as u32).wrapping_mul(0x9e37_79b1) ^ (j as u32).wrapping_mul(0x85eb_ca6b);
+            h ^= h >> 15;
+            h = h.wrapping_mul(0x2c1b_3c6d);
+            h ^ (h >> 12)
+        };
+        for j in 0..(STRIP_H / cell) as i32 + 1 {
+            for i in 0..(STRIP_W / cell) as i32 + 1 {
+                let (x, y) = (i as f32 * cell, j as f32 * cell);
+                let r = ((front - (x + y)) / 50.0).clamp(0.0, 1.0);
+                let base = (hash(i, j) & 1) as i32 + pass;
+                let ang = (base as f32 + r) * std::f32::consts::FRAC_PI_2;
+                let (cx, cy) = (x + cell / 2.0, y + cell / 2.0);
+                let (sa, ca) = ang.sin_cos();
+                let rot = |p: P| {
+                    let (dx, dy) = (p.0 - cx, p.1 - cy);
+                    (cx + dx * ca - dy * sa, cy + dx * sa + dy * ca)
+                };
+                for (ox, oy, a0) in [(x, y, 0.0f32), (x + cell, y + cell, 180.0)] {
+                    let pts: Vec<P> = (0..=8)
+                        .map(|k| {
+                            let a = (a0 + k as f32 * 90.0 / 8.0).to_radians();
+                            rot((ox + cell / 2.0 * a.cos(), oy + cell / 2.0 * a.sin()))
+                        })
+                        .collect();
+                    b.stroke(&pts, false, 8.0, col);
+                    b.stroke(&pts, false, 1.5, edge);
                 }
-                let w = (cell - 8.0) * sx;
-                let (l, t) = (x + (cell - w) / 2.0, y + 4.0);
-                b.rect(l, t, w, cell - 8.0, fill);
-                b.frame(l, t, w, cell - 8.0, 1.5, edge);
             }
         }
     }
@@ -406,6 +419,23 @@ mod tests {
         let m1 = p.march;
         p.step(1.0 / 30.0);
         assert!(p.march - m1 > ANT_SPEED / 30.0 * 3.0, "kicked");
+    }
+
+    #[test]
+    fn scope_and_truchet_take_nudges() {
+        let mut p = Patterns::new();
+        p.nudge(Kind::Scope, 1.0);
+        assert_eq!(p.ratio_to, 3.0);
+        for _ in 0..90 {
+            p.step(1.0 / 30.0);
+        }
+        assert!((p.ratio - 3.0).abs() < 0.05, "eases to the new ratio: {}", p.ratio);
+        p.nudge(Kind::Scope, -1.0);
+        p.nudge(Kind::Scope, -1.0);
+        p.nudge(Kind::Scope, -1.0);
+        assert_eq!(p.ratio_to, 1.0, "clamped");
+        p.nudge(Kind::Truchet, 1.0);
+        assert_eq!(p.nudge.t, 120.0, "the wave is pushed along");
     }
 
     #[test]

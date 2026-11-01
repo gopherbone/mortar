@@ -73,8 +73,8 @@ impl Cat {
     fn pattern(self) -> patterns::Kind {
         match self {
             Cat::Games => patterns::Kind::Life,
-            Cat::Music => patterns::Kind::Orbits,
-            Cat::Settings => patterns::Kind::Checker,
+            Cat::Music => patterns::Kind::Scope,
+            Cat::Settings => patterns::Kind::Truchet,
             _ => patterns::Kind::Zigzag,
         }
     }

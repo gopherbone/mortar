@@ -20,7 +20,7 @@ pkgs/mortar-shell/
   src/cross.rs       the MENU: Running page, the cross, glass (a child
                      module of shellui)
   src/menupages.rs   the MENU's glass pages: Wi-Fi, Bluetooth, Mixer
-  src/patterns.rs    the cross's background patterns (zig-zags, Life, orbits, checkers)
+  src/patterns.rs    the cross's background patterns (marching ants, Life, a scope, Truchet tiles)
   src/mixer.rs       PipeWire output streams from pw-dump (the Mixer)
   src/radio.rs       Wi-Fi / Bluetooth on/off (rfkill)
   src/motion.rs      springs and the Bouncy/Calm/Snappy presets
@@ -237,13 +237,15 @@ blocks with 1 px ink outlines, isometric illustrations.
     Game of Life on 24 px cells (a 12 x 32 torus) stepped 4 times a
     second, each cell growing in and shrinking out over ~120 ms; it
     starts from an R-pentomino and two gliders, and a glider drops in
-    when it dies out or repeats. Music: orbits, small circles going
-    round two centres on three ellipses each at their own speeds, faint
-    rings. Settings: a checkerboard sliding slowly whose squares turn
-    like cards as a wave passes down the diagonal (each pass swaps the
-    board). A category change pushes the old pattern out and the new one
-    in, the way the categories move, on a spring; ▲▼ nudge it (a scroll
-    step, one Life generation, a burst of orbit or marching speed). It runs only
+    when it dies out or repeats. Music: an oscilloscope, a Lissajous
+    trace (x at 3x, y at a slowly drifting ratio) with a tail that thins
+    and fades, its amplitude breathing slowly (generative: no cheap way
+    to read the audio level). Settings: Truchet tiles, two quarter-circle
+    arcs per 40 px tile, each tile turning 90 degrees as a wave passes
+    down the diagonal, so the curves keep re-routing (orbits and a
+    checkerboard came first; the user preferred these). A category change pushes the old pattern out and the new one
+    in, the way the categories move, on a spring; ▲▼ nudge it (a
+    burst of marching speed, one Life generation, the scope's next ratio, the Truchet wave pushed on). It runs only
     while the cross shows and nothing covers it; Reduce motion keeps it
     on a still frame. (A lava lamp came first; on the device it was too
     dominant, and the user preferred screensaver-like patterns.)
