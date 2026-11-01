@@ -195,9 +195,9 @@ blocks with 1 px ink outlines, isometric illustrations.
 - Suspend (Settings > Sleep = Suspend, the default on the Brick; module
   default `ui.suspend`): once the screen has been dark for
   `ui.suspendGraceMs` (3 s, so a second tap just wakes the screen) the
-  shell runs `actions.sleep` (`systemctl suspend`, mem/deep through the
-  SCP, see modules/trimui-brick.nix). Only the power key wakes the
-  Brick from it. The shell notices the resume as a jump of
+  shell runs `actions.sleep` (`systemctl suspend`: s2idle by default,
+  where any button wakes; SCP deep sleep is optional and wakes on the
+  power key only, see modules/trimui-brick.nix). The shell notices the resume as a jump of
   CLOCK_BOOTTIME against CLOCK_MONOTONIC (UI time does not move while
   suspended), wakes the screen, swallows the waking power press (its
   release would otherwise sleep again), redraws and sends every app a

@@ -53,32 +53,47 @@ in {
         default = isMainline;
         defaultText = literalExpression ''config.hardware.trimui-brick.variant == "mainline"'';
         description = ''
-          (mainline only) Suspend to RAM through the SCP ("deep"): applies
-          dtb/brick-deep-suspend.dtso (the kernel tree's -native-deep.dts
-          changes: wake routing through TF-A/SCP, CCU/PIO context restore)
-          to the Brick DTB and makes `systemctl suspend` enter mem/deep. Needs the
-          mainline TF-A with SUNXI_A133_SYSTEM_SUSPEND
-          (firmware/mainline/tf-a.nix). Off: the plain Brick DTB and no
-          suspend (s2idle only).
+          (mainline only) `systemctl suspend` works: sleep.conf, the
+          brick-sleep.service hooks and the wake sources for `mode`.
+        '';
+      };
+      mode = mkOption {
+        type = types.enum [ "s2idle" "deep" ];
+        default = "s2idle";
+        description = ''
+          `s2idle` (suspend-to-idle): devices suspend, CPUs idle, DRAM stays
+          up. Any gamepad button or the power key wakes it.
+
+          `deep`: the SCP powers the SoC down and brings DRAM back on resume
+          (dtb/brick-deep-suspend.dtso = the kernel tree's -native-deep.dts
+          wake routing and CCU/PIO context restore; needs the mainline TF-A
+          with SUNXI_A133_SYSTEM_SUSPEND). Only the power key wakes. Not the
+          default: after every deep resume the panel looked fuzzy (shifting
+          lines) until reboot. The only register difference found was
+          PLL_DDR0 bit 24 (sigma-delta enable: set at boot, clear after the
+          SCP's DRAM resume); writing it back on the live system hung the
+          Brick. See notes in modules/trimui-brick.nix.
         '';
       };
       cpuIdle = mkOption {
         type = types.bool;
         default = false;
         description = ''
-          Also add the PSCI CPU/cluster idle states that -native-deep.dts
+          Add the PSCI CPU/cluster idle states that -native-deep.dts
           includes (dtb/brick-cpu-idle.dtso). Suspend does not need them.
+          Untested on their own: the first deep-suspend boot had them and
+          the panel was fuzzy, but that was the deep resume (see `mode`).
         '';
       };
       padWake = mkOption {
         type = types.bool;
-        default = false;
+        default = cfg.suspend.mode == "s2idle";
+        defaultText = literalExpression ''config.hardware.trimui-brick.suspend.mode == "s2idle"'';
         description = ''
-          Mark the gamepad buttons (gpio-keys on the main PIO) as wake
-          sources. The power key (AXP2202 NMI) always wakes. Experimental:
-          the main PIO loses power in deep suspend (its context is restored
-          from a syscore save), so the SCP may refuse or ignore the vote;
-          if gpio-keys cannot arm the wake IRQ the suspend is aborted.
+          Mark the gamepad buttons (gpio-keys) as wake sources. The power
+          key (AXP2202 NMI) always wakes. In deep mode this is experimental:
+          the main PIO loses power there, the SCP may refuse the wake vote,
+          and gpio-keys then aborts the suspend.
         '';
       };
     };
@@ -335,7 +350,7 @@ in {
       # rather than as the kernel tree's -native-deep DTB.
       name = "allwinner/sun50i-a133-trimui-brick.dtb";
       overlays = cfg.extraDtOverlays
-        ++ optional cfg.suspend.enable { name = "brick-deep-suspend"; dtsFile = ../dtb/brick-deep-suspend.dtso; }
+        ++ optional (cfg.suspend.enable && cfg.suspend.mode == "deep") { name = "brick-deep-suspend"; dtsFile = ../dtb/brick-deep-suspend.dtso; }
         ++ optional (cfg.suspend.enable && cfg.suspend.cpuIdle) { name = "brick-cpu-idle"; dtsFile = ../dtb/brick-cpu-idle.dtso; }
         ++ optional (cfg.suspend.enable && cfg.suspend.padWake) {
           name = "brick-pad-wake";
@@ -365,22 +380,37 @@ in {
   })
 
   # ===================================================================
-  # Suspend to RAM (mainline, native-deep DTB + SCP). jkingston's
-  # brick-suspend (trimui-brick-firmware package/brick-power) is the
-  # reference sequence: mute the codec, power Bluetooth off (hci_xradio
-  # refuses to suspend an open HCI), then mem/deep. Wi-Fi (xradio) drops
-  # its link and comes back on resume; iwd reconnects.
+  # Suspend (mainline). jkingston's brick-suspend (trimui-brick-firmware
+  # package/brick-power) is the reference sequence: mute the codec, power
+  # Bluetooth off (hci_xradio refuses to suspend an open HCI), then
+  # mem/deep. Wi-Fi (xradio) drops its link and comes back on resume; iwd
+  # reconnects.
+  #
+  # Deep suspend (mode = "deep") works mechanically (wake by power key or
+  # RTC, every driver resumes), but after each deep resume the panel looks
+  # fuzzy until reboot. Follow-ups:
+  #  - Compare the whole DRAM controller/PHY (0x04002000.., 0x04003000..,
+  #    0x04005000..) after boot vs after resume: the SCP re-initialises
+  #    DRAM from the parameters U-Boot hands it (U-Boot patch 0004, stock
+  #    ABI, MR1/2/3 hard-coded), not from the mainline SPL's trained state.
+  #    So far only PLL_DDR0 bit 24 (SDM enable) differs; a live write of it
+  #    hung the Brick. A fix probably belongs in the handoff (U-Boot) or
+  #    TF-A, before DRAM leaves self-refresh.
+  #  - Ask jkingston whether he sees the same after deep resume (his image
+  #    has no KMS scanout, so he may not have noticed).
+  #  - Sometimes sun6i-dma refuses suspend_noirq with -EBUSY (a DMA client
+  #    other than the paused codec still active); the attempt just fails.
   # ===================================================================
   (mkIf (isMainline && cfg.suspend.enable) {
-    boot.kernelParams = [ "mem_sleep_default=deep" ];
+    boot.kernelParams = [ "mem_sleep_default=${cfg.suspend.mode}" ];
 
     systemd.sleep.settings.Sleep = {
       AllowSuspend = mkDefault "yes";
       AllowHibernation = mkDefault "no";
       AllowHybridSleep = mkDefault "no";
       AllowSuspendThenHibernate = mkDefault "no";
-      SuspendState = mkDefault "mem";
-      MemorySleepMode = mkDefault "deep";
+      SuspendState = mkDefault (if cfg.suspend.mode == "deep" then "mem" else "freeze");
+      MemorySleepMode = mkDefault cfg.suspend.mode;
     };
 
     # Runs around every suspend (Before=sleep.target, stopped on resume).

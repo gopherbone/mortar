@@ -394,8 +394,9 @@ in
           key tap, MENU > Quick or Power > Sleep, the power menu) blanks the
           screen and backlight and occludes the front app; with Suspend it
           also runs `actions.sleep` (`systemctl suspend`) once the screen
-          has been dark for `suspendGraceMs`. Only the power key wakes from
-          suspend; apps are frozen meanwhile (audio stops).
+          has been dark for `suspendGraceMs`. Wake sources: see
+          hardware.trimui-brick.suspend (s2idle: any button; deep: power
+          key). Apps are frozen meanwhile (audio stops).
         '';
       };
       suspendGraceMs = mkOption {
