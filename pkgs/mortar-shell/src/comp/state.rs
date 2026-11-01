@@ -123,7 +123,7 @@ pub struct Shell {
     pub last_cover: (bool, bool),
     last_ambient: Instant,
     last_card_tick: Instant,
-    /// Wi-Fi and Bluetooth switches (MENU > Quick), read with the status.
+    /// Wi-Fi and Bluetooth switches (MENU > Settings), read with the status.
     pub radios: crate::shellui::Radios,
     /// Apps closing to be started again (MENU > Y > Restart): uid, entry.
     pub restarts: Vec<(u32, String)>,
@@ -827,7 +827,7 @@ impl Shell {
             match r {
                 Routed::ToggleOverlay => {
                     self.sys = Sys::read();
-                    // read back off the event loop (MENU > Quick shows it)
+                    // read back off the event loop (MENU > Settings shows it)
                     self.volume_worker.request(None);
                     self.radios = super::ui::read_radios();
                     self.ui_menu_key();

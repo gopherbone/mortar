@@ -105,7 +105,7 @@ pub fn surface_buffer(s: &WlSurface) -> Option<(WlBuffer, CommitCounter)> {
     })
 }
 
-/// The rfkill switches for MENU > Quick.
+/// The rfkill switches for MENU > Settings.
 pub fn read_radios() -> Radios {
     use crate::radio::{state, Radio};
     Radios { wifi: state(Radio::Wifi), bluetooth: state(Radio::Bluetooth) }
@@ -394,7 +394,7 @@ impl Shell {
                         self.sys.brightness = b.get();
                         let level = self.sys.brightness.unwrap_or(0);
                         if self.sui.menu_open() {
-                            // MENU > Quick shows the value in its row
+                            // MENU > Settings shows the value in its row
                             self.play_sfx(Sfx::Vol(level));
                         } else {
                             self.sui.osd(OsdKind::Brightness, level, false);

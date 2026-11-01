@@ -18,7 +18,7 @@ over SSH.
 | Area | State |
 |---|---|
 | Boot | U-Boot SPL → TF-A → U-Boot → `extlinux.conf` → Linux 7.3 → NixOS. All 4 cores. |
-| Shell | `mortar-shell`, a Wayland compositor (Rust, Smithay). Apps run fullscreen side by side; **MENU** opens a cross menu over the running app: running apps with a live preview, launchers by category, quick settings and power. Its UI is drawn on the GPU with spring animations, synthesized UI sounds and haptic ticks. |
+| Shell | `mortar-shell`, a Wayland compositor (Rust, Smithay). Apps run fullscreen side by side; **MENU** opens your running apps as live full-screen windows; ▶ brings the cross menu: launchers by category, settings (Wi-Fi, Bluetooth, a per-app mixer) and power, over a lava lamp. Its UI is drawn on the GPU with spring animations, synthesized UI sounds and haptic ticks. |
 | GPU | PowerVR GE8300 on TrimUI's stock DDK 1.19 userspace. GPU apps inside the shell render into dma-bufs (`mortar-wlegl`) that the shell scans out directly; outside the shell, `brick_dc_drm` flips them at 60 fps. A busy M8 screen costs ~12% CPU. |
 | Greeter | `mortar-ui` greeter (greetd): pick **Mortar** (the shell) or launch an app directly. |
 | Apps | M8 (m8c; plug the M8 into the top port), ChooChooTracker, PICO-8 (your own licensed copy), PuzzleScript, Games (emulators), Terminal, Claude Code. |
@@ -36,7 +36,7 @@ over SSH.
 | Battery | Charger set up like stock (4.2 V, 960 mA, 128 mA termination, NTC/JEITA windows); the AXP2202 fuel gauge runs TrimUI's battery model. Charging/full shown in the status bars; warnings at 15 % and 5 %; clean power-off at 3 %. USB input: 500 mA from a computer, 2.5 A from a charger. `mortar-power status`. |
 | Debug | Each boot saves logs to `mortar-logs/` on the card's FAT partition. |
 
-Tap the power key to sleep: the screen goes dark and the Brick suspends (s2idle) after 3 s; the power key or any gamepad button wakes it. Settings can also sleep it when idle; hold it for Sleep / Restart / Power off. Set the time zone in MENU > Quick > Settings….
+Tap the power key to sleep: the screen goes dark and the Brick suspends (s2idle) after 3 s; the power key or any gamepad button wakes it. Settings can also sleep it when idle; hold it for Sleep / Restart / Power off. Set the time zone in MENU > Settings > More settings.
 
 Not yet: deep suspend (it resumes with a fuzzy panel, see modules/trimui-brick.nix), LED effects.
 
@@ -47,12 +47,15 @@ On the greeter, choose **Mortar**. In the shell:
 | Button | Does |
 |---|---|
 | D-pad, A, B | Move, open, back |
-| MENU | The cross menu over the app: categories across (Running, Apps, Games, Music, Quick, Power), items down; MENU or B closes it |
+| MENU | Running: your open windows, Home first, stacked full screen; MENU or B closes it |
 | MENU, then A | Flip back to the previous app |
-| In the MENU: ◀▶ / L1, R1 | Next category / jump to the first or last |
-| In the MENU, on a running app: A, X, Y | Switch to it, close it, options (switch, restart, close) |
-| In the MENU, Quick | Brightness and volume (A, then ◀▶ to adjust, A or B when done), Wi-Fi and Bluetooth on/off (A), Sleep, Settings… (sounds, motion, palette, time zone, Wi-Fi networks, remote access, log out) |
-| In the MENU, Power | Sleep, Restart, Power off (press A twice) |
+| In Running: ▲▼, A, X, Y | Scroll, switch to it, close it, options (switch, restart, close) |
+| In Running: ▶ (R1) | The cross: Apps, Games, Music, Settings (R1: straight to Settings); ◀ from Apps or L1 goes back |
+| In the cross: ◀▶, ▲▼, A | Category, item, open |
+| Settings | Brightness and volume (A, then ◀▶, A when done), Mixer, Wi-Fi, Bluetooth, Sleep, More settings (sounds, motion, palette, time zone, remote access, log out), Restart and Power off (press A twice) |
+| Settings › Wi-Fi | On/off, the network you are on (details, forget), networks nearby (A joins; a password keyboard for new secured ones) |
+| Settings › Bluetooth | On/off, your devices (A connects or disconnects, X forgets), Pair new device |
+| Mixer (Music or Settings) | A fader per app, Master and UI sounds: ◀▶ channel, ▲▼ level, A mute |
 | VOL+ / VOL− | Volume (the shell owns these keys) |
 | VOL+ and VOL− together | Screenshot, saved to `~/Pictures/Screenshots` |
 | SELECT + MENU (or F1) | In Games: the game menu (save/load state, reset, quit) |

@@ -17,7 +17,11 @@ pkgs/mortar-shell/
   src/router.rs      who gets a pad button (pure, unit-tested)
   src/shellui.rs     the shell UI: boot, home, settings screen, transitions,
                      OSD, toasts (pure state + scene building, unit-tested)
-  src/cross.rs       the MENU: the cross menu (a child module of shellui)
+  src/cross.rs       the MENU: Running page, the cross, glass (a child
+                     module of shellui)
+  src/menupages.rs   the MENU's glass pages: Wi-Fi, Bluetooth, Mixer
+  src/lava.rs        the lava lamp: physics and its distance field
+  src/mixer.rs       PipeWire output streams from pw-dump (the Mixer)
   src/radio.rs       Wi-Fi / Bluetooth on/off (rfkill)
   src/motion.rs      springs and the Bouncy/Calm/Snappy presets
   src/scene.rs       display list (shapes, text, images) both renderers draw
@@ -34,6 +38,7 @@ pkgs/mortar-shell/
     input.rs         evdev devices via the session, classification, grabs
     pads.rs          per-app uinput gamepads
     ctl.rs           control socket
+    bg.rs            MENU page backends off the loop (mortar-setupd, pw-dump/wpctl)
     scanout.rs       direct scanout of client dmabufs (PRIME import)
     ui.rs            the compositor side of the UI: view, actions, CPU
                      images, screenshots, toasts
@@ -107,63 +112,132 @@ blocks with 1 px ink outlines, isometric illustrations.
   illustration and "STARTING…" until it maps (B: back, it keeps
   starting; 20 s timeout). Closing to home is the reverse: the app
   shrinks into its tile.
-- MENU (anywhere, on its own) opens the cross menu (`cross.rs`, after the
-  approved plan/mortar-cross.html) over the app, which stays on screen
-  frosted: blurred (about 14 px) under a ground-colour veil at 62%, so
-  its colours and layout show but its text does not read. The blur and
-  veil fade in and out with the menu's open spring (Reduce motion: on
-  and off at once); home behind the menu gets the flat veil at 90%. The
-  power menu frosts the app the same way (with a lighter scrim); the
-  settings screen and time zone picker are opaque, so nothing is blurred
-  behind them. Everything fades and slides 18 px on one spring; MENU or
-  B closes it.
-  - Status bar: the clock (serif), "N running", SSH, Wi-Fi, battery.
-  - Categories run across: Running (with a count badge), Apps, Games,
-    Music, Quick, Power. The selected one is bigger and lime and sits at
-    the left column; its items run down beneath it. Games and Music only
-    show when an entry is in them. ◀▶ always move one category (on every
-    row), L1/R1 jump to the first / last.
-  - Items: the selected one is larger with its name in the serif italic;
-    the ones above it fade out, up to four show below. ▲▼ move. Each
-    category remembers its selection (across openings too).
-  - Running: Home, then every running app, most recent first (the app
-    on screen has an ON SCREEN chip). MENU opens here with the previous
-    app selected, so MENU, A flips between two apps. A live preview of
-    the selected app's buffer sits on the right (that app alone gets
-    `ui.cardFps` frame callbacks). A switches: the app zooms from its row
-    to the full screen while the MENU fades. X closes it (its row goes
-    at once, a "Closed" toast). Y opens Switch to it / Restart app /
-    Close (Restart closes the app and starts its entry again once it has
-    exited; apps nobody launched have no Restart).
+- MENU (anywhere, on its own) opens the MENU, "Cross Menu 2"
+  (`cross.rs` and `menupages.rs`, after the approved
+  plan/mortar-cross-2.html), over the app, which stays on screen frosted:
+  blurred (about 14 px) under a ground-colour veil at 62%, so its
+  colours and layout show but its text does not read. The blur and veil
+  fade in and out with the menu's open spring (Reduce motion: on and off
+  at once); home behind the menu gets the flat veil at 90%. The power
+  menu frosts the app the same way (with a lighter scrim); the settings
+  screen and time zone picker are opaque, so nothing is blurred behind
+  them. MENU closes it from anywhere.
+  - Two pages side by side on one spring: Running, and the cross to its
+    right. ▶ on Running slides it off to the left and the cross in from
+    the right (on Apps; R1: on Settings); ◀ on Apps or L1 goes back.
+  - Glass: the status bar (serif clock, SSH, Wi-Fi/USB, battery; no
+    hairline, no category tabs) and the hint bar float over both pages
+    as frosted glass, as do the category and item icons, the glass
+    pages, the options popup and the window labels: the blurred backdrop
+    (`Src::Blur`, cut to the pane in screen space) under its veil, a
+    light ground at 40-62%, a light 1 px top edge. The lava lamp is seen
+    softly through the bars and pages (drawn again there with a 10 px
+    edge blend). Selected things keep solid ink outlines.
+  - Running: Home, then every running app, most recent first, each a
+    live window edge to edge (1024 x 600: the app's middle rows; Home
+    draws the real home screen), stacked vertically like a scrolling
+    window manager (`y = 84 + d x 612`, a spring), the neighbours above
+    and below showing at the top and bottom edges, dimmed (ground at
+    35%), 3 px ink edges. The page eases from 104% to 100% as the MENU
+    opens. The selected window has a strip in the app's accent down its
+    left edge and, in its lower left, a label: the index on ink, the
+    serif name and the status (on screen, background, starting, closing)
+    on glass. MENU opens here with the previous app selected, so MENU, A
+    flips between two apps. ▲▼ scroll, A switches (the app zooms from
+    its window to the full screen while the MENU fades), X closes (its
+    window goes at once, a "Closed" toast), Y opens Switch to it /
+    Restart app / Close (Restart closes the app and starts its entry
+    again once it has exited; apps nobody launched have no Restart). The
+    selected window and its neighbours get `ui.cardFps` frame callbacks.
+  - The cross: Apps, Games, Music, Settings across the middle (Games
+    only with an entry in it). The selected category is lifted (up-left,
+    scaled from 82%) in its accent (Apps yellow, Games lime, Music
+    orange, Settings pink; Running lavender) with a 2 px ink outline and
+    a hard ink shadow; the others are glass. The row scrolls so the
+    selection stays in the second column. The selected item sits right
+    under its category as a bold band in the accent, coming in from the
+    left screen edge, with an ink edge and an offset ink shadow, its
+    name in the serif italic; the items below continue down (four), the
+    two above stay visible, dimmed, above the category row. Values (level
+    bars and percentages, ›) line up in one right-hand column. A large
+    faint serif index ("03/10") sits in the lower left. Each category
+    remembers its selection (across openings too). ◀▶ move a category,
+    ▲▼ an item.
   - Apps: every launcher entry. Games, Music: the entries with that
     `category` (the module's `category` or `categories.<id>`, else
     guessed: M8 and trackers are music, PICO-8, PuzzleScript and
-    emulators games). A launches (zooming from the row); a running
-    single-instance entry switches to its app instead.
-  - Quick: Brightness and Volume show their level in a value chip; A
-    enters an adjust mode where the chip becomes a short yellow slider,
-    ◀▶ change the level in steps of 10 (vol blip, haptic tick; the
-    volume OSD stays away) and the hint bar reads "◀▶ Adjust · A/B
-    Done". A or B leave adjust mode, ▲▼ leave it and move, MENU closes
-    the menu. Wi-Fi and Bluetooth: A switches the radio with rfkill (see
-    radio.rs); the Wi-Fi networks page is under Settings…. Then Sleep,
-    Keyboard (keyboard apps: the on-screen keyboard), and Settings…, which
-    opens the settings screen.
-  - Power: Sleep, Restart, Power off. Restart and Power off need a second
-    A: the swatch turns orange and the subtitle reads "Press A again to
-    …"; moving away cancels.
+    emulators games); Music starts with the Mixer. A launches (zooming
+    from the row's icon); a running single-instance entry switches to its
+    app instead.
+  - Settings (the old Quick and Power): Brightness and Volume (A enters
+    an adjust mode: the bar turns yellow, ◀▶ change the level in steps of
+    10, through the volume thread; A or B leave it, ▲▼ leave it and
+    move), Mixer ›, Wi-Fi ›, Bluetooth ›, Sleep, Keyboard (only with a
+    keyboard app in front: the on-screen keyboard), More settings (the
+    settings screen), Restart and Power off (a second A: the icon turns
+    orange and the subtitle reads "Press A again to …"; moving away
+    cancels).
+  - Glass pages (A on Mixer, Wi-Fi, Bluetooth) slide in from the right
+    between the bars: a serif title, a mono status line, an icon block
+    with a hard shadow, rows (the selected one a band in pink with its
+    name in the serif). B (or ◀) goes back.
+    - Wi-Fi: an on/off switch (rfkill, radio.rs), the connected network
+      (address, band, security, signal bars; A or Details: a toast with
+      the details), Forget this network, the nearby networks (open or
+      saved: A joins; secured: mortar-setup's password keyboard, then
+      back here), Other network… (mortar-setup's full Wi-Fi page: WPS).
+      Y scans. Opening the page scans.
+    - Bluetooth: an on/off switch (rfkill, then BlueZ power), your
+      devices (A connects or disconnects, X forgets), Pair new device (A
+      starts or stops discovery; a passkey to compare shows here), the
+      devices found (A pairs: mortar-setupd stops discovery, pairs,
+      trusts and connects; its agent answers PIN and passkey requests).
+    - Wi-Fi and Bluetooth go through mortar-setupd's control socket
+      (`mortar_setup::control`: `status`, `wifi_scan`, `wifi_connect`,
+      `wifi_forget`, `bt_power`, `bt_scan`, `bt_pair`, `bt_connect`,
+      `bt_disconnect`, `bt_forget`); the root daemon talks to iwd and
+      BlueZ over D-Bus (iwd only lets root and wheel in). A worker thread
+      (comp/bg.rs) polls `status` every second while Settings or a page
+      shows and sends the requests, so no socket round trip runs on the
+      event loop.
+    - Mixer: Master (the default sink: level through the volume thread,
+      mute with `actions.volumeMute`), one fader per running app, UI
+      sounds (the shell's own sound volume and on/off). ◀▶ pick a
+      channel, ▲▼ ±5, A mutes. An app's channel is its PipeWire output
+      streams: `pw-dump` (`actions.pwDump`) lists them, each belongs to
+      the app whose pid is the stream client's or an ancestor (apps.rs),
+      the level is the loudest stream's on wpctl's cubic scale, set with
+      `wpctl set-volume` / `set-mute` (`actions.streamVolume`,
+      `streamMute`). An app with no stream shows "no sound". A worker
+      thread runs these, every second while the Mixer shows. No level
+      meters: PipeWire has no cheap way to read peaks without capturing
+      every stream.
+  - The lava lamp (`lava.rs`) runs behind the cross (not behind
+    Running), in the category's colour with a 3 px ink edge and a 12 px
+    hard ink shadow, flush from the top edge to the bottom: a heavy pool
+    along the bottom, a layer hanging from the top, five bottom-heavy wax
+    pieces that heat at the bottom, rise, cool and sink (about 15 s from
+    bottom to top), each joined to its pool by a column that thins and
+    pinches off as it moves away; outlines wobble slowly. Physics: mass
+    grows with the square of the size, drag, soft walls, cohesion; each
+    category has its own heat, drag and buoyancy (the mockup's tuned
+    constants). Navigation nudges it (▲▼ slosh it, a category change
+    shoves it sideways, bumping the end of a list jolts it; heavier
+    pieces lag and settle). It is simulated only while the cross shows
+    and nothing covers it; Reduce motion freezes it. Drawn as a signed
+    distance field (see Rendering).
   - The hint bar follows the selection.
-  - Sounds: move (category), tick (item), drawer / drawerUp (open,
-    close, popup), open (go), close (kill), deny (nothing there), vol
-    (values); haptic tick on moves, double on go/kill/confirm.
-- Settings screen (MENU > Quick > Settings…): slides in from the right
-  over the MENU. UI sounds, Haptic ticks, Motion (Bouncy/Calm/Snappy),
-  Reduce motion, Palette (Day/Night), Time zone, Wi-Fi networks,
-  Bluetooth devices and Remote access (mortar-setup pages), Log out (second A). B goes back
-  to the MENU, MENU closes both. Changes are saved in
-  $XDG_STATE_HOME/mortar-shell/prefs.json over the module's defaults
-  (`mortar.shell.ui.*`).
-- Home shortcuts: L1 or SELECT opens the MENU on Apps, R1 on Quick.
+  - Sounds: move (category), tick (item), tab (page), drawer / drawerUp
+    (open, close, popup), open (go), close (kill), deny (nothing there),
+    vol (values); haptic tick on moves, double on go/kill/confirm.
+- Settings screen (MENU > Settings > More settings): slides in from the
+  right over the MENU. UI sounds, Haptic ticks, Motion
+  (Bouncy/Calm/Snappy), Reduce motion, Palette (Day/Night), Time zone,
+  Wi-Fi networks, Bluetooth devices and Remote access (mortar-setup
+  pages), Log out (second A). B goes back to the MENU, MENU closes both.
+  Changes are saved in $XDG_STATE_HOME/mortar-shell/prefs.json over the
+  module's defaults (`mortar.shell.ui.*`).
+- Home shortcuts: L1 or SELECT opens the MENU on Apps, R1 on Settings.
 - Volume keys work everywhere: the OSD, a frosted-glass pill (72x300) at
   the right edge, fades and scales in (~120 ms), with a speaker (sun for
   brightness), an ink bar that springs to each new level and the number
@@ -179,7 +253,7 @@ blocks with 1 px ink outlines, isometric illustrations.
   thread (comp/ui.rs `VolumeWorker`) applies the newest level (absolute,
   `{step}` = "NN%") and reads back level and mute: `wpctl` set + get
   used to run on the event loop for every step and key repeat, stalling
-  frames and input. With the MENU up the Quick rows show the level
+  frames and input. With the MENU up the Settings rows show the level
   instead.
 - Screenshot: VOL+ and VOL- together (the shell owns those keys, so no
   app or game ever sees the chord). Shutter flash, shutter sound, long
@@ -207,7 +281,7 @@ blocks with 1 px ink outlines, isometric illustrations.
   button wakes; holding it shows a filling "hold for power menu" pill and
   at 0.8 s opens the power menu (Sleep, Restart, Power off; the last two
   need a second A, B backs out).
-- Sleep (power tap, MENU > Quick or Power > Sleep, the power menu): the screen fades to
+- Sleep (power tap, MENU > Settings > Sleep, the power menu): the screen fades to
   black, then the backlight goes off (bl_power), nothing is redrawn, UI
   sounds and haptics are muted, and the front app is `suspended` like a
   background app (SDL apps see OCCLUDED and can idle). Apps keep running:
@@ -240,8 +314,11 @@ drift. UI time is real time, clamped to 50 ms a step; `ctl time manual`
 and `ctl time +MS` step it by hand for test frames.
 
 The compositor redraws every vblank while something moves (`Pace::Full`),
-at 20 fps while only the background drifts, and not at all at rest; with
-no UI layer the app is shown exactly as before (direct scanout).
+at 20 fps while only the background drifts, at 30 fps while only the
+MENU's lava lamp flows (`Pace::Lava`; a kick makes it Full until it
+calms), and not at all at rest; with no UI layer the app is shown
+exactly as before (direct scanout), and with the MENU closed nothing of
+the lamp exists (no simulation, no FBO).
 
 ### Sounds and haptics
 
@@ -369,7 +446,23 @@ draw it:
   linear filtering. It is redone only when the app's buffer changed, at
   most every 66 ms, and the FBOs are freed with the menu; a fully frosted
   frame skips the sharp app. The CPU renderer does the same with
-  `raster::blur_quarter` (box blurs of matching variance). When no UI
+  `raster::blur_quarter` (box blurs of matching variance). Glass panes
+  draw the same blurred texture again, cut to the pane, so the backdrop
+  is blurred once a frame however many panes there are. The lava lamp
+  (`Item::Lava`) is two passes: its signed distance field (the smooth
+  union of two pools, five wobbling, stretched pieces and five tapered
+  columns, ~25 ALU ops per primitive, no transcendentals but the pools'
+  sin/exp) at quarter resolution over the lamp's 640x768 region into a
+  160x192 RGBA8 FBO (highp; the distance stored as two bytes, which
+  bilinear filtering still interpolates exactly), once a frame before
+  the frame proper; then a full-resolution quad thresholds it (two
+  texture reads: the fill, a 3 px ink edge, the ink shadow 12 px down
+  and right). Estimate on the GE8300: ~31k field texels x ~400 ops
+  ≈ 12 M ops plus ~490k composite pixels x ~20 ops ≈ 10 M ops, about
+  1-1.5 ms (unmeasured on the device; `ctl state` reports the field
+  pass's own time every 30th frame as `gpu_ms.lava`). The FBO is freed
+  when the lamp is not on screen; shaders that fail to build (or fewer
+  than 48 fragment uniform vectors) disable only the lamp. When no UI
   layer shows, the DrmCompositor takes over again (`reset_state`, full
   frame): direct scanout of a GPU app, the opaque copy of an shm app.
   Any EGL/GL error, a failed import of a render target or three failed
@@ -387,7 +480,8 @@ draw it:
 `MORTAR_SHELL_RENDERER=cpu|gpu` and `MORTAR_SHELL_GL_MSAA=0|4` override
 the config for one run; `ctl state` reports `ui.renderer`, `frames`,
 `gpu_frames`, `scanout_frames` and `gpu_ms` (last and smoothed UI frame
-time, the last blur's time and the number of blurs).
+time, the last blur's time and the number of blurs, the lava field
+pass's time).
 
 ### Apps
 
@@ -591,7 +685,8 @@ records the shell's RSS (`rss_kib` in state.json).
 ## Control socket
 
 `$XDG_RUNTIME_DIR/mortar-shell.sock` (0600), one line per connection:
-`state` (JSON; `overlay`, `category` and `settings` say what of the MENU
+`state` (JSON; `overlay`, `category` ("Running" on the Running page),
+`menu_page` (wifi, bluetooth, mixer) and `settings` say what of the MENU
 shows), `press|down|up BUTTON`, `key CODE`, `launch ID`,
 `focus ID`, `close ID`, `home`, `screenshot PATH`, `shot` (the screenshot
 combo), `toast JSON`, `boot` (replay), `time manual|real|+MS`, `prefs`,
@@ -621,15 +716,21 @@ shell through it; over SSH it gives remote screenshots and app control
 
 - Unit tests (`cargo test`, also on macOS): config parsing, pid ancestry,
   MRU, button routing (MENU chord, releases on retarget, keyboard mode),
-  OSK layout and typing, the MENU (previous app, categories and their
-  memory, ◀▶ on every row, Quick adjust mode and toggles, Power confirm, options popup,
-  settings screen, time zone picker), rfkill state, gamepad blacklist.
+  OSK layout and typing, the MENU (previous app, the Running page and
+  its live windows, Running/cross navigation, categories and their
+  memory, Settings adjust mode, Restart/Power off confirm, the Wi-Fi,
+  Bluetooth and Mixer pages' requests, options popup, settings screen,
+  time zone picker), the lava lamp (rises in ~15 s, walls, kicks by
+  mass, the field; frozen with Reduce motion, stopped with the MENU
+  closed), pw-dump parsing, rfkill state, gamepad blacklist.
 - `passthru.tests.headless`: the compositor on the headless backend in
   the build sandbox; weston-fullscreen (wl_shm) and foot started from the
   MENU with injected buttons; typing through keys and the OSK;
   switching back; closing from Running; a screenshot after every step;
+  MENU > Settings and its Mixer, Wi-Fi and Bluetooth pages;
   then UI time frozen and stepped for transition frames (`t-*.png`:
-  MENU, launch, close, OSD, toast, shutter, settings, night palette,
+  MENU, the cross sliding in, the lava flowing, launch, close, OSD,
+  toast, shutter, settings, night palette,
   time zone, power menu, boot), the screenshot file and the saved
   settings checked.
 - `mortar-shell preview --screen ... [--at MS --frames N --every MS]`
@@ -653,12 +754,15 @@ shell through it; over SSH it gives remote screenshots and app control
   affects later reads, so it should be.
 - Power key: logind suspends; should a short press open the shell's
   Settings instead?
-- Settings screens (Wi-Fi, SSH) are still the mockups' future work; the
-  quick settings link to them with a toast.
-- MENU > Quick Wi-Fi / Bluetooth: untested on the Brick. Writing
-  /dev/rfkill relies on systemd's `uaccess` tag for the seat's user; if
-  the XR829 registers no rfkill switch the rows say so and do nothing.
-  Bluetooth has no pairing screen yet (the row only switches the radio).
-- The mockup's per-app subtitles ("Song · playing") and CPU figure under
-  the preview need data apps do not give the shell; rows say on screen /
-  in the background / starting / closing instead.
+- MENU > Settings Wi-Fi / Bluetooth / Mixer pages: untested on the
+  Brick. Writing /dev/rfkill relies on systemd's `uaccess` tag for the
+  seat's user; if the XR829 registers no rfkill switch the switch row
+  does nothing. Joining a hidden network ("Other network…" in the
+  mockup) has no backend yet; the row opens mortar-setup's Wi-Fi page
+  (WPS, the full list). The Mixer's level meters are left out: PipeWire
+  peaks would need a capture stream per app.
+- The lava lamp's GPU cost is an estimate (1-1.5 ms); read `gpu_ms.lava`
+  on the device.
+- The mockup's per-app subtitles ("Song · playing") need data apps do
+  not give the shell; window labels say on screen / background /
+  starting / closing instead.

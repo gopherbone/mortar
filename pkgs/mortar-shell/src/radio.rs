@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-//! Wi-Fi and Bluetooth on/off for MENU > Quick: the kernel's rfkill
+//! Wi-Fi and Bluetooth on/off for MENU > Settings: the kernel's rfkill
 //! switches. State from /sys/class/rfkill, changes written to /dev/rfkill
 //! (systemd gives the active seat's user access to it, the `uaccess` tag),
 //! so no daemon is involved. iwd and bluetoothd follow the soft block on

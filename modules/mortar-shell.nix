@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 # Mortar shell: a controller-driven Wayland compositor (pkgs/mortar-shell)
 # that runs several apps at once. Every app is fullscreen; MENU opens a
-# cross menu over the app (Running, Apps, Games, Music, Quick, Power) that
+# MENU over the app (Running, then the cross: Apps, Games, Music, Settings) that
 # switches, closes and launches apps and holds quick settings. Background apps keep
 # running (the M8 keeps playing while you use the terminal).
 #
@@ -226,7 +226,7 @@ let
         streamVolume = [ "${pkgs.wireplumber}/bin/wpctl" "set-volume" "{id}" "{vol}" ];
         streamMute = [ "${pkgs.wireplumber}/bin/wpctl" "set-mute" "{id}" "{mute}" ];
       };
-      # MENU > Quick > Settings… > Wi-Fi networks / Remote access /
+      # MENU > Settings > Wi-Fi / Bluetooth, More settings > Remote access /
       # Bluetooth devices (modules/mortar-setup.nix)
       setupSocket = if config.mortar ? setup && config.mortar.setup.enable then "/run/mortar-setup/control.sock" else null;
       # Settings > Updates (modules/mortar-update.nix)
@@ -366,7 +366,7 @@ in
       motion = mkOption {
         type = types.enum [ "bouncy" "calm" "snappy" ];
         default = "bouncy";
-        description = "Default spring preset (MENU > Quick > Settings… > Motion changes it per user).";
+        description = "Default spring preset (MENU > Settings > More settings > Motion changes it per user).";
       };
       reduceMotion = mkOption {
         type = types.bool;
@@ -416,7 +416,7 @@ in
         defaultText = lib.literalExpression "config.hardware.trimui-brick.suspend.enable";
         description = ''
           Default for Settings > Sleep (Suspend / Screen off). Sleep (power
-          key tap, MENU > Quick or Power > Sleep, the power menu) blanks the
+          key tap, MENU > Settings > Sleep, the power menu) blanks the
           screen and backlight and occludes the front app; with Suspend it
           also runs `actions.sleep` (`systemctl suspend`) once the screen
           has been dark for `suspendGraceMs`. Wake sources: see
@@ -553,7 +553,7 @@ in
           IdleAction = lib.mkDefault "ignore";
         };
 
-        # Brightness from MENU > Quick, and the backlight off while asleep
+        # Brightness from MENU > Settings, and the backlight off while asleep
         # (bl_power), for the video group (same rule as the greeter).
         services.udev.extraRules = backlightRule;
       }
