@@ -296,6 +296,9 @@ in {
 
     # The device kernel has nf_tables but no legacy iptables/x_tables.
     networking.nftables.enable = true;
+    # The Brick defconfig has no NFT_LOG, so the firewall's "log refused
+    # connections" rule fails to load and takes the whole ruleset with it.
+    networking.firewall.logRefusedConnections = false;
 
     # Don't rely on getty.target (the Liontron variant forces its wantedBy
     # to []); pull the consoles in from multi-user.target directly.
