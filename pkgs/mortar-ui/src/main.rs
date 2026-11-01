@@ -6,7 +6,6 @@
 #![allow(dead_code)]
 
 mod app;
-mod backend;
 mod config;
 mod greetd;
 mod greeter;
@@ -14,7 +13,7 @@ mod quickmenu;
 
 // The shared toolkit lives in the library (src/lib.rs); these imports keep
 // `crate::gfx` & co. working for the binary's own modules.
-use mortar_ui::{gfx, icons, input, status, toolkit};
+use mortar_ui::{backend, gfx, icons, input, status, toolkit};
 
 use app::{Ctx, Runner, Screen};
 use config::Config;
