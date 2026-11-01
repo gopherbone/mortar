@@ -80,6 +80,10 @@ in
       ++ lib.optional cfg.pico8.enable cfg.pico8.package
       ++ [ pkgs.alsa-utils ];
 
+    # ALSA sequencer: /dev/snd/seq exists only once snd-seq is loaded; MIDI
+    # apps (ChooChooTracker) list USB MIDI ports through it.
+    boot.kernelModules = [ "snd-seq" "snd-seq-midi" ];
+
     # Mesa: GBM + EGL + llvmpipe for SDL's KMSDRM backend (see above).
     hardware.graphics.enable = true;
 

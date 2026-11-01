@@ -136,6 +136,9 @@ buildLinux (
       # USB audio class devices on the top (host) port, e.g. the M8 tracker
       SND_USB = yes;
       SND_USB_AUDIO = module;
+      # USB MIDI for trackers (ChooChooTracker uses the ALSA sequencer)
+      SND_SEQUENCER = module;
+      SND_SEQ_MIDI = module;
       USB_HID = module; # USB keyboards and controllers
       CRYPTO_USER_API_HASH = yes;
       CRYPTO_HMAC = yes;
