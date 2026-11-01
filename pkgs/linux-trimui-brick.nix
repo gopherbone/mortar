@@ -78,7 +78,7 @@ buildLinux (
       inherit rev;
       # Placeholder: the first build fails and prints the real hash; paste
       # it here.
-      hash = lib.fakeHash;
+      hash = "sha256-oHaXINt0vQ8UI0okdP0UJCRlsPXoVbxe6G1uFLV09kU=";
     };
 
     defconfig = "trimui_brick_defconfig";
