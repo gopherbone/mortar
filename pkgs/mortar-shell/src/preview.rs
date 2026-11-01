@@ -149,7 +149,7 @@ pub fn run(o: &Opts) -> Result<(), String> {
     let prefs = Prefs { night: o.night, ..Prefs::default() };
     let s = o.screen.as_str();
     let mut ui = ShellUi::new(prefs, s == "boot");
-    let over_app = s.starts_with("menu") || matches!(s, "settings" | "app" | "osd" | "toast" | "achievement" | "flash" | "osk" | "close" | "swap" | "remote" | "wifi");
+    let over_app = s.starts_with("menu") || matches!(s, "settings" | "app" | "osd" | "osd-mute" | "osd-bri" | "osd-home" | "toast" | "achievement" | "flash" | "osk" | "close" | "swap" | "remote" | "wifi");
     let mut current = if over_app { Some(2) } else { None };
     let run_ref: &[RunningInfo] = if s == "home-empty" { &none } else { &running };
     let host = "brick";
@@ -264,7 +264,13 @@ pub fn run(o: &Opts) -> Result<(), String> {
                 current = Some(1);
             }
         }
-        "osd" => ui.osd("VOL", 70),
+        "osd" => ui.osd(crate::shellui::OsdKind::Volume, 70, false),
+        "osd-mute" => ui.osd(crate::shellui::OsdKind::Volume, 0, true),
+        "osd-bri" => ui.osd(crate::shellui::OsdKind::Brightness, 40, false),
+        "osd-home" => {
+            current = None;
+            ui.osd(crate::shellui::OsdKind::Volume, 35, false)
+        }
         "toast" => {
             ui.screenshot();
             settle(&mut ui, &v0, 0.4);
@@ -291,7 +297,7 @@ pub fn run(o: &Opts) -> Result<(), String> {
         }
         other => {
             return Err(format!(
-                "unknown preview screen '{other}' (boot, home, home-empty, app, menu, menu-apps, menu-games, menu-music, menu-quick, menu-adjust, menu-power, menu-confirm, menu-options, settings, remote, wifi, bluetooth, timezone, timezone-zones, launch, close, swap, osd, toast, achievement, flash, osk, power)"
+                "unknown preview screen '{other}' (boot, home, home-empty, app, menu, menu-apps, menu-games, menu-music, menu-quick, menu-adjust, menu-power, menu-confirm, menu-options, settings, remote, wifi, bluetooth, timezone, timezone-zones, launch, close, swap, osd, osd-mute, osd-bri, osd-home, toast, achievement, flash, osk, power)"
             ))
         }
     }

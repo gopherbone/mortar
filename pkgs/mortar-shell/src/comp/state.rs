@@ -6,7 +6,7 @@ use super::backend::Backend;
 use super::input::{Inputs, Kind};
 use super::pads::Pads;
 use crate::apps::{Apps, LaunchEnv};
-use crate::config::{parse_volume, Config, GamepadMode};
+use crate::config::{Config, GamepadMode};
 use crate::osk::{self, Osk, OskOut, PadKey, Tap};
 use crate::router::{Receiver, Routed, Router};
 use crate::shellui::{Pace, ShellUi, Toast};
@@ -196,6 +196,10 @@ pub struct Shell {
     pub sys: Sys,
     sys_at: Instant,
     pub volume: Option<u8>,
+    /// The sink is muted (the OSD shows a crossed speaker).
+    pub muted: bool,
+    /// Sets and reads the volume off the event loop.
+    pub volume_worker: super::ui::VolumeWorker,
     last_bg_tick: Instant,
     /// Settings > Updates (mortar-update's status file).
     pub update: super::ui::UpdateWatch,
@@ -243,6 +247,7 @@ impl Shell {
         let osk_buf = opaque_buffer(size.0, osk_h);
 
         let viewporter_dh = dh.clone();
+        let volume_worker = super::ui::VolumeWorker::new(cfg.actions.volume_set.clone(), cfg.actions.volume_get.clone());
         let mut shell = Shell {
             dh,
             loop_handle,
@@ -325,6 +330,8 @@ impl Shell {
             sys: Sys::read(),
             sys_at: Instant::now(),
             volume: None,
+            muted: false,
+            volume_worker,
             last_bg_tick: Instant::now(),
             update: Default::default(),
         };
@@ -343,7 +350,17 @@ impl Shell {
 
     /// Something of the shell's is on screen (drawn by a UI renderer).
     pub fn ui_layer(&self) -> bool {
-        self.sui.layer_visible(self.visible_app().is_some())
+        self.sui.layer_visible(self.visible_app().is_some()) || self.osk_on_gpu()
+    }
+
+    /// The on-screen keyboard over a GPU (dma-buf) app goes through the
+    /// GLES renderer like the OSD: pixman would read the app's
+    /// write-combined buffer (~50 MB/s), which held those frames to 5/s.
+    /// Over shm apps (foot) the damage-tracked pixman copy stays.
+    fn osk_on_gpu(&self) -> bool {
+        self.gpu_ui
+            && self.osk.visible
+            && self.visible_window().and_then(|w| w.toplevel().map(|t| t.wl_surface().clone())).is_some_and(|s| is_dmabuf(&s))
     }
 
     /// The app in front (None: the home screen); its window may still be
@@ -599,6 +616,7 @@ impl Shell {
             }
         }
         // the shell UI: time, transitions, toasts
+        self.volume_poll();
         self.ui_step();
         self.power_hold_tick();
         match self.sui.sleep_phase() {
@@ -713,10 +731,9 @@ impl Shell {
                         // undo the other key's step, quietly
                         self.vol_combo = true;
                         let back = if i == 0 { 5 } else { -5 };
-                        let s = if back >= 0 { format!("{back}%+") } else { format!("{}%-", -back) };
-                        let argv: Vec<String> = self.cfg.actions.volume_set.iter().map(|a| a.replace("{step}", &s)).collect();
-                        run_quiet(&argv);
-                        self.volume = self.read_volume();
+                        if let Some(v) = self.volume {
+                            self.set_volume((v as i32 + back).clamp(0, 100) as u8);
+                        }
                         self.sui.hide_osd();
                         self.screenshot_combo();
                     } else {
@@ -786,7 +803,8 @@ impl Shell {
             match r {
                 Routed::ToggleOverlay => {
                     self.sys = Sys::read();
-                    self.volume = self.read_volume();
+                    // read back off the event loop (MENU > Quick shows it)
+                    self.volume_worker.request(None);
                     self.radios = super::ui::read_radios();
                     self.ui_menu_key();
                 }
@@ -1004,12 +1022,6 @@ impl Shell {
             self.sync_cover();
             self.needs_redraw = true;
         }
-    }
-
-    pub fn read_volume(&self) -> Option<u8> {
-        let a = &self.cfg.actions.volume_get;
-        let out = std::process::Command::new(a.first()?).args(&a[1..]).output().ok()?;
-        parse_volume(&String::from_utf8_lossy(&out.stdout))
     }
 
     // ------------------------------------------- keyboard-mode apps ----
@@ -1233,7 +1245,7 @@ impl CompositorHandler for Shell {
                 if shown || in_scene {
                     // the CPU renders this app's dma-buf from write-combined
                     // memory: hold those redraws to SLOW_COMPOSITE
-                    let cpu_reads = is_dmabuf(&root) && (self.osk.visible || (in_scene && !self.gpu_ui));
+                    let cpu_reads = is_dmabuf(&root) && !self.gpu_ui && (self.osk.visible || in_scene);
                     if cpu_reads && self.sui.pace(self.visible_app().is_some()) != Pace::Full {
                         self.slow_redraw = true;
                     } else {

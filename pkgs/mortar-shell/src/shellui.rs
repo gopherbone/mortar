@@ -394,12 +394,29 @@ struct ToastState {
     until: f64,
 }
 
-struct Osd {
-    x: Spring,
-    until: f64,
-    value: u8,
-    label: &'static str,
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OsdKind {
+    Volume,
+    Brightness,
 }
+
+/// The volume / brightness pill. Its life is timed, not animated: it
+/// shows until `until`, fades for OSD_FADE, and is gone then whether or
+/// not frames were drawn in between.
+struct Osd {
+    kind: OsdKind,
+    value: u8,
+    muted: bool,
+    /// Fade and scale in (0..1).
+    a: Spring,
+    /// The bar (0..1), a small spring per step.
+    fill: Spring,
+    until: f64,
+}
+
+/// The OSD stays this long after the last change, then fades this long.
+const OSD_SECS: f64 = 1.2;
+const OSD_FADE: f64 = 0.2;
 
 struct Boot {
     t0: f64,
@@ -776,8 +793,9 @@ impl ShellUi {
             || self.trans.is_some()
             || self.flash.is_some()
             || self.toast.is_some()
-            || self.osd.is_some()
-            || self.power_hold.is_some();
+            || self.power_hold.is_some()
+            // the OSD only while it moves (fading in or out, its bar)
+            || self.osd.as_ref().is_some_and(|o| self.t > o.until || !(o.a.rest() && o.fill.rest()));
         // layers that can sit still: moving only while their springs are
         let menu_moving = self.menu.as_ref().is_some_and(|m| m.moving());
         let settings_moving = self.settings.as_ref().is_some_and(|p| p.closing || !(p.scroll.rest() && p.x.rest()));
@@ -806,7 +824,7 @@ impl ShellUi {
         let mut d: Option<f64> = None;
         let mut take = |t: f64| d = Some(d.map_or(t, |x: f64| x.min(t)));
         if let Some(o) = &self.osd {
-            take(o.until - self.t);
+            take(if self.t <= o.until { o.until - self.t } else { o.until + OSD_FADE - self.t });
         }
         if let Some(t) = &self.toast {
             take(t.until - self.t);
@@ -846,7 +864,7 @@ impl ShellUi {
             v.push(&mut sl.a);
         }
         if let Some(o) = &mut self.osd {
-            v.push(&mut o.x);
+            v.extend([&mut o.a, &mut o.fill]);
         }
         if let Some(t) = &mut self.toast {
             v.push(&mut t.y);
@@ -979,12 +997,13 @@ impl ShellUi {
             None => {}
         }
         // OSD
+        // OSD: hidden by the clock alone (no spring has to arrive anywhere)
         let mut drop_osd = false;
         if let Some(o) = &mut self.osd {
             if now > o.until {
-                o.x.set(140.0);
+                o.a.set(0.0);
             }
-            drop_osd = o.x.t == 140.0 && o.x.x > 135.0;
+            drop_osd = now > o.until + OSD_FADE;
         }
         if drop_osd {
             self.osd = None;
@@ -1024,22 +1043,37 @@ impl ShellUi {
         self.dirty = true;
     }
 
-    /// The volume or brightness changed: slide the OSD in.
-    pub fn osd(&mut self, label: &'static str, value: u8) {
-        let until = self.t + 1.5;
+    /// The volume or brightness changed: show the OSD (or update it at
+    /// once: the number jumps, the bar springs).
+    pub fn osd(&mut self, kind: OsdKind, value: u8, muted: bool) {
+        let until = self.t + OSD_SECS;
+        let level = if muted { 0.0 } else { value.min(100) as f32 / 100.0 };
+        let reduce = self.prefs.reduce_motion;
         match &mut self.osd {
-            Some(o) if o.label == label => {
-                o.x.set(0.0);
+            Some(o) if o.kind == kind => {
+                o.a.set(1.0);
                 o.until = until;
                 o.value = value;
+                o.muted = muted;
+                o.fill.set(level);
             }
             _ => {
-                let mut x = Spring::new(140.0);
-                x.set(0.0);
-                self.osd = Some(Osd { x, until, value, label });
+                let mut a = Spring::new(0.0);
+                a.k_mul = 3.5; // in and out in ~120 ms
+                a.set(1.0);
+                let mut fill = Spring::new(level);
+                fill.k_mul = 2.0;
+                if reduce {
+                    a.snap(1.0);
+                }
+                self.osd = Some(Osd { kind, value, muted, a, fill, until });
             }
         }
         self.dirty = true;
+    }
+
+    pub fn osd_kind(&self) -> Option<OsdKind> {
+        self.osd.as_ref().map(|o| o.kind)
     }
 
     /// Drop the OSD at once (the screenshot chord's first volume key
@@ -1416,6 +1450,65 @@ fn with_a(c: Color, a: f32) -> Color {
     Color(c.0, c.1, c.2, (a.clamp(0.0, 1.0) * 255.0).round() as u8)
 }
 
+/// Points along a circle from `a0` to `a1` degrees (y down).
+fn arc_pts(cx: f32, cy: f32, r: f32, a0: f32, a1: f32) -> Vec<P> {
+    let n = ((a1 - a0).abs() / 8.0).ceil().max(2.0) as usize;
+    (0..=n)
+        .map(|i| {
+            let a = (a0 + (a1 - a0) * i as f32 / n as f32).to_radians();
+            (cx + r * a.cos(), cy + r * a.sin())
+        })
+        .collect()
+}
+
+/// A rounded rectangle as horizontal spans (y0, y1, inset from each
+/// side), `n` per rounded end: an image cut to its shape.
+fn rrect_spans(y: f32, w: f32, h: f32, r: f32, n: usize) -> Vec<(f32, f32, f32)> {
+    let r = r.min(w / 2.0).min(h / 2.0);
+    let inset = |d: f32| r - (r * r - d * d).max(0.0).sqrt();
+    let mut v = Vec::with_capacity(2 * n + 1);
+    for i in 0..n {
+        let (y0, y1) = (y + r * i as f32 / n as f32, y + r * (i + 1) as f32 / n as f32);
+        v.push((y0, y1, inset(r - ((y0 + y1) / 2.0 - y))));
+    }
+    v.push((y + r, y + h - r, 0.0));
+    for i in 0..n {
+        let (y0, y1) = (y + h - r + r * i as f32 / n as f32, y + h - r + r * (i + 1) as f32 / n as f32);
+        v.push((y0, y1, inset((y0 + y1) / 2.0 - (y + h - r))));
+    }
+    v
+}
+
+/// The OSD's speaker: waves by level, crossed out when muted (None).
+fn osd_speaker(b: &mut B, cx: f32, cy: f32, ink: Color, level: Option<u8>) {
+    let body = [(cx - 13.0, cy - 5.0), (cx - 6.0, cy - 5.0), (cx + 3.0, cy - 13.0), (cx + 3.0, cy + 13.0), (cx - 6.0, cy + 5.0), (cx - 13.0, cy + 5.0)];
+    b.poly_concave(&body, ink);
+    match level {
+        None => {
+            b.stroke(&[(cx + 8.0, cy - 6.0), (cx + 18.0, cy + 6.0)], false, 2.2, ink);
+            b.stroke(&[(cx + 18.0, cy - 6.0), (cx + 8.0, cy + 6.0)], false, 2.2, ink);
+        }
+        Some(l) => {
+            if l > 0 {
+                b.stroke(&arc_pts(cx + 3.0, cy, 7.0, -45.0, 45.0), false, 2.2, ink);
+            }
+            if l >= 50 {
+                b.stroke(&arc_pts(cx + 3.0, cy, 13.0, -45.0, 45.0), false, 2.2, ink);
+            }
+        }
+    }
+}
+
+fn osd_sun(b: &mut B, cx: f32, cy: f32, ink: Color) {
+    let c = crate::scene::ellipse_pts(cx, cy, 6.5, 6.5, 28);
+    b.stroke(&c, true, 2.2, ink);
+    for k in 0..8 {
+        let t = (k as f32 * 45.0).to_radians();
+        let (co, si) = (t.cos(), t.sin());
+        b.stroke(&[(cx + co * 11.0, cy + si * 11.0), (cx + co * 15.5, cy + si * 15.5)], false, 2.2, ink);
+    }
+}
+
 /// Date line for the home screen: "SAT 1 NOV · BRICK".
 fn date_line(host: &str) -> String {
     const DAYS: [&str; 7] = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"];
@@ -1587,7 +1680,7 @@ impl ShellUi {
             self.draw_power(&mut b, &pal, p, frost > 0.0);
         }
         if let Some(o) = &self.osd {
-            self.draw_osd(&mut b, &pal, o);
+            self.draw_osd(&mut b, &pal, o, if frost > 0.0 { None } else { frost_app });
         }
         if let Some(t) = &self.toast {
             self.draw_toast(&mut b, &pal, t);
@@ -2094,19 +2187,59 @@ impl ShellUi {
         b.text_center(W / 2.0, y + 24.0 - st.line_px() / 2.0, "HOLD FOR POWER MENU", &st);
     }
 
-    fn draw_osd(&self, b: &mut B, pal: &Pal, o: &Osd) {
-        let x = W - 26.0 - 64.0 + o.x.x;
-        let y = 76.0;
-        b.block(x, y, 64.0, 260.0, pal.ground, pal.ink);
-        let lab = ts(Face::Mono400, 12.0, pal.soft);
-        b.text_center(x + 32.0, y + 8.0, o.label, &lab);
-        let n = ts(Face::Mono400, 15.0, pal.ink);
-        let ny = y + 260.0 - 9.0 - n.line_px();
-        b.text_center(x + 32.0, ny, &o.value.to_string(), &n);
-        let h = (o.value as f32 * 2.0).min(200.0);
-        if h > 0.0 {
-            b.block(x + 9.0, ny - 8.0 - h, 46.0, h, pal.lime, pal.lime_ink);
+    /// The OSD: a frosted-glass pill at the right edge (style of
+    /// plan/mortar-cross-2: light ground at 42% over a blur of the app,
+    /// a light top edge, ink content, no hard border). `app`: the app
+    /// behind (uid, geometry) to blur; None: a flat 85% ground.
+    fn draw_osd(&self, b: &mut B, pal: &Pal, o: &Osd, app: Option<(u32, [f32; 4])>) {
+        let a = o.a.x.clamp(0.0, 1.0);
+        if a < 0.01 {
+            return;
         }
+        let (w, h) = (72.0, 300.0);
+        let (x, y) = (W - 24.0 - w, (H - h) / 2.0);
+        let r = w / 2.0;
+        let s = 0.9 + 0.1 * a;
+        b.push(Xf::about(x + w / 2.0, y + h / 2.0, Xf::scale(s, s)));
+        b.push_alpha(a);
+        match app {
+            Some((uid, g)) if g[2] > 0.0 && g[3] > 0.0 => {
+                // the blurred app, cut to the pill in horizontal spans
+                for (y0, y1, inset) in rrect_spans(y, w, h, r, 10) {
+                    let (x0, x1) = (x + inset, x + w - inset);
+                    let uv = [(x0 - g[0]) / g[2], (y0 - g[1]) / g[3], (x1 - g[0]) / g[2], (y1 - g[1]) / g[3]];
+                    let uv = uv.map(|c| c.clamp(0.0, 1.0));
+                    b.image(Src::Blur(uid), x0, y0, x1 - x0, y1 - y0, uv);
+                }
+                b.rrect(x, y, w, h, r, with_a(pal.ground, 0.42));
+            }
+            _ => b.rrect(x, y, w, h, r, with_a(pal.ground, 0.85)),
+        }
+        // a faint outline so it holds over light apps, a light top edge,
+        // a faint shade under the bottom
+        b.stroke(&crate::scene::rrect_pts(x, y, w, h, r), true, 1.0, with_a(pal.ink, 0.12));
+        let top = arc_pts(x + r, y + r, r - 0.5, 180.0, 360.0);
+        b.stroke(&top, false, 1.5, Color(255, 255, 255, 190));
+        let bottom = arc_pts(x + r, y + h - r, r - 0.5, 0.0, 180.0);
+        b.stroke(&bottom, false, 1.0, with_a(pal.ink, 0.15));
+        // icon, bar, number
+        let cx = x + w / 2.0;
+        let ink = pal.ink;
+        match o.kind {
+            OsdKind::Volume => osd_speaker(b, cx, y + 40.0, ink, if o.muted { None } else { Some(o.value) }),
+            OsdKind::Brightness => osd_sun(b, cx, y + 40.0, ink),
+        }
+        let (bx, by, bw, bh) = (cx - 7.0, y + 76.0, 14.0, 172.0);
+        b.rect(bx, by, bw, bh, with_a(ink, 0.14));
+        let fh = (o.fill.x.clamp(0.0, 1.0) * bh).round();
+        if fh > 0.0 {
+            b.rect(bx, by + bh - fh, bw, fh, ink);
+        }
+        let n = ts(Face::Mono600, 18.0, ink);
+        let label = if o.muted { "off".to_string() } else { o.value.to_string() };
+        b.text_center(cx, y + h - 40.0, &label, &n);
+        b.pop_alpha();
+        b.pop();
     }
 
     fn draw_toast(&self, b: &mut B, pal: &Pal, t: &ToastState) {
@@ -2643,12 +2776,45 @@ mod tests {
         let mut ui = ShellUi::new(Prefs::default(), false);
         settle(&mut ui, &v);
         assert_eq!(ui.pace(true), Pace::Idle);
-        ui.osd("VOL", 50);
+        ui.osd(OsdKind::Volume, 50, false);
         assert_eq!(ui.pace(true), Pace::Full);
         for _ in 0..200 {
             ui.step(1.0 / 60.0, &v);
         }
         assert_eq!(ui.pace(true), Pace::Idle);
         assert!(!ui.layer_visible(true));
+    }
+
+    #[test]
+    fn osd_goes_away_without_frames() {
+        let sys = Sys::demo(None);
+        let l = launcher();
+        let r = [run(2, "term")];
+        let v = view(&r, &l, &sys, Some(2));
+        let mut ui = ShellUi::new(Prefs::default(), false);
+        settle(&mut ui, &v);
+        ui.osd(OsdKind::Volume, 50, false);
+        // the compositor sleeps until the deadline the UI gives it
+        let d = ui.next_deadline().unwrap();
+        assert!(d <= OSD_SECS + 1e-9);
+        // no frames in between: one late step, then the fade's deadline
+        ui.step(d + 0.01, &v);
+        let d2 = ui.next_deadline().unwrap();
+        assert!(d2 <= OSD_FADE + 1e-9);
+        ui.step(d2 + 0.01, &v);
+        assert!(ui.osd.is_none(), "gone within {:.2} s", d + d2 + 0.02);
+        assert!(d + d2 + 0.02 < 1.5);
+        assert!(!ui.layer_visible(true));
+        // still fading and the bar at rest: the pill does not keep the
+        // compositor at full frame rate while it just sits there
+        ui.osd(OsdKind::Volume, 50, false);
+        for _ in 0..30 {
+            ui.step(1.0 / 60.0, &v);
+        }
+        assert_eq!(ui.pace(true), Pace::Idle);
+        // steps update it at once; held keys keep it up; muted: empty bar
+        ui.osd(OsdKind::Volume, 0, true);
+        let o = ui.osd.as_ref().unwrap();
+        assert!(o.muted && o.fill.t == 0.0);
     }
 }

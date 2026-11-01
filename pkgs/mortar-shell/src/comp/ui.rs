@@ -11,7 +11,7 @@ use crate::haptics::Haptic;
 use crate::raster::{pixmap_from_xrgb, Images};
 use crate::scene::{Layer, Scene, Src};
 use crate::sfx::Sfx;
-use crate::shellui::{LauncherInfo, Out, Radios, RunningInfo, Toast, ToastIcon, View};
+use crate::shellui::{LauncherInfo, OsdKind, Out, Radios, RunningInfo, Toast, ToastIcon, View};
 use mortar_ui::status::{Backlight, Sys};
 use resvg::tiny_skia::Pixmap;
 use smithay::backend::allocator::Buffer;
@@ -24,6 +24,73 @@ use smithay::wayland::shm::with_buffer_contents;
 use std::collections::HashMap;
 use std::path::Path;
 use std::time::{Duration, Instant};
+
+/// Volume changes off the compositor thread. `wpctl` (or amixer) is a
+/// process start and a PipeWire round trip per call; run on the event loop
+/// (set, then get, for every step and key repeat) they stalled frames and
+/// input for the whole OSD. The shell shows the new level at once and the
+/// worker applies the newest one (absolute, so skipped steps do not add
+/// up), then reads back what the mixer says.
+pub struct VolumeWorker {
+    tx: std::sync::mpsc::Sender<(u64, Option<u8>)>,
+    /// The last request's number and what the mixer reported after it.
+    done: std::sync::Arc<std::sync::Mutex<Option<(u64, Option<(u8, bool)>)>>>,
+    sent: u64,
+}
+
+impl VolumeWorker {
+    pub fn new(set: Vec<String>, get: Vec<String>) -> VolumeWorker {
+        let (tx, rx) = std::sync::mpsc::channel::<(u64, Option<u8>)>();
+        let done = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let d2 = done.clone();
+        let spawned = std::thread::Builder::new().name("volume".into()).spawn(move || {
+            while let Ok(mut req) = rx.recv() {
+                // only the newest request matters
+                while let Ok(r) = rx.try_recv() {
+                    req = (r.0, r.1.or(req.1));
+                }
+                if let Some(v) = req.1 {
+                    let argv: Vec<String> = set.iter().map(|a| a.replace("{step}", &format!("{v}%"))).collect();
+                    super::state::run_quiet(&argv);
+                }
+                let got = read_volume_with(&get);
+                if let Ok(mut d) = d2.lock() {
+                    *d = Some((req.0, got));
+                }
+            }
+        });
+        if let Err(e) = spawned {
+            tracing::warn!("volume thread: {e}");
+        }
+        VolumeWorker { tx, done, sent: 0 }
+    }
+
+    /// Set the volume (None: only read it back).
+    pub fn request(&mut self, v: Option<u8>) {
+        self.sent += 1;
+        let _ = self.tx.send((self.sent, v));
+    }
+
+    /// The mixer's answer to the newest request, once it is in (answers
+    /// to older ones would undo steps still on their way).
+    pub fn take(&mut self) -> Option<(u8, bool)> {
+        let mut d = self.done.lock().ok()?;
+        match *d {
+            Some((n, got)) if n == self.sent => {
+                *d = None;
+                got
+            }
+            _ => None,
+        }
+    }
+}
+
+/// Run the volume-get command: (level, muted).
+pub fn read_volume_with(get: &[String]) -> Option<(u8, bool)> {
+    let out = std::process::Command::new(get.first()?).args(&get[1..]).output().ok()?;
+    let s = String::from_utf8_lossy(&out.stdout);
+    Some((crate::config::parse_volume(&s)?, crate::config::parse_muted(&s)))
+}
 
 /// The MENU backdrop is blurred again at most this often.
 pub const BLUR_EVERY: Duration = Duration::from_millis(66);
@@ -326,7 +393,7 @@ impl Shell {
                             // MENU > Quick shows the value in its row
                             self.play_sfx(Sfx::Vol(level));
                         } else {
-                            self.sui.osd("BRI", level);
+                            self.sui.osd(OsdKind::Brightness, level, false);
                         }
                         self.play_haptic(Haptic::Tick);
                     } else {
@@ -462,18 +529,43 @@ impl Shell {
         self.ui_dirty = true;
     }
 
+    /// A volume step: shown at once, applied by the volume thread.
     pub fn change_volume(&mut self, d: i32) {
-        let step = if d >= 0 { format!("{d}%+") } else { format!("{}%-", -d) };
-        let argv: Vec<String> = self.cfg.actions.volume_set.iter().map(|a| a.replace("{step}", &step)).collect();
-        super::state::run_quiet(&argv);
-        self.volume = self.read_volume();
-        let v = self.volume.unwrap_or(0);
+        if self.volume.is_none() {
+            // not known yet (first press): ask once, synchronously
+            if let Some((v, m)) = read_volume_with(&self.cfg.actions.volume_get) {
+                self.volume = Some(v);
+                self.muted = m;
+            }
+        }
+        let v = (self.volume.unwrap_or(50) as i32 + d).clamp(0, 100) as u8;
+        self.set_volume(v);
         if !self.sui.menu_open() {
-            self.sui.osd("VOL", v);
+            self.sui.osd(OsdKind::Volume, v, self.muted);
         }
         self.play_sfx(Sfx::Vol(v));
         self.play_haptic(Haptic::Tick);
         self.needs_redraw = true;
+    }
+
+    /// Set the volume without a round trip (the volume thread applies it).
+    pub fn set_volume(&mut self, v: u8) {
+        self.volume = Some(v);
+        self.volume_worker.request(Some(v));
+    }
+
+    /// The volume thread answered: take the mixer's word for it.
+    pub fn volume_poll(&mut self) {
+        if let Some((v, m)) = self.volume_worker.take()
+            && (Some(v) != self.volume || m != self.muted)
+        {
+            self.volume = Some(v);
+            self.muted = m;
+            if self.sui.osd_kind() == Some(OsdKind::Volume) {
+                self.sui.osd(OsdKind::Volume, v, m);
+            }
+            self.ui_dirty = true;
+        }
     }
 
     /// The setup page's periodic refresh.

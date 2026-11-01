@@ -164,9 +164,23 @@ blocks with 1 px ink outlines, isometric illustrations.
   $XDG_STATE_HOME/mortar-shell/prefs.json over the module's defaults
   (`mortar.shell.ui.*`).
 - Home shortcuts: L1 or SELECT opens the MENU on Apps, R1 on Quick.
-- Volume keys work everywhere: an OSD slides in from the right with the
-  level (and a pitch-tracking blip); brightness uses the same OSD. With
-  the MENU up the Quick rows show the level instead.
+- Volume keys work everywhere: the OSD, a frosted-glass pill (72x300) at
+  the right edge, fades and scales in (~120 ms), with a speaker (sun for
+  brightness), an ink bar that springs to each new level and the number
+  in mono; muted shows an empty bar, a crossed speaker and "off". It is
+  the light ground at 42% over the blurred app (the MENU's `Src::Blur`,
+  cut to the pill in spans; over home a flat 85% ground), with a light
+  top edge and a faint outline. It hides 1.2 s after the last change,
+  by the clock alone: `next_deadline` wakes the compositor for the hide
+  and for the end of the fade, so no frames or spring positions are
+  needed (it used to wait for its slide-out spring to pass 135 px). It
+  keeps the compositor at full frame rate only while it moves. Each
+  step is shown at once and plays a pitch-tracking blip; a volume
+  thread (comp/ui.rs `VolumeWorker`) applies the newest level (absolute,
+  `{step}` = "NN%") and reads back level and mute: `wpctl` set + get
+  used to run on the event loop for every step and key repeat, stalling
+  frames and input. With the MENU up the Quick rows show the level
+  instead.
 - Screenshot: VOL+ and VOL- together (the shell owns those keys, so no
   app or game ever sees the chord). Shutter flash, shutter sound, long
   buzz, PNG in `ui.screenshotDir` (~/Pictures/Screenshots), then a toast.
@@ -509,7 +523,7 @@ What is on screen when:
 |---|---|
 | GPU app alone | its dma-buf on the primary plane; the shell only flips |
 | MENU / home / transitions / OSD / toasts | GPU UI renderer into its own dumb buffers (app images sampled from their dma-bufs); the app under the MENU is drawn blurred under the veil (re-blurred on its commits, at most ~15/s) and `suspended`, the app in the live preview gets `ui.cardFps` frame callbacks. CPU fallback: full frames by tiny-skia, composited by pixman |
-| OSK over a GPU app (nothing else) | composited: pixman reads the app's dma-buf (write-combined, so slower than an shm copy) for those frames only |
+| OSK over a GPU app (nothing else) | GPU UI renderer (app texture + keyboard layer), full rate; CPU fallback: pixman reads the app's dma-buf (write-combined), held to 5/s |
 | shm app (foot, llvmpipe SDL) | opaque copy, as above |
 
 The OSD could go on an overlay plane over the scanned-out app instead
@@ -531,12 +545,14 @@ Measured on the Brick (2026-11-01):
 | mortar-wlegl-demo, transform | - | 99% | composited, 3.5 fps (fallback only) |
 | m8c (M8 attached), front | 12% | 3% | scanout (was ~180% on llvmpipe) |
 | m8c under MENU | 5% | 0% | overlay only |
-| m8c, volume OSD up | 9% | 38% | composited at 5 fps (87%/16 fps before throttling) |
+| m8c, volume OSD up | 9% | 38% | composited at 5 fps (87%/16 fps before throttling); measured before the GPU UI renderer, which now draws OSD frames (not re-measured) |
 | m8c front, PuzzleScript + PICO-8 behind (all GPU) | 7% | 14% | scanout; background commits cost the shell |
 
 PICO-8 (SDL2 through sdl2-compat on sdl3-pvr) takes the same path.
-Composited frames of a dmabuf app are held to 5/s while the OSD or OSK
-covers it: pixman reads the app's write-combined buffer at ~50 MB/s.
+With the CPU UI renderer (fallback), composited frames of a dmabuf app
+are held to 5/s while the OSD or OSK covers it: pixman reads the app's
+write-combined buffer at ~50 MB/s. With the GPU UI renderer both go
+through GLES at full rate.
 
 Costs and limits:
 

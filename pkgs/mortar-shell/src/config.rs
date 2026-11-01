@@ -440,9 +440,21 @@ pub fn parse_volume(out: &str) -> Option<u8> {
     rest[..j].parse().ok()
 }
 
+/// The sink is muted (wpctl "[MUTED]", amixer "[off]").
+pub fn parse_muted(out: &str) -> bool {
+    out.contains("[MUTED]") || out.contains("[off]")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mute() {
+        assert!(parse_muted("Volume: 0.40 [MUTED]\n"));
+        assert!(!parse_muted("Volume: 0.40\n"));
+        assert!(parse_muted("Front Left: Playback 50 [79%] [-15.00dB] [off]"));
+    }
 
     #[test]
     fn parses_module_output() {
