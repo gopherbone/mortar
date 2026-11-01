@@ -32,3 +32,4 @@ re_tools/*.txt
 *.swp
 *.swo
 target/
+.claude/
