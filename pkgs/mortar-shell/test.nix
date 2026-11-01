@@ -270,10 +270,12 @@ runCommand "mortar-shell-headless-test"
     tshot 800 close-done
 
     # MENU > Settings > More settings (Brightness, Volume, Mixer, Wi-Fi,
-    # Bluetooth, Sleep, More settings: no keyboard app in front)
+    # Bluetooth, Sleep, More settings: no keyboard app in front). The
+    # category remembers its row, so go to the top first.
     settings() {
       ctl press menu
       ctl press r1
+      for _ in 1 2 3 4 5 6 7 8 9; do ctl press up >/dev/null; done
       for _ in 1 2 3 4 5 6; do ctl press down >/dev/null; done
       ctl press a
     }
