@@ -3,13 +3,19 @@
 //! the TrimUI Brick). See DESIGN.md.
 
 mod apps;
+mod art;
 #[cfg(target_os = "linux")]
 mod comp;
 mod config;
+mod haptics;
+mod motion;
 mod osk;
-mod overlay;
 mod preview;
+mod raster;
 mod router;
+mod scene;
+mod sfx;
+mod shellui;
 
 use mortar_ui::input::Button;
 use std::path::PathBuf;
@@ -25,10 +31,13 @@ fn main() -> ExitCode {
         .init();
     let r = match args.first().map(String::as_str) {
         Some("preview") => preview_cmd(&args[1..]),
+        Some("sfx") => sfx_cmd(&args[1..]),
         #[cfg(target_os = "linux")]
         Some("ctl") => ctl_cmd(&args[1..]),
         #[cfg(target_os = "linux")]
         Some("run") => run_cmd(&args[1..]),
+        #[cfg(target_os = "linux")]
+        Some("toast") => toast_cmd(&args[1..]),
         Some("-h" | "--help") | None => Err(String::new()),
         Some(other) => Err(format!("unknown command '{other}'")),
     };
@@ -58,16 +67,25 @@ commands:
                --input direct           headless: also read /dev/input directly
   ctl CMD    talk to a running shell: state | press BUTTON | down/up BUTTON |
                key CODE | launch ID | focus ID | close ID | home |
-               screenshot PATH | quit      (--ctl PATH before CMD)
-  preview    render a shell screen to PNG without a compositor
-               --screen home|home-settings|menu|menu-launch|menu-settings|remote|wifi|osk|osd
+               screenshot PATH | shot | toast JSON | boot | time manual|real|+MS |
+               quit      (--ctl PATH before CMD)
+  toast      show a toast in the running shell (for apps, e.g. achievements):
+               toast [--achievement] [--sound NAME|none] [--secs S] TITLE [SUBTITLE]
+  sfx NAME   play a UI sound [--wav FILE: write it instead]
+  preview    render shell screens / transition frames to PNG without a compositor
+               --screen boot|home|app|menu|menu-launch|menu-settings|launch|close|
+                        swap|osd|toast|achievement|flash|osk|remote|wifi
                --out FILE [--keys a,down,...] [--theme light|dark]
+               [--at MS] [--frames N --every MS]   (FILE-000.png ...)
 
 environment:
   MORTAR_SHELL_LOG          log filter (tracing EnvFilter), default info
   MORTAR_DRM_DEVICE         DRM card to use
   MORTAR_SHELL_NO_SCANOUT   never scan out client buffers directly
   MORTAR_SHELL_ALLOCATOR    gbm (default; falls back to dumb) | dumb
+  MORTAR_SHELL_RENDERER     gpu | cpu: override the config's ui.renderer
+  MORTAR_SHELL_GL_MSAA      0 | 4: override ui.msaa
+  MORTAR_SHELL_RUMBLE       rumble device (default: the gpio-vibrator event node)
   MORTAR_UI_FONTS           font directory (default: baked in)
 ";
 
@@ -122,30 +140,97 @@ fn ctl_cmd(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+/// `mortar-shell toast [--achievement] [--sound S] [--secs N] TITLE [SUB]`
+#[cfg(target_os = "linux")]
+fn toast_cmd(args: &[String]) -> Result<(), String> {
+    let mut kind = "info";
+    let mut sound: Option<String> = None;
+    let mut secs: Option<f32> = None;
+    let mut words = Vec::new();
+    let mut ctl = comp::ctl::default_path();
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--achievement" => kind = "achievement",
+            "--sound" => sound = Some(it.next().ok_or("--sound needs a value")?.clone()),
+            "--secs" => secs = Some(it.next().ok_or("--secs needs a value")?.parse().map_err(|_| "--secs: a number")?),
+            "--ctl" => ctl = PathBuf::from(it.next().ok_or("--ctl needs a path")?),
+            w => words.push(w.to_string()),
+        }
+    }
+    let title = words.first().ok_or("toast needs a title")?;
+    let mut j = serde_json::json!({ "title": title, "sub": words.get(1).cloned().unwrap_or_default(), "kind": kind });
+    if let Some(s) = sound {
+        j["sound"] = s.into();
+    }
+    if let Some(s) = secs {
+        j["secs"] = s.into();
+    }
+    comp::ctl::client(&ctl, &["toast".to_string(), j.to_string()])?;
+    Ok(())
+}
+
 fn preview_cmd(args: &[String]) -> Result<(), String> {
-    let mut screen = "home".to_string();
-    let mut out: Option<PathBuf> = None;
-    let mut keys = Vec::new();
+    let mut o = preview::Opts {
+        screen: "home".into(),
+        keys: Vec::new(),
+        out: PathBuf::new(),
+        at_ms: 1500,
+        frames: 1,
+        every_ms: 33,
+        night: false,
+    };
+    let mut out_given = false;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         let mut val = || it.next().cloned().ok_or(format!("{a} needs a value"));
+        let num = |v: String| v.parse::<u32>().map_err(|_| format!("{v}: not a number"));
         match a.as_str() {
-            "--screen" => screen = val()?,
-            "--out" => out = Some(val()?.into()),
+            "--screen" => o.screen = val()?,
+            "--out" => {
+                o.out = val()?.into();
+                out_given = true;
+            }
             "--theme" => {
                 let n = val()?;
-                mortar_ui::theme::set(mortar_ui::theme::Theme::by_name(&n).ok_or(format!("unknown theme {n}"))?);
+                let t = mortar_ui::theme::Theme::by_name(&n).ok_or(format!("unknown theme {n}"))?;
+                o.night = t.name == "dark";
+                mortar_ui::theme::set(t);
             }
+            "--at" => o.at_ms = num(val()?)?,
+            "--frames" => o.frames = num(val()?)?,
+            "--every" => o.every_ms = num(val()?)?,
             "--keys" => {
                 for k in val()?.split(',').filter(|k| !k.is_empty()) {
-                    keys.push(Button::parse(k).ok_or(format!("unknown button {k}"))?);
+                    o.keys.push(Button::parse(k).ok_or(format!("unknown button {k}"))?);
                 }
             }
             s => return Err(format!("unknown argument {s}")),
         }
     }
-    let out = out.ok_or("--out FILE is required")?;
-    preview::run(&screen, &keys, &out, (1024, 768))?;
-    println!("wrote {}", out.display());
+    if !out_given {
+        return Err("--out FILE is required".into());
+    }
+    preview::run(&o)?;
+    println!("wrote {}", o.out.display());
+    Ok(())
+}
+
+/// `mortar-shell sfx NAME [--wav FILE]`: play a UI sound (or write it).
+fn sfx_cmd(args: &[String]) -> Result<(), String> {
+    let name = args.first().ok_or("sfx needs a sound name")?;
+    let s = sfx::Sfx::parse(name).ok_or(format!("unknown sound {name} ({})", sfx::Sfx::NAMES.join(", ")))?;
+    match args.get(1).map(String::as_str) {
+        Some("--wav") => {
+            let p = args.get(2).ok_or("--wav needs a file")?;
+            std::fs::write(p, sfx::wav(&sfx::render(s, 0.6))).map_err(|e| format!("{p}: {e}"))?;
+        }
+        _ => {
+            let n = sfx::render(s, 0.6).len() as u64 * 1000 / sfx::RATE as u64;
+            let p = sfx::Player::new(Some(std::env::var("MORTAR_SHELL_AUDIO").unwrap_or_else(|_| "default".into())));
+            p.play(s, 60);
+            std::thread::sleep(std::time::Duration::from_millis(n + 300));
+        }
+    }
     Ok(())
 }

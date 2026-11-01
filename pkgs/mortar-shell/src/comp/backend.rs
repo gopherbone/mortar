@@ -146,17 +146,12 @@ where
     let mem = |r: &mut R, loc: (f64, f64), buf| {
         MemoryRenderBufferRenderElement::from_buffer(r, loc, buf, None, None, None, Kind::Unspecified).ok()
     };
-    if shell.shell_screen() {
+    if shell.ui_layer() {
+        // the shell UI, drawn by the CPU renderer (cpu_ui_frame)
         if let Some(e) = mem(r, (0.0, 0.0), &shell.overlay_buf) {
             out.push(ShellElement::Memory(e));
         }
         return out;
-    }
-    if let Some(b) = &shell.osd_buf {
-        let x = (shell.size.0 - shell.osd_w - 16) as f64;
-        if let Some(e) = mem(r, (x, 16.0), b) {
-            out.push(ShellElement::Memory(e));
-        }
     }
     let area = shell.app_area();
     if shell.osk.visible
@@ -202,6 +197,9 @@ impl Headless {
     }
 
     fn render(&mut self, shell: &mut Shell) {
+        if shell.ui_layer() {
+            shell.cpu_ui_frame();
+        }
         let els = elements(shell, &mut self.renderer);
         let r = match self.renderer.bind(&mut self.image) {
             Ok(mut fb) => self.damage.render_output(&mut self.renderer, &mut fb, 1, &els, CLEAR).map(|_| ()).map_err(|e| format!("{e:?}")),
@@ -223,6 +221,11 @@ pub enum Backend {
 }
 
 impl Backend {
+    /// The shell UI renders on the GPU.
+    pub fn has_gpu_ui(&self) -> bool {
+        matches!(self, Backend::Drm(d) if d.gpu.is_some())
+    }
+
     pub fn dmabuf_formats(&self) -> Option<FormatSet> {
         match self {
             Backend::Headless(h) => Some(h.renderer.dmabuf_formats()),
@@ -248,6 +251,14 @@ impl Backend {
         }
     }
 
+    /// Frames the GPU UI renderer drew (DRM only).
+    pub fn gpu_frames(&self) -> u64 {
+        match self {
+            Backend::Drm(d) => d.gpu_frames,
+            _ => 0,
+        }
+    }
+
     pub fn frames(&self) -> u64 {
         match self {
             Backend::Headless(h) => h.frames,
@@ -268,35 +279,8 @@ pub fn render(shell: &mut Shell) {
     shell.backend = b;
 }
 
-/// Compose the current screen offscreen (independent of the backend) and
-/// write it as a PNG.
+/// The current screen (UI and apps, without the shutter flash) as a PNG.
 pub fn screenshot(shell: &mut Shell, path: &Path) -> Result<(), String> {
-    let (w, h) = shell.size;
-    // a fresh renderer: re-copy the app buffer for it
-    shell.opaque.clear();
-    let mut renderer = PixmanRenderer::new().map_err(|e| format!("pixman: {e:?}"))?;
-    let mut image: pixman::Image<'static, 'static> =
-        renderer.create_buffer(Fourcc::Xrgb8888, (w, h).into()).map_err(|e| format!("{e:?}"))?;
-    let els = elements(shell, &mut renderer);
-    {
-        let mut fb = renderer.bind(&mut image).map_err(|e| format!("{e:?}"))?;
-        let mut dt = OutputDamageTracker::new((w, h), 1.0, Transform::Normal);
-        dt.render_output(&mut renderer, &mut fb, 0, &els, CLEAR).map_err(|e| format!("{e:?}"))?;
-    }
-    let stride = image.stride() / 4;
-    // SAFETY: the image owns w*h pixels of `stride`; nothing else uses it now
-    let px = unsafe { std::slice::from_raw_parts(image.data() as *const u32, stride * h as usize) };
-    let mut rgb = Vec::with_capacity((w * h * 3) as usize);
-    for y in 0..h as usize {
-        for x in 0..w as usize {
-            let p = px[y * stride + x];
-            rgb.extend_from_slice(&[(p >> 16) as u8, (p >> 8) as u8, p as u8]);
-        }
-    }
-    let f = std::fs::File::create(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let mut enc = png::Encoder::new(std::io::BufWriter::new(f), w as u32, h as u32);
-    enc.set_color(png::ColorType::Rgb);
-    enc.set_depth(png::BitDepth::Eight);
-    enc.write_header().and_then(|mut wr| wr.write_image_data(&rgb)).map_err(|e| e.to_string())?;
-    Ok(())
+    let pm = shell.capture().ok_or("capture failed")?;
+    super::ui::save_rgb_png(&pm, path)
 }

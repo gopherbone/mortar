@@ -694,10 +694,12 @@ name = "mortar-shell"
 version = "0.1.0"
 dependencies = [
  "evdev",
+ "fontdue",
  "libc",
  "mortar-setup",
  "mortar-ui",
  "png 0.17.16",
+ "resvg",
  "serde",
  "serde_json",
  "smithay",

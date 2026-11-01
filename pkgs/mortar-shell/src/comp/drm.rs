@@ -10,8 +10,14 @@
 //!   the swapchain. Client dmabufs (GPU apps through mortar-wlegl) are
 //!   PRIME-imported for direct scanout by `scanout::ClientScanout` with
 //!   either allocator.
+//! - The shell's UI layers: on the GPU (`gpu::GpuUi`, page-flipped on the
+//!   compositor's own surface) when `ui.renderer` allows and the PowerVR
+//!   initialises; else drawn on the CPU and composited by pixman. Any GPU
+//!   error drops the GPU path for the session (orderly teardown) and the
+//!   CPU renderer takes over.
 
 use super::backend::{elements, CLEAR};
+use super::gpu::GpuUi;
 use super::input::Opener;
 use super::scanout::ClientScanout;
 use super::state::Shell;
@@ -54,13 +60,25 @@ macro_rules! with_comp {
     };
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Pending {
+    Comp,
+    Gpu,
+}
+
 pub struct DrmBackend {
     pub session: LibSeatSession,
     drm: DrmDevice,
     comp: Comp,
     pub renderer: PixmanRenderer,
+    /// The GPU UI renderer (None: off, unavailable or failed).
+    pub gpu: Option<GpuUi>,
+    /// The last frame on screen came from the GPU UI.
+    gpu_shown: bool,
+    gpu_errors: u32,
+    pub gpu_frames: u64,
     /// A frame is queued; wait for its vblank before the next.
-    pending: bool,
+    pending: Option<Pending>,
     active: bool,
     pub frames: u64,
     pub scanout_frames: u64,
@@ -95,7 +113,7 @@ fn cards() -> Vec<PathBuf> {
 
 /// Open the session and the panel. Returns the backend, the output and its
 /// size in pixels.
-pub fn init(handle: &LoopHandle<'static, Shell>) -> Result<(DrmBackend, Output, (i32, i32)), String> {
+pub fn init(handle: &LoopHandle<'static, Shell>, ui: &crate::config::UiConfig) -> Result<(DrmBackend, Output, (i32, i32)), String> {
     let (mut session, notifier) = LibSeatSession::new().map_err(|e| format!("libseat session: {e:?}"))?;
     tracing::info!(seat = %session.seat(), "session");
 
@@ -185,6 +203,33 @@ pub fn init(handle: &LoopHandle<'static, Shell>) -> Result<(DrmBackend, Output, 
     };
     tracing::info!(allocator = if matches!(comp, Comp::Gbm(_)) { "gbm" } else { "dumb" }, "scanout buffers");
 
+    let renderer_choice = match std::env::var("MORTAR_SHELL_RENDERER").as_deref() {
+        Ok("gpu") => crate::config::Renderer::Gpu,
+        Ok("cpu") => crate::config::Renderer::Cpu,
+        _ => ui.renderer,
+    };
+    let msaa = std::env::var("MORTAR_SHELL_GL_MSAA").ok().and_then(|v| v.parse().ok()).unwrap_or(ui.msaa);
+    let gpu = match (renderer_choice, &ui.gl_lib_dir) {
+        (crate::config::Renderer::Cpu, _) => {
+            tracing::info!("UI renderer: CPU (config)");
+            None
+        }
+        (_, None) => {
+            tracing::info!("UI renderer: CPU (no ui.glLibDir)");
+            None
+        }
+        (_, Some(dir)) => match GpuUi::new(&fd, (w, h), dir, msaa) {
+            Ok(g) => {
+                tracing::info!("UI renderer: GPU");
+                Some(g)
+            }
+            Err(e) => {
+                tracing::warn!("UI renderer: CPU (GPU unavailable: {e})");
+                None
+            }
+        },
+    };
+
     handle
         .insert_source(drm_notifier, |ev, _, shell: &mut Shell| match ev {
             DrmEvent::VBlank(_) => on_vblank(shell),
@@ -200,7 +245,10 @@ pub fn init(handle: &LoopHandle<'static, Shell>) -> Result<(DrmBackend, Output, 
                 if let super::backend::Backend::Drm(d) = &mut shell.backend {
                     d.drm.pause();
                     d.active = false;
-                    d.pending = false;
+                    d.pending = None;
+                    if let Some(g) = &mut d.gpu {
+                        g.released();
+                    }
                 }
             }
             SessionEvent::ActivateSession => {
@@ -210,6 +258,7 @@ pub fn init(handle: &LoopHandle<'static, Shell>) -> Result<(DrmBackend, Output, 
                         tracing::warn!("drm activate: {e:?}");
                     }
                     let _ = with_comp!(&mut d.comp, c => c.reset_state());
+                    d.gpu_shown = false;
                     d.active = true;
                 }
                 shell.inputs.enabled = true;
@@ -221,7 +270,21 @@ pub fn init(handle: &LoopHandle<'static, Shell>) -> Result<(DrmBackend, Output, 
         .map_err(|e| e.to_string())?;
 
     Ok((
-        DrmBackend { session, drm, comp, renderer, pending: false, active: true, frames: 0, scanout_frames: 0, direct: false },
+        DrmBackend {
+            session,
+            drm,
+            comp,
+            renderer,
+            gpu,
+            gpu_shown: false,
+            gpu_errors: 0,
+            gpu_frames: 0,
+            pending: None,
+            active: true,
+            frames: 0,
+            scanout_frames: 0,
+            direct: false,
+        },
         output,
         (w, h),
     ))
@@ -229,12 +292,25 @@ pub fn init(handle: &LoopHandle<'static, Shell>) -> Result<(DrmBackend, Output, 
 
 fn on_vblank(shell: &mut Shell) {
     if let super::backend::Backend::Drm(d) = &mut shell.backend {
-        with_comp!(&mut d.comp, c => {
-            if let Err(e) = c.frame_submitted() {
-                tracing::warn!("frame_submitted: {e:?}");
+        match d.pending.take() {
+            Some(Pending::Comp) => {
+                with_comp!(&mut d.comp, c => {
+                    if let Err(e) = c.frame_submitted() {
+                        tracing::warn!("frame_submitted: {e:?}");
+                    }
+                });
+                // our UI buffers are off screen now
+                if !d.gpu_shown && let Some(g) = &mut d.gpu {
+                    g.released();
+                }
             }
-        });
-        d.pending = false;
+            Some(Pending::Gpu) => {
+                if let Some(g) = &mut d.gpu {
+                    g.flipped();
+                }
+            }
+            None => {}
+        }
     }
     shell.frame_done();
     if shell.needs_redraw {
@@ -243,9 +319,100 @@ fn on_vblank(shell: &mut Shell) {
 }
 
 impl DrmBackend {
+    /// Free the GPU path in order (exit, or after an error).
+    pub fn drop_gpu(&mut self, why: &str) {
+        if let Some(mut g) = self.gpu.take() {
+            tracing::warn!("GPU UI off: {why}; drawing the UI on the CPU");
+            g.destroy();
+        }
+    }
+
+    pub fn shutdown(&mut self) {
+        if let Some(mut g) = self.gpu.take() {
+            g.destroy();
+        }
+    }
+
+    /// Draw the UI on the GPU and flip to it. False: not done (use the CPU).
+    fn render_gpu(&mut self, shell: &mut Shell) -> bool {
+        let Some(g) = self.gpu.as_mut() else { return false };
+        let scene = shell.build_scene();
+        let fb = match g.render(shell, &scene) {
+            Ok(fb) => fb,
+            Err(e) => {
+                self.drop_gpu(&e);
+                shell.gpu_ui = false;
+                return false;
+            }
+        };
+        let (w, h) = shell.size;
+        let surface = match &self.comp {
+            Comp::Gbm(c) => c.surface(),
+            Comp::Dumb(c) => c.surface(),
+        };
+        use smithay::backend::drm::{PlaneConfig, PlaneState};
+        use smithay::utils::{Rectangle, Transform};
+        let mut planes = vec![PlaneState {
+            handle: surface.plane(),
+            config: Some(PlaneConfig {
+                src: Rectangle::from_size((w as f64, h as f64).into()),
+                dst: Rectangle::from_size((w, h).into()),
+                transform: Transform::Normal,
+                alpha: 1.0,
+                damage_clips: None,
+                fb,
+                fence: None,
+            }),
+        }];
+        if !self.gpu_shown {
+            // the compositor may have used other planes: clear them
+            let p = surface.planes();
+            for pl in p.overlay.iter().chain(p.cursor.iter()) {
+                planes.push(PlaneState { handle: pl.handle, config: None });
+            }
+        }
+        // the first frame after start (boot screen) sets the mode: the CRTC
+        // was switched off when the device was opened
+        let r = if surface.commit_pending() { surface.commit(planes, true) } else { surface.page_flip(planes, true) };
+        match r {
+            Ok(()) => {
+                self.pending = Some(Pending::Gpu);
+                self.gpu_shown = true;
+                self.gpu_errors = 0;
+                self.gpu_frames += 1;
+                self.frames += 1;
+                shell.needs_redraw = false;
+                true
+            }
+            Err(e) => {
+                if let Some(g) = self.gpu.as_mut() {
+                    g.unqueue();
+                }
+                self.gpu_errors += 1;
+                tracing::warn!("UI page flip: {e:?}");
+                if self.gpu_errors >= 3 {
+                    self.drop_gpu("page flips keep failing");
+                    shell.gpu_ui = false;
+                }
+                false
+            }
+        }
+    }
+
     pub fn render(&mut self, shell: &mut Shell) {
-        if !self.active || self.pending {
+        if !self.active || self.pending.is_some() {
             return; // stays dirty; rendered at the next vblank / resume
+        }
+        if shell.ui_layer() {
+            if self.gpu.is_some() && self.render_gpu(shell) {
+                return;
+            }
+            shell.cpu_ui_frame();
+        }
+        if self.gpu_shown {
+            // back from the GPU UI: the compositor redraws all and recommits
+            let _ = with_comp!(&mut self.comp, c => c.reset_state());
+            self.gpu_shown = false;
         }
         let els = elements(shell, &mut self.renderer);
         // _ANY: a client buffer may go on the primary plane even if its
@@ -283,7 +450,7 @@ impl DrmBackend {
                 let q = with_comp!(&mut self.comp, c => c.queue_frame(()).map_err(|e| format!("{e:?}")));
                 match q {
                     Ok(()) => {
-                        self.pending = true;
+                        self.pending = Some(Pending::Comp);
                         self.frames += 1;
                     }
                     Err(e) => {

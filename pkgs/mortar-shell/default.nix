@@ -17,6 +17,7 @@
   libgbm,
   pixman,
   libxkbcommon,
+  alsa-lib,
 }:
 
 let
@@ -43,7 +44,7 @@ let
     cargoLock.lockFile = ./Cargo.lock;
 
     nativeBuildInputs = [ pkg-config ];
-    buildInputs = [ seatd libgbm pixman libxkbcommon ];
+    buildInputs = [ seatd libgbm pixman libxkbcommon alsa-lib ];
 
     env.MORTAR_UI_FONT_DIR = "${fonts}/share/fonts/mortar-ui";
 

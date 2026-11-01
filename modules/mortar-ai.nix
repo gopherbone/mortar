@@ -206,7 +206,7 @@ in
           claude = {
             name = "Claude Code";
             description = "Terminal · keeps running";
-            icon = "term";
+            icon = "claude";
             gamepad = "keyboard";
             singleInstance = true;
             order = 6;
@@ -217,7 +217,7 @@ in
           claude-pad = {
             name = "Claude";
             description = "A allows · B denies";
-            icon = "pad";
+            icon = "claude";
             gamepad = "keyboard";
             singleInstance = true;
             order = 7;
@@ -230,7 +230,7 @@ in
           claude-remote = {
             name = "Remote Control";
             description = "Claude from your phone";
-            icon = "link";
+            icon = "claude";
             gamepad = "keyboard";
             singleInstance = true;
             order = 8;

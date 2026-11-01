@@ -14,6 +14,8 @@ lto = "thin"
 mortar-ui = { path = "../mortar-ui", default-features = false }
 mortar-setup = { path = "../mortar-setup", default-features = false }
 libc = "0.2.191"
+fontdue = "0.9.5"
+resvg = { version = "0.49.0", default-features = false }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 tracing = "0.1"

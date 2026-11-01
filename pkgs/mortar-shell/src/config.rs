@@ -41,6 +41,9 @@ pub struct AppEntry {
     /// Launching it again switches to the running instance.
     #[serde(default = "yes")]
     pub single_instance: bool,
+    /// Tile illustration (default: guessed from id, name and icon).
+    #[serde(default)]
+    pub art: Option<crate::art::Art>,
 }
 
 fn default_icon() -> Icon {
@@ -124,6 +127,68 @@ pub struct Config {
     /// open its screens (unset: those rows only show the state).
     #[serde(default)]
     pub setup_socket: Option<std::path::PathBuf>,
+    /// The shell's own screens: renderer, motion, sounds, haptics.
+    #[serde(default)]
+    pub ui: UiConfig,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Renderer {
+    /// GLES on the PowerVR when `glLibDir` is set and it initialises, else CPU.
+    #[default]
+    Auto,
+    Gpu,
+    Cpu,
+}
+
+/// Defaults for the user settings (the Settings tab overrides them, saved
+/// in $XDG_STATE_HOME/mortar-shell/prefs.json) and the fixed UI options.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields, default)]
+pub struct UiConfig {
+    pub renderer: Renderer,
+    /// The stock PowerVR EGL/GLES libraries (libEGL.so.1, libGLESv2.so.2).
+    pub gl_lib_dir: Option<std::path::PathBuf>,
+    /// Multisampling for the GPU UI (EXT_multisampled_render_to_texture): 0 or 4.
+    pub msaa: u32,
+    pub motion: crate::motion::Preset,
+    pub reduce_motion: bool,
+    pub sounds: bool,
+    pub sound_volume: u8,
+    pub haptics: bool,
+    pub haptic_ms: crate::haptics::Pulses,
+    /// "day" | "night" (default: from `theme`).
+    pub palette: Option<String>,
+    pub boot_animation: bool,
+    /// ALSA PCM for UI sounds.
+    pub audio_device: String,
+    /// Where screenshots go ("~" is the home directory).
+    pub screenshot_dir: String,
+    /// Frame callbacks per second for apps whose live card shows in the
+    /// MENU drawer.
+    pub card_fps: u32,
+}
+
+impl Default for UiConfig {
+    fn default() -> Self {
+        UiConfig {
+            renderer: Renderer::Auto,
+            gl_lib_dir: None,
+            msaa: 4,
+            motion: crate::motion::Preset::Bouncy,
+            reduce_motion: false,
+            sounds: true,
+            sound_volume: 60,
+            haptics: true,
+            haptic_ms: crate::haptics::Pulses::default(),
+            palette: None,
+            boot_animation: true,
+            audio_device: "default".into(),
+            screenshot_dir: "~/Pictures/Screenshots".into(),
+            card_fps: 15,
+        }
+    }
 }
 
 fn d_bg_fps() -> u32 {
@@ -166,6 +231,76 @@ impl Config {
     pub fn app(&self, id: &str) -> Option<&AppEntry> {
         self.apps.iter().find(|a| a.id == id)
     }
+    /// The settings before the user changed any.
+    pub fn default_prefs(&self) -> crate::shellui::Prefs {
+        let u = &self.ui;
+        let night = match u.palette.as_deref() {
+            Some(p) => p == "night" || p == "dark",
+            None => self.theme.as_deref().is_some_and(|t| t == "dark" || t == "night"),
+        };
+        crate::shellui::Prefs {
+            sounds: u.sounds,
+            sound_volume: u.sound_volume.min(100),
+            haptics: u.haptics,
+            motion: u.motion,
+            reduce_motion: u.reduce_motion,
+            night,
+        }
+    }
+}
+
+/// $XDG_STATE_HOME/mortar-shell/prefs.json (else ~/.local/state/...).
+pub fn prefs_path() -> std::path::PathBuf {
+    let base = std::env::var_os("XDG_STATE_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".local/state")))
+        .unwrap_or_else(std::env::temp_dir);
+    base.join("mortar-shell/prefs.json")
+}
+
+/// The saved settings over the config's defaults.
+pub fn load_prefs(defaults: crate::shellui::Prefs) -> crate::shellui::Prefs {
+    let p = prefs_path();
+    let Ok(s) = std::fs::read_to_string(&p) else { return defaults };
+    // fields missing from the file keep the module's defaults
+    let mut base = serde_json::to_value(&defaults).unwrap_or_default();
+    match serde_json::from_str::<serde_json::Value>(&s) {
+        Ok(serde_json::Value::Object(m)) => {
+            if let serde_json::Value::Object(b) = &mut base {
+                for (k, v) in m {
+                    b.insert(k, v);
+                }
+            }
+            serde_json::from_value(base).unwrap_or(defaults)
+        }
+        _ => {
+            tracing::warn!("{}: not a settings object; ignored", p.display());
+            defaults
+        }
+    }
+}
+
+pub fn save_prefs(p: &crate::shellui::Prefs) {
+    let path = prefs_path();
+    if let Some(d) = path.parent() {
+        let _ = std::fs::create_dir_all(d);
+    }
+    let tmp = path.with_extension("json.tmp");
+    let r = serde_json::to_vec_pretty(p)
+        .map_err(|e| e.to_string())
+        .and_then(|b| std::fs::write(&tmp, b).map_err(|e| e.to_string()))
+        .and_then(|_| std::fs::rename(&tmp, &path).map_err(|e| e.to_string()));
+    if let Err(e) = r {
+        tracing::warn!("{}: {e}", path.display());
+    }
+}
+
+/// Expand a leading "~/".
+pub fn expand_home(p: &str) -> std::path::PathBuf {
+    match (p.strip_prefix("~/"), std::env::var_os("HOME")) {
+        (Some(rest), Some(h)) => std::path::PathBuf::from(h).join(rest),
+        _ => std::path::PathBuf::from(p),
+    }
 }
 
 /// The first "[NN%]" in amixer's output.
@@ -194,6 +329,23 @@ mod tests {
         assert!(c.apps[1].single_instance);
         assert_eq!(c.background_fps, 5);
         assert_eq!(c.actions.sleep, vec!["systemctl", "suspend"]);
+    }
+
+    #[test]
+    fn ui_section() {
+        let c: Config = serde_json::from_str(
+            r#"{"theme":"dark","ui":{"renderer":"cpu","motion":"snappy","soundVolume":30,"hapticMs":{"tick":12,"double":18,"gap":72,"long":60},
+                "audioDevice":"default","bootAnimation":true,"cardFps":15,"glLibDir":null,"haptics":true,"msaa":4,
+                "palette":"night","reduceMotion":false,"screenshotDir":"~/Pictures/Screenshots","sounds":true},
+                "apps":[{"id":"x","name":"X","command":["x"],"art":"claude"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(c.ui.renderer, Renderer::Cpu);
+        assert_eq!(c.ui.haptic_ms.tick, 12);
+        assert_eq!(c.ui.haptic_ms.long, 60);
+        assert_eq!(c.apps[0].art, Some(crate::art::Art::Claude));
+        let p = c.default_prefs();
+        assert!(p.night && p.motion == crate::motion::Preset::Snappy && p.sound_volume == 30);
     }
 
     #[test]

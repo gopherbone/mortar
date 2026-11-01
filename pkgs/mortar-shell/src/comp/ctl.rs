@@ -8,7 +8,12 @@
 //!   mortar-shell ctl screenshot /tmp/screen.png
 //!
 //! Commands: state | press B | down B | up B | key CODE | launch ID |
-//! focus UID|ID | close UID|ID | screenshot PATH | home | quit.
+//! focus UID|ID | close UID|ID | screenshot PATH | home | quit, and for the
+//! UI: shot (the screenshot combo: flash, sound, file in screenshotDir),
+//! toast JSON ({"title", "sub", "kind": "info"|"achievement", "sound",
+//! "secs"}; `mortar-shell toast` builds it), boot (replay the boot screen),
+//! time manual|real|+MS (freeze UI time / step it, for test frames),
+//! prefs (the current settings).
 //! The socket is $XDG_RUNTIME_DIR/mortar-shell.sock (mode 0600).
 
 use super::state::Shell;
@@ -109,11 +114,40 @@ pub fn command(shell: &mut Shell, line: &str) -> Result<String, String> {
             "ok".into()
         }
         "home" => {
-            shell.apps.mru.clear();
-            shell.overlay.visible = false;
+            shell.at_home = true;
             shell.refocus();
             "ok".into()
         }
+        "shot" => {
+            shell.screenshot_combo();
+            "ok".into()
+        }
+        "toast" => {
+            shell.toast_json(arg)?;
+            "ok".into()
+        }
+        "boot" => {
+            shell.sui.play_boot();
+            shell.sync_cover();
+            shell.needs_redraw = true;
+            "ok".into()
+        }
+        "time" => {
+            match arg {
+                "manual" => shell.manual_time = true,
+                "real" => {
+                    shell.manual_time = false;
+                    shell.last_step = std::time::Instant::now();
+                }
+                a if a.starts_with('+') => {
+                    let ms: u32 = a[1..].parse().map_err(|_| "time +MS")?;
+                    shell.ui_advance(ms);
+                }
+                _ => return Err("time manual | real | +MS".into()),
+            }
+            "ok".into()
+        }
+        "prefs" => serde_json::to_string(&shell.sui.prefs).map_err(|e| e.to_string())?,
         "screenshot" => {
             if arg.is_empty() {
                 return Err("screenshot needs a path".into());
@@ -156,14 +190,22 @@ fn state(shell: &Shell) -> String {
         .collect();
     json!({
         "socket": shell.socket_name,
-        "overlay": shell.overlay.visible,
-        "tab": format!("{:?}", shell.overlay.tab),
-        "home": shell.shell_screen() && !shell.overlay.visible,
+        "overlay": shell.sui.menu_open() || shell.sui.page_open(),
+        "tab": shell.sui.tab().map(|t| format!("{t:?}")),
+        "home": shell.visible_app().is_none() && !shell.sui.menu_open(),
+        "ui": {
+            "layer": shell.ui_layer(),
+            "booting": shell.sui.booting(),
+            "pace": format!("{:?}", shell.sui.pace(shell.visible_app().is_some())),
+            "renderer": if shell.gpu_ui { "gpu" } else { "cpu" },
+            "prefs": serde_json::to_value(&shell.sui.prefs).unwrap_or_default(),
+        },
         "visible": vis,
         "osk": shell.osk.visible,
         "held": shell.router.held(),
         "apps": apps,
         "frames": shell.backend.frames(),
+        "gpu_frames": shell.backend.gpu_frames(),
         "scanout_frames": shell.backend.scanout_frames(),
         "rss_kib": rss_kib(),
         "inputs": shell.inputs.summary(),

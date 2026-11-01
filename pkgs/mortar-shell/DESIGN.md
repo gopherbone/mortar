@@ -15,9 +15,16 @@ pkgs/mortar-shell/
   src/config.rs      /etc/mortar-shell/config.json (written by the module)
   src/apps.rs        running apps: launch, pid ancestry -> app, MRU, close, reap
   src/router.rs      who gets a pad button (pure, unit-tested)
-  src/overlay.rs     home screen + MENU overlay (mortar-ui toolkit)
+  src/shellui.rs     the shell UI: boot, home, MENU drawer, transitions,
+                     OSD, toasts (pure state + scene building, unit-tested)
+  src/motion.rs      springs and the Bouncy/Calm/Snappy presets
+  src/scene.rs       display list (shapes, text, images) both renderers draw
+  src/raster.rs      CPU renderer of scenes (tiny-skia)
+  src/art.rs         palette + isometric app illustrations (vector)
+  src/sfx.rs         UI sound synth + ALSA player thread
+  src/haptics.rs     rumble ticks (gpio-vibrator FF device), thread
   src/osk.rs         on-screen keyboard + pad-as-keyboard mapping
-  src/preview.rs     render shell screens to PNG without a compositor
+  src/preview.rs     render shell screens / transition frames to PNG
   src/comp/          Linux only
     state.rs         Smithay state + handlers, focus, input dispatch
     backend.rs       element list (renderer-generic), headless backend, screenshots
@@ -26,7 +33,11 @@ pkgs/mortar-shell/
     pads.rs          per-app uinput gamepads
     ctl.rs           control socket
     scanout.rs       direct scanout of client dmabufs (PRIME import)
-  test.nix           headless integration test (screenshots)
+    ui.rs            the compositor side of the UI: view, actions, CPU
+                     images, screenshots, toasts
+    gl.rs            GLES 2 renderer of scenes on the stock PowerVR libs
+    gpu.rs           GPU UI presenter: dumb-buffer targets, app textures
+  test.nix           headless integration test (screenshots, transition frames)
 modules/mortar-shell.nix
 ```
 
@@ -75,20 +86,78 @@ on black.
 
 ## Screens
 
-- Home (no app visible): launcher tiles (mockup 7) and the SSH strip;
-  MENU flips between Launch and Settings.
-- MENU over an app (mockup 10, "switch session" became "switch app"):
-  tabs Apps (switch with A, close with X twice), Launch (tiles; starting a
-  running single-instance app switches to it) and Settings (brightness and
-  volume with left/right, on-screen keyboard, Wi-Fi state, SSH sessions,
-  sleep, log out, restart, power off; destructive items need a second
-  press). B or MENU returns to the app.
-- Volume keys work everywhere; over an app a small lime OSD shows the level
-  for 1.5 s.
-- All of it is drawn with the mortar-ui toolkit in the shared theme
-  (style v2: pale ground, ink outlines, square blocks, lime selection),
-  into a CPU canvas that is uploaded to a Smithay memory buffer only when
-  something changed.
+The look and motion follow the approved prototype (plan/mortar-motion.html):
+Pond palette (day and night), Instrument Serif / Onest / Geist Mono, flat
+blocks with 1 px ink outlines, isometric illustrations.
+
+- Boot: four coloured blocks fly in and settle into a square (a tick and
+  a haptic tick each), the serif wordmark rises with a chime, then the
+  screen slides up (2.7 s; `ui.bootAnimation`).
+- Home (no app in front): status bar (time, "N running", SSH, Wi-Fi,
+  battery), the big serif clock and date, a row of tiles (one per
+  launcher entry: isometric illustration, serif name, description,
+  RUNNING tag) over slowly drifting flat shapes. The focused tile lifts
+  onto a lavender offset block; Left/Right move, A launches. The drift
+  runs for 30 s after the last press, then the screen goes idle.
+- Launch: the app grows out of its tile in its accent colour (whoosh,
+  double haptic) and fades in once its first buffer arrives; if it is
+  slow, the accent fills the screen with the illustration and
+  "STARTING…" until it maps (B: back home, it keeps starting; 20 s
+  timeout). Closing to home is the reverse: the app shrinks into its tile.
+- MENU (anywhere, on its own): the drawer drops with a bounce over a
+  scrim. Tabs (L1/R1):
+  - Apps: a fanned stack of live cards: Home plus every running app,
+    most recent first, each showing the app's current buffer. The
+    previous app is preselected, so MENU, A flips between two apps. A
+    switches (the app slides in from the right), X flicks the card away
+    and closes the app, Home goes home.
+  - Launch: a 3-column grid of all entries; starting from home grows the
+    app from its tile, from an app slides it in.
+  - Settings: UI sounds, Haptic ticks, Motion (Bouncy/Calm/Snappy),
+    Reduce motion, Palette (Day/Night), Volume, Brightness, On-screen
+    keyboard (keyboard apps), Wi-Fi and Remote access (mortar-setup
+    pages), Sleep, Log out, Restart, Power off (the last three need a
+    second A). Changes are saved in $XDG_STATE_HOME/mortar-shell/prefs.json
+    over the module's defaults (`mortar.shell.ui.*`).
+  B or MENU closes the drawer (it rises), then the chosen action runs.
+- Volume keys work everywhere: an OSD slides in from the right with the
+  level (and a pitch-tracking blip); brightness uses the same OSD.
+- Screenshot: VOL+ and VOL- together (the shell owns those keys, so no
+  app or game ever sees the chord). Shutter flash, shutter sound, long
+  buzz, PNG in `ui.screenshotDir` (~/Pictures/Screenshots), then a toast.
+  `mortar-shell ctl shot` does the same remotely.
+- Toasts: yellow block dropping from the top (info, or "achievement" with
+  a star and the unlock jingle; achievements queue). Apps raise them with
+  `mortar-shell toast [--achievement] [--sound NAME|none] [--secs S]
+  TITLE [SUBTITLE]` (control socket `toast {json}`), e.g. mortar-play for
+  RetroAchievements.
+
+### Motion
+
+Springs (motion.rs) integrate like the prototype (semi-implicit Euler in
+1/240 s slices): Bouncy k=320 zeta=0.62 (default), Calm k=260 zeta=1,
+Snappy k=620 zeta=0.78; Reduce motion uses k=420 zeta=1 and stops the
+drift. UI time is real time, clamped to 50 ms a step; `ctl time manual`
+and `ctl time +MS` step it by hand for test frames.
+
+The compositor redraws every vblank while something moves (`Pace::Full`),
+at 20 fps while only the background drifts, and not at all at rest; with
+no UI layer the app is shown exactly as before (direct scanout).
+
+### Sounds and haptics
+
+`sfx.rs` synthesises the prototype's SFX table (PolyBLEP square,
+triangle, sine with exponential pitch sweeps; white noise through a
+swept RBJ band-pass; WebAudio-style attack + exponential decay) at 44.1
+kHz and mixes voices in a thread that writes 256-frame periods to ALSA
+"default" (the codec dmix). The PCM is opened on the first sound and
+closed after 4 s of silence. `mortar-shell sfx NAME [--wav FILE]` plays
+or renders one.
+
+`haptics.rs` uploads one FF_RUMBLE effect to the `gpio-vibrator` device
+and times pulses in a thread: tick 8 ms, double 2 x 18 ms (72 ms apart),
+long 60 ms (`ui.hapticMs`). The motor is on/off, so length is the feel.
+Pulses arriving while one plays are dropped.
 
 ## Input ownership
 
@@ -173,6 +242,44 @@ with any client that takes keyboard input.
   focused, word suggestions, and a symbols layer.
 
 ## Rendering
+
+### The shell UI
+
+The UI builds a display list (`scene::Scene`: polygons, strokes, cached
+concave shapes such as the Claude Spark, text runs, images of app buffers
+and CPU layers, clip rectangles) each frame it animates. Two renderers
+draw it:
+
+- GPU (`comp/gl.rs`, `comp/gpu.rs`), default when `mortar.gpu.enable`:
+  the stock PowerVR EGL/GLES 2 loaded with dlopen from `ui.glLibDir`; a
+  16x16 pbuffer context (as kms-gles); two sun4i dumb buffers (CMA,
+  3 MB each) imported with EGL_EXT_image_dma_buf_import as FBO targets
+  (4x MSAA through EXT_multisampled_render_to_texture when present,
+  `ui.msaa`); glFinish, then a page flip on the DrmCompositor's own
+  surface (the first frame after start commits the mode). Shapes are
+  fanned or ear-clipped triangles, text comes from a 2048x1024 A8 glyph
+  atlas, app images are the clients' dma-bufs imported once per buffer
+  (no copy) or wl_shm buffers uploaded on commit; the keyboard strip and
+  setup pages are CPU-drawn layers uploaded when they change. When no UI
+  layer shows, the DrmCompositor takes over again (`reset_state`, full
+  frame): direct scanout of a GPU app, the opaque copy of an shm app.
+  Any EGL/GL error, a failed import of a render target or three failed
+  flips drop the GPU path for the session after an orderly teardown
+  (glFinish, delete, eglTerminate) and the CPU renderer takes over. No
+  EGL window surfaces are ever created (the DC path that latched the GPU
+  in early tests). Client buffers' textures are freed when the buffer is
+  destroyed, so their CMA is not held.
+- CPU (`raster.rs`, tiny-skia + fontdue): the headless backend, previews,
+  screenshots, `ui.renderer = "cpu"` and the fallback. It draws full
+  frames into a memory buffer that pixman composites; app images are CPU
+  copies made once per commit (dma-bufs read through a mapping, so
+  GPU-app redraws under the UI are held to 5/s).
+
+`MORTAR_SHELL_RENDERER=cpu|gpu` and `MORTAR_SHELL_GL_MSAA=0|4` override
+the config for one run; `ctl state` reports `ui.renderer`, `frames`,
+`gpu_frames`, `scanout_frames`.
+
+### Apps
 
 The compositor renders with Smithay's pixman (CPU) renderer. GPU apps
 render on the PowerVR into dma-bufs that the shell puts straight on the
@@ -264,8 +371,9 @@ Options:
    cheaper, but it does not by itself give apps a GPU path, and with
    direct scanout the fullscreen GPU app needs no composition at all. It
    would also put the shell, which must never die, on a GPU whose faults
-   latch it until reboot. Not done; mortar-wlegl already answers
-   `EGL_PLATFORM_SURFACELESS_MESA`, the first thing it would need.
+   latch it until reboot. Not done for app composition; the shell's own
+   UI layers do use the GPU now (see "The shell UI" above: own GL code,
+   not Smithay's GlesRenderer, with a CPU fallback on any error).
 4. **Let apps keep presenting through brick_dc_drm** and have the shell
    scan out the DC's buffers. Rejected: the DC drives the CRTC, it is one
    process at a time, and those apps would not be Wayland clients (no
@@ -304,8 +412,8 @@ What is on screen when:
 | Screen | Path |
 |---|---|
 | GPU app alone | its dma-buf on the primary plane; the shell only flips |
-| MENU overlay / home | the opaque overlay, drawn by pixman into the swapchain; the app is not drawn; it is `suspended` and gets background-rate frame callbacks |
-| volume OSD or OSK over a GPU app | composited: pixman reads the app's dma-buf (write-combined, so slower than an shm copy) for those frames only |
+| MENU drawer / home / transitions / OSD / toasts | GPU UI renderer into its own dumb buffers (app images sampled from their dma-bufs); the app under the drawer is `suspended`, apps whose cards show get `ui.cardFps` frame callbacks. CPU fallback: full frames by tiny-skia, composited by pixman |
+| OSK over a GPU app (nothing else) | composited: pixman reads the app's dma-buf (write-combined, so slower than an shm copy) for those frames only |
 | shm app (foot, llvmpipe SDL) | opaque copy, as above |
 
 The OSD could go on an overlay plane over the scanned-out app instead
@@ -344,7 +452,8 @@ Costs and limits:
   (`mortar.gpu.cmaMegabytes`).
 - The GPU latches until reboot after a fault; apps then fail at
   eglInitialize/surface creation and mortar-sdl-run falls back to
-  software GL. The shell itself never touches the GPU.
+  software GL. The shell's UI renderer then fails its EGL setup and draws
+  on the CPU.
 - eglInitialize on the stock libs needs a registered DC device, so
   brick_dc_drm stays loaded; mortar-wlegl never creates DC window
   surfaces.
@@ -357,6 +466,7 @@ Costs and limits:
 |---|---|
 | mortar-shell RSS | 58 MB measured in the headless test with two apps, of which ~12 MB are the clients' mapped shm buffers and ~6 MB the screenshot renderer; the rest: UI canvas, overlay and OSK buffers (~8 MB), their pixman textures, fonts and glyph caches, Smithay state. Expect ~40-60 MB on the device. |
 | Scanout | 2-3 swapchain buffers x 3 MB (CMA/dumb) |
+| GPU UI | 2 dumb buffers x 3 MB (CMA), glyph atlas 2 MB and app textures (GPU memory; dma-buf imports share the client's buffer) |
 | Per shm app | 2-3 client buffers x 3 MB, shared with the client |
 | SDL app on llvmpipe | ~160 MB RSS, mostly shared libraries (pkgs/mortar-apps notes) |
 | SDL app on the GPU (mortar-wlegl) | ~40-45 MB RSS (43 MB measured for m8c on the DC path) + 1-4 x 3 MB CMA dma-bufs |
@@ -370,7 +480,9 @@ records the shell's RSS (`rss_kib` in state.json).
 
 `$XDG_RUNTIME_DIR/mortar-shell.sock` (0600), one line per connection:
 `state` (JSON), `press|down|up BUTTON`, `key CODE`, `launch ID`,
-`focus ID`, `close ID`, `home`, `screenshot PATH`, `quit`. Tests drive the
+`focus ID`, `close ID`, `home`, `screenshot PATH`, `shot` (the screenshot
+combo), `toast JSON`, `boot` (replay), `time manual|real|+MS`, `prefs`,
+`quit`. Tests drive the
 shell through it; over SSH it gives remote screenshots and app control
 (`XDG_RUNTIME_DIR=/run/user/0 mortar-shell ctl state`).
 
@@ -399,9 +511,13 @@ shell through it; over SSH it gives remote screenshots and app control
 - `passthru.tests.headless`: the compositor on the headless backend in
   the build sandbox; weston-fullscreen (wl_shm) and foot started from the
   launcher with injected buttons; typing through keys and the OSK;
-  switching back; closing; a screenshot after every step.
-- `mortar-shell preview --screen ...` renders the shell's screens on any OS
-  for UI work.
+  switching back; closing from the fan; a screenshot after every step;
+  then UI time frozen and stepped for transition frames (`t-*.png`:
+  drawer, launch, close, OSD, toast, shutter, night palette, boot), the
+  screenshot file and the saved settings checked.
+- `mortar-shell preview --screen ... [--at MS --frames N --every MS]`
+  renders screens and transition frames on any OS for UI work (demo
+  apps).
 
 ## Open questions
 

@@ -27,7 +27,7 @@ let
   cfg = config.mortar.shell;
   greeter = config.mortar.greeter;
 
-  icons = [ "wifi" "bat" "usb" "cable" "file" "skip" "term" "folder" "pad" "gear" "link" "check" "lock" "power" ];
+  icons = [ "wifi" "bat" "usb" "cable" "file" "skip" "term" "folder" "pad" "gear" "link" "check" "lock" "power" "claude" ];
 
   appType = types.submodule (
     { name, ... }:
@@ -46,7 +46,15 @@ let
         icon = mkOption {
           type = types.enum icons;
           default = "pad";
-          description = "Line icon from the Mortar UI set.";
+          description = "Line icon from the Mortar UI set (`claude`: the Claude Spark, for Claude apps only).";
+        };
+        art = mkOption {
+          type = types.nullOr (types.enum arts);
+          default = null;
+          description = ''
+            Isometric illustration on the home tile and in the Launch grid
+            (`null`: guessed from the id, name and icon).
+          '';
         };
         command = mkOption {
           type = types.either types.str (types.listOf types.str);
@@ -84,6 +92,8 @@ let
       };
     }
   );
+
+  arts = [ "m8" "pico8" "games" "claude" "puzzle" "term" "generic" ];
 
   argv = c: if builtins.isString c then [ "${pkgs.runtimeShell}" "-c" c ] else c;
 
@@ -123,11 +133,13 @@ let
     order = 5;
     command = cfg.terminal.command;
     env = { };
+    art = "term";
   };
 
   fromGreeter = lib.mapAttrs (
     id: s: {
       inherit (s) name description icon env order;
+      art = null;
       command = s.command;
       gamepad = "forward";
       singleInstance = true;
@@ -148,7 +160,14 @@ let
       apps = map (a: {
         inherit (a) id name description icon env gamepad singleInstance;
         command = argv a.command;
-      }) sorted;
+      } // lib.optionalAttrs (a.art or null != null) { inherit (a) art; }) sorted;
+      ui = {
+        inherit (cfg.ui) renderer motion reduceMotion sounds soundVolume haptics bootAnimation screenshotDir cardFps msaa audioDevice;
+        hapticMs = cfg.ui.hapticMs;
+        palette = if cfg.ui.palette != null then cfg.ui.palette else (if cfg.theme == "dark" then "night" else "day");
+        # the stock PowerVR libs for the GPU UI renderer (modules/brick-gpu.nix)
+        glLibDir = if (config.mortar.gpu.enable or false) then "${config.mortar.gpu.package}/lib" else null;
+      };
       inherit (cfg) autostart backgroundFps theme keyboardLayout;
       # SDL apps started through mortar-sdl-run (modules/brick-gpu.nix)
       # must not take the GPU's display path (brick_dc_drm drives the CRTC,
@@ -264,6 +283,87 @@ in
       description = "Theme of the shell's own screens (mortar-ui style v2).";
     };
 
+    ui = {
+      renderer = mkOption {
+        type = types.enum [ "auto" "gpu" "cpu" ];
+        default = "auto";
+        description = ''
+          What draws the shell's own screens (home, drawer, transitions,
+          OSD, toasts): `auto`/`gpu` use GLES on the PowerVR when
+          `mortar.gpu.enable` and it initialises (falling back to the CPU on
+          any error), `cpu` always draws with tiny-skia (slower animations).
+          `MORTAR_SHELL_RENDERER=cpu|gpu` overrides it for one run.
+        '';
+      };
+      motion = mkOption {
+        type = types.enum [ "bouncy" "calm" "snappy" ];
+        default = "bouncy";
+        description = "Default spring preset (Settings > Motion changes it per user).";
+      };
+      reduceMotion = mkOption {
+        type = types.bool;
+        default = false;
+        description = "Default for Settings > Reduce motion: no overshoot, no drifting background.";
+      };
+      sounds = mkOption {
+        type = types.bool;
+        default = true;
+        description = "Default for Settings > UI sounds.";
+      };
+      soundVolume = mkOption {
+        type = types.ints.between 0 100;
+        default = 60;
+        description = "UI sound volume (percent of full scale, before the system volume).";
+      };
+      audioDevice = mkOption {
+        type = types.str;
+        default = "default";
+        description = "ALSA PCM for UI sounds (the codec's dmix by default, see mortar-apps.nix).";
+      };
+      haptics = mkOption {
+        type = types.bool;
+        default = true;
+        description = "Default for Settings > Haptic ticks (the gpio-vibrator rumble motor).";
+      };
+      hapticMs = mkOption {
+        type = types.submodule {
+          options = {
+            tick = mkOption { type = types.ints.positive; default = 8; description = "Pulse on moves (ms)."; };
+            double = mkOption { type = types.ints.positive; default = 18; description = "Each of the two pulses on launch/close (ms)."; };
+            gap = mkOption { type = types.ints.positive; default = 72; description = "Gap between the double pulses (ms)."; };
+            long = mkOption { type = types.ints.positive; default = 60; description = "Pulse on screenshots (ms)."; };
+          };
+        };
+        default = { };
+        description = "Haptic pulse lengths; the motor is on/off, so length is the feel.";
+      };
+      palette = mkOption {
+        type = types.nullOr (types.enum [ "day" "night" ]);
+        default = null;
+        description = "Default for Settings > Palette (null: from `theme`).";
+      };
+      bootAnimation = mkOption {
+        type = types.bool;
+        default = true;
+        description = "Play the boot screen (blocks, wordmark, chime) when the shell starts.";
+      };
+      screenshotDir = mkOption {
+        type = types.str;
+        default = "~/Pictures/Screenshots";
+        description = "Where VOL+ and VOL- pressed together save screenshots.";
+      };
+      cardFps = mkOption {
+        type = types.ints.unsigned;
+        default = 15;
+        description = "Frame callbacks per second for apps while their live cards show in the MENU drawer.";
+      };
+      msaa = mkOption {
+        type = types.enum [ 0 4 ];
+        default = 4;
+        description = "Multisampling for the GPU UI (EXT_multisampled_render_to_texture, if the driver has it).";
+      };
+    };
+
     keyboardLayout = mkOption {
       type = types.str;
       default = "us";
@@ -333,7 +433,7 @@ in
         # (Group members, not users.users: the greeter's default profiles are
         # computed from users.users.)
         hardware.uinput.enable = true;
-        users.groups = lib.genAttrs [ "uinput" "input" "video" ] (_: {
+        users.groups = lib.genAttrs [ "uinput" "input" "video" "audio" ] (_: {
           members = lib.filter (u: u != "root") profileUsers;
         });
         boot.kernelPatches = lib.optional cfg.kernelUinput {

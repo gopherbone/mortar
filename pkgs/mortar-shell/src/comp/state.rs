@@ -8,12 +8,12 @@ use super::pads::Pads;
 use crate::apps::{Apps, LaunchEnv};
 use crate::config::{parse_volume, Config, GamepadMode};
 use crate::osk::{self, Osk, OskOut, PadKey, Tap};
-use crate::overlay::{self, Action, LauncherInfo, Overlay, RunningInfo, View};
 use crate::router::{Receiver, Routed, Router};
+use crate::shellui::{Pace, ShellUi, Toast};
 
 use mortar_ui::gfx::{Fonts, Rect, Ui};
 use mortar_ui::input::{codes, map_evdev_key, Button, Repeater};
-use mortar_ui::status::{Backlight, Sys};
+use mortar_ui::status::Sys;
 
 use smithay::backend::allocator::Fourcc;
 use smithay::backend::renderer::element::memory::MemoryRenderBuffer;
@@ -98,7 +98,37 @@ pub struct Shell {
     pub apps: Apps<Window>,
     /// Launched by a user action and should be shown when it maps.
     pub pending_focus: Option<u32>,
-    pub overlay: Overlay,
+    /// The shell UI (home, drawer, transitions, OSD, toasts, boot).
+    pub sui: ShellUi,
+    /// Fonts for scenes (taken out while a renderer borrows the shell).
+    pub typo: Option<crate::scene::Typo>,
+    pub raster: crate::raster::Raster,
+    pub cpu_imgs: super::ui::CpuImages,
+    /// The software renderer's frame.
+    pub ui_pm: resvg::tiny_skia::Pixmap,
+    /// The home screen is up (the front app keeps running behind it).
+    pub at_home: bool,
+    pub last_step: Instant,
+    /// UI time only moves on `ctl time +MS` (tests).
+    pub manual_time: bool,
+    pub sfx: crate::sfx::Player,
+    pub haptics: crate::haptics::Haptics,
+    /// Apps whose images the last scene showed (their commits redraw).
+    pub scene_apps: Vec<u32>,
+    /// Bumped when a CPU layer (keyboard strip, setup page) changes.
+    pub layer_gen: u64,
+    pub page_dirty: bool,
+    pub page_tick: Option<Instant>,
+    pub pending_toast: Option<(Instant, Toast)>,
+    pub last_cover: (bool, bool),
+    last_ambient: Instant,
+    last_card_tick: Instant,
+    /// Volume keys held (up, down), and whether they made a screenshot.
+    vol_held: [bool; 2],
+    vol_combo: bool,
+    pub host: String,
+    /// The UI is drawn on the GPU (else on the CPU).
+    pub gpu_ui: bool,
     pub osk: Osk,
     pub router: Router,
     pub pads: Pads,
@@ -120,17 +150,15 @@ pub struct Shell {
     pub overlay_buf: MemoryRenderBuffer,
     pub osk_buf: MemoryRenderBuffer,
     pub osk_h: i32,
-    pub osd_buf: Option<MemoryRenderBuffer>,
-    pub osd_w: i32,
-    osd_until: Option<Instant>,
-    /// The shell screen (home/overlay) must be redrawn.
+    /// The shell's screens must be redrawn.
     pub ui_dirty: bool,
     pub osk_dirty: bool,
     /// Something on screen changed; the backend should render a frame.
     pub needs_redraw: bool,
-    /// A dmabuf (GPU) app committed while the OSD or OSK covers it, so its
-    /// frame must be composited by pixman from write-combined memory
-    /// (~60 ms a frame). Those redraws are held to `SLOW_COMPOSITE`.
+    /// A dmabuf (GPU) app committed while the OSK covers it (or, on the CPU
+    /// renderer, a UI layer), so its frame must be read by the CPU from
+    /// write-combined memory (~60 ms a frame). Those redraws are held to
+    /// `SLOW_COMPOSITE`.
     slow_redraw: bool,
     last_slow_redraw: Instant,
     /// Screen content changed while nothing was rendered: shown/hidden
@@ -169,13 +197,21 @@ impl Shell {
 
         let fonts = Fonts::load(&mortar_ui::gfx::font_dir())?;
         let ui = Ui::new(size.0 as u32, size.1 as u32, fonts);
+        let typo = crate::scene::Typo::new(Fonts::load(&mortar_ui::gfx::font_dir())?);
+        let headless = matches!(backend, Backend::Headless(_));
+        let prefs = crate::config::load_prefs(cfg.default_prefs());
+        let sui = ShellUi::new(prefs, cfg.ui.boot_animation);
+        let sfx = crate::sfx::Player::new(if headless { None } else { Some(cfg.ui.audio_device.clone()) });
+        let haptics = if headless { crate::haptics::Haptics::off() } else { crate::haptics::Haptics::start(cfg.ui.haptic_ms) };
+        let gpu_ui = backend.has_gpu_ui();
+        let host = std::fs::read_to_string("/proc/sys/kernel/hostname").map(|h| h.trim().to_string()).unwrap_or_else(|_| "brick".into());
+        let ui_pm = resvg::tiny_skia::Pixmap::new(size.0 as u32, size.1 as u32).ok_or("canvas size")?;
         let osk_h = osk::height(&ui) as i32;
         let overlay_buf = opaque_buffer(size.0, size.1);
         let osk_buf = opaque_buffer(size.0, osk_h);
 
         let viewporter_dh = dh.clone();
-        let setup_socket = cfg.setup_socket.clone();
-        Ok(Shell {
+        let mut shell = Shell {
             dh,
             loop_handle,
             signal,
@@ -199,7 +235,28 @@ impl Shell {
             cfg,
             apps: Apps::default(),
             pending_focus: None,
-            overlay: Overlay::with_setup_socket(setup_socket),
+            sui,
+            typo: Some(typo),
+            raster: crate::raster::Raster::default(),
+            cpu_imgs: Default::default(),
+            ui_pm,
+            at_home: false,
+            last_step: Instant::now(),
+            manual_time: false,
+            sfx,
+            haptics,
+            scene_apps: Vec::new(),
+            layer_gen: 0,
+            page_dirty: false,
+            page_tick: None,
+            pending_toast: None,
+            last_cover: (false, false),
+            last_ambient: Instant::now(),
+            last_card_tick: Instant::now(),
+            vol_held: [false; 2],
+            vol_combo: false,
+            host,
+            gpu_ui,
             osk: Osk::default(),
             router: Router::default(),
             pads: Pads::default(),
@@ -214,9 +271,6 @@ impl Shell {
             overlay_buf,
             osk_buf,
             osk_h,
-            osd_buf: None,
-            osd_w: 0,
-            osd_until: None,
             ui_dirty: true,
             osk_dirty: true,
             needs_redraw: true,
@@ -226,18 +280,30 @@ impl Shell {
             sys_at: Instant::now(),
             volume: None,
             last_bg_tick: Instant::now(),
-        })
+        };
+        shell.apply_prefs();
+        Ok(shell)
     }
 
     // ----------------------------------------------------- what's shown ----
 
-    /// The shell's own screen covers everything (home or MENU overlay).
+    /// The shell's own screens take the buttons and cover the app (home,
+    /// the drawer, a transition, the boot screen).
     pub fn shell_screen(&self) -> bool {
-        self.overlay.visible || self.visible_app().is_none()
+        self.sui.captures_input(self.visible_app().is_some())
     }
 
-    /// The app whose window is on screen (when no shell screen covers it).
+    /// Something of the shell's is on screen (drawn by a UI renderer).
+    pub fn ui_layer(&self) -> bool {
+        self.sui.layer_visible(self.visible_app().is_some())
+    }
+
+    /// The app in front (None: the home screen); its window may still be
+    /// covered by the shell's screens.
     pub fn visible_app(&self) -> Option<u32> {
+        if self.at_home {
+            return None;
+        }
         self.apps.focused().filter(|u| self.apps.get(*u).is_some_and(|a| !a.windows.is_empty()))
     }
 
@@ -323,63 +389,15 @@ impl Shell {
         self.configure_all();
         self.ui_dirty = true;
         self.needs_redraw = true;
+        let has_app = self.visible_app().is_some();
+        self.last_cover = (self.sui.captures_input(has_app), self.sui.covers_app(has_app));
     }
 
     pub fn show_app(&mut self, uid: u32) {
         self.apps.focus(uid);
-        self.overlay.visible = false;
-        self.overlay.clear_toast();
+        self.at_home = false;
         self.refocus();
     }
-
-    pub fn open_overlay(&mut self) {
-        self.sys = Sys::read();
-        self.volume = self.read_volume();
-        let (running, launcher, current) = self.view_data();
-        let v = make_view(&self.apps, &self.sys, self.volume, &running, &launcher, current.as_ref());
-        self.overlay.open(&v);
-        self.refocus();
-    }
-
-    pub fn hide_overlay(&mut self) {
-        self.overlay.visible = false;
-        self.refocus();
-    }
-
-    // ------------------------------------------------------ view data ----
-
-    pub fn view_data(&self) -> (Vec<RunningInfo>, Vec<LauncherInfo>, Option<RunningInfo>) {
-        let vis = self.visible_app();
-        let running: Vec<RunningInfo> = self
-            .apps
-            .ordered()
-            .into_iter()
-            .filter_map(|u| self.apps.get(u))
-            .map(|a| RunningInfo {
-                uid: a.uid,
-                name: a.name.clone(),
-                icon: a.icon,
-                visible: Some(a.uid) == vis,
-                windows: a.windows.len(),
-                closing: a.closing.is_some(),
-            })
-            .collect();
-        let launcher = self
-            .cfg
-            .apps
-            .iter()
-            .map(|e| LauncherInfo {
-                id: e.id.clone(),
-                name: e.name.clone(),
-                description: e.description.clone(),
-                icon: e.icon,
-                running: self.apps.by_entry(&e.id).is_some(),
-            })
-            .collect();
-        let current = running.iter().find(|r| r.visible).cloned();
-        (running, launcher, current)
-    }
-
 
     // ------------------------------------------------------------ apps ----
 
@@ -448,11 +466,24 @@ impl Shell {
             t = t.min(r);
         }
         let now = Instant::now();
-        if let Some(d) = self.overlay.deadline() {
-            t = t.min(d.saturating_duration_since(now));
+        if !self.manual_time {
+            match self.sui.pace(self.visible_app().is_some()) {
+                Pace::Full => t = t.min(Duration::from_millis(8)),
+                Pace::Ambient => t = t.min(AMBIENT.saturating_sub(self.last_ambient.elapsed())),
+                Pace::Idle => {}
+            }
+            if let Some(d) = self.sui.next_deadline() {
+                t = t.min(Duration::from_secs_f64(d));
+            }
         }
-        if let Some(d) = self.osd_until {
-            t = t.min(d.saturating_duration_since(now));
+        if let Some(p) = self.pending_toast.as_ref() {
+            t = t.min(p.0.saturating_duration_since(now));
+        }
+        if let Some(p) = self.page_tick {
+            t = t.min(p.saturating_duration_since(now));
+        }
+        if self.sui.cards_visible() && self.cfg.ui.card_fps > 0 {
+            t = t.min(Duration::from_millis(1000 / self.cfg.ui.card_fps as u64));
         }
         if self.slow_redraw {
             t = t.min((self.last_slow_redraw + SLOW_COMPOSITE).saturating_duration_since(now));
@@ -497,23 +528,28 @@ impl Shell {
                 self.refocus();
             }
         }
-        // toasts / OSD
-        if self.overlay.expire() {
-            self.ui_dirty = true;
-        }
-        if self.osd_until.is_some_and(|t| Instant::now() >= t) {
-            self.osd_until = None;
-            self.osd_buf = None;
-            self.needs_redraw = true;
-        }
+        // the shell UI: time, transitions, toasts
+        self.ui_step();
+        self.page_poll();
         // status while a shell screen shows
         if self.shell_screen() && self.sys_at.elapsed() > Duration::from_secs(2) {
-            let new = Sys::read();
-            if format!("{new:?}") != format!("{:?}", self.sys) {
+            if self.status_refresh() {
                 self.ui_dirty = true;
             }
-            self.sys = new;
             self.sys_at = Instant::now();
+        }
+        // live cards in the drawer: their apps keep drawing (slowly)
+        if self.sui.cards_visible()
+            && self.cfg.ui.card_fps > 0
+            && self.last_card_tick.elapsed() >= Duration::from_millis(1000 / self.cfg.ui.card_fps as u64)
+        {
+            self.last_card_tick = Instant::now();
+            let t = self.start.elapsed();
+            for a in &self.apps.list {
+                if let Some(w) = a.windows.last() {
+                    w.send_frame(&self.output, t, Some(Duration::ZERO), |_, _| None);
+                }
+            }
         }
         // background apps: throttled frame callbacks
         if self.cfg.background_fps > 0
@@ -535,65 +571,66 @@ impl Shell {
             self.last_slow_redraw = Instant::now();
             self.needs_redraw = true;
         }
-        self.redraw_ui();
+        // what the UI needs drawn
+        let has_app = self.visible_app().is_some();
+        if self.ui_layer() {
+            if self.ui_dirty || self.sui.dirty {
+                self.needs_redraw = true;
+            }
+            if !self.manual_time {
+                match self.sui.pace(has_app) {
+                    Pace::Full => self.needs_redraw = true,
+                    Pace::Ambient if self.last_ambient.elapsed() >= AMBIENT => {
+                        self.last_ambient = Instant::now();
+                        self.needs_redraw = true;
+                    }
+                    _ => {}
+                }
+            }
+        } else if self.sui.dirty {
+            self.sui.dirty = false;
+            self.needs_redraw = true;
+        }
+        self.ui_dirty = false;
+        self.update_layers();
         if self.needs_redraw {
             self.slow_redraw = false;
             super::backend::render(self);
         }
     }
 
-    /// Something covers the visible app, so it can't be scanned out.
-    fn app_covered(&self) -> bool {
-        self.osd_buf.is_some() || self.osk.visible
-    }
-
-    /// Redraw the shell's own screens into their buffers when dirty.
-    fn redraw_ui(&mut self) {
-        if self.shell_screen() && self.ui_dirty {
-            self.ui_dirty = false;
-            let (running, launcher, current) = self.view_data();
-            let v = make_view(&self.apps, &self.sys, self.volume, &running, &launcher, current.as_ref());
-            self.overlay.draw(&mut self.ui, &v);
-            let full = Rect::new(0.0, 0.0, self.ui.width(), self.ui.height());
-            upload(&mut self.overlay_buf, &self.ui, full);
-            self.needs_redraw = true;
-            self.osk_dirty = true; // the canvas was overwritten
-        }
-        if self.osk.visible && self.osk_dirty && !self.shell_screen() {
-            self.osk_dirty = false;
-            let h = self.osk_height() as f32;
-            let area = Rect::new(0.0, self.ui.height() - h, self.ui.width(), h);
-            self.osk.draw(&mut self.ui, area);
-            upload(&mut self.osk_buf, &self.ui, area);
-            self.ui_dirty = true;
-            self.needs_redraw = true;
-        }
-    }
-
-    fn osd(&mut self, text: &str) {
-        if self.shell_screen() {
-            self.ui_dirty = true;
-            return;
-        }
-        let r = overlay::draw_osd(&mut self.ui, text).snap();
-        let mut buf = opaque_buffer(r.w as i32, r.h as i32);
-        upload(&mut buf, &self.ui, r);
-        self.osd_buf = Some(buf);
-        self.osd_w = r.w as i32;
-        self.osd_until = Some(Instant::now() + Duration::from_millis(1500));
-        self.ui_dirty = true;
-        self.osk_dirty = true;
-        self.needs_redraw = true;
-    }
-
     // ---------------------------------------------------------- input ----
 
     /// A key event from a classified device.
     pub fn on_key(&mut self, kind: Kind, code: u16, value: i32) {
-        // volume keys work everywhere
+        // volume keys work everywhere; both together take a screenshot
         if code == codes::KEY_VOLUMEUP || code == codes::KEY_VOLUMEDOWN {
-            if value != 0 {
-                self.do_action(Action::Volume(if code == codes::KEY_VOLUMEUP { 5 } else { -5 }));
+            let i = if code == codes::KEY_VOLUMEUP { 0 } else { 1 };
+            let step = if i == 0 { 5 } else { -5 };
+            match value {
+                1 => {
+                    self.vol_held[i] = true;
+                    if self.vol_held[1 - i] {
+                        // undo the other key's step, quietly
+                        self.vol_combo = true;
+                        let back = if i == 0 { 5 } else { -5 };
+                        let s = if back >= 0 { format!("{back}%+") } else { format!("{}%-", -back) };
+                        let argv: Vec<String> = self.cfg.actions.volume_set.iter().map(|a| a.replace("{step}", &s)).collect();
+                        run_quiet(&argv);
+                        self.volume = self.read_volume();
+                        self.screenshot_combo();
+                    } else {
+                        self.change_volume(step);
+                    }
+                }
+                2 if !self.vol_combo => self.change_volume(step),
+                0 => {
+                    self.vol_held[i] = false;
+                    if !self.vol_held[1 - i] {
+                        self.vol_combo = false;
+                    }
+                }
+                _ => {}
             }
             return;
         }
@@ -647,14 +684,9 @@ impl Shell {
         for r in out {
             match r {
                 Routed::ToggleOverlay => {
-                    if self.overlay.visible {
-                        self.hide_overlay();
-                    } else if self.visible_app().is_some() {
-                        self.open_overlay();
-                    } else {
-                        // home: MENU flips Launch/Settings
-                        self.nav_press(Button::Menu, false);
-                    }
+                    self.sys = Sys::read();
+                    self.volume = self.read_volume();
+                    self.ui_menu_key();
                 }
                 Routed::Overlay(b, down) => {
                     if down {
@@ -683,81 +715,16 @@ impl Shell {
     /// software repeater).
     fn nav_press(&mut self, b: Button, repeat: bool) {
         if self.shell_screen() {
-            let (running, launcher, current) = self.view_data();
-            let v = make_view(&self.apps, &self.sys, self.volume, &running, &launcher, current.as_ref());
-            let act = self.overlay.button(b, &v);
-            tracing::debug!(?b, ?act, "overlay");
-            self.ui_dirty = true;
-            if !repeat || matches!(act, Action::Brightness(_) | Action::Volume(_)) {
-                self.do_action(act);
+            self.ui_button(b, repeat);
+            if self.sui.page_open() {
+                self.page_dirty = true;
             }
         } else if self.osk.visible {
             self.osk_key(b);
         }
     }
 
-    fn do_action(&mut self, a: Action) {
-        match a {
-            Action::None => {}
-            Action::Hide => self.hide_overlay(),
-            Action::Focus(uid) => self.show_app(uid),
-            Action::Close(uid) => self.close_app(uid),
-            Action::Launch(id) => match self.launch(&id) {
-                Ok(uid) => {
-                    // the new window takes over when it maps
-                    if self.visible_app() != Some(uid) {
-                        let name = self.cfg.app(&id).map(|e| e.name.clone()).unwrap_or(id);
-                        self.overlay.toast(format!("Starting {name}…"));
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!("launch {id}: {e}");
-                    self.overlay.toast(e);
-                }
-            },
-            Action::Brightness(d) => {
-                if let Some(b) = Backlight::find() {
-                    let cur = b.get().unwrap_or(60) as i32;
-                    if let Err(e) = b.set((cur + d).clamp(5, 100) as u8) {
-                        self.overlay.toast(format!("Brightness: {e}"));
-                    }
-                    self.sys.brightness = b.get();
-                    let txt = format!("Brightness {}%", self.sys.brightness.unwrap_or(0));
-                    self.osd(&txt);
-                } else {
-                    self.overlay.toast("No backlight");
-                }
-            }
-            Action::Volume(d) => {
-                let step = if d >= 0 { format!("{d}%+") } else { format!("{}%-", -d) };
-                let argv: Vec<String> = self.cfg.actions.volume_set.iter().map(|a| a.replace("{step}", &step)).collect();
-                run_quiet(&argv);
-                self.volume = self.read_volume();
-                let txt = match self.volume {
-                    Some(v) => format!("Volume {v}%"),
-                    None => "Volume".into(),
-                };
-                self.osd(&txt);
-            }
-            Action::ShowKeyboard => {
-                self.overlay.visible = false;
-                self.osk.show();
-                self.osk_dirty = true;
-                self.refocus();
-            }
-            Action::Sleep => run_detached(&self.cfg.actions.sleep.clone()),
-            Action::Reboot => run_detached(&self.cfg.actions.reboot.clone()),
-            Action::PowerOff => run_detached(&self.cfg.actions.poweroff.clone()),
-            Action::Logout => {
-                tracing::info!("log out requested");
-                self.running = false;
-                self.signal.stop();
-            }
-        }
-        self.ui_dirty = true;
-    }
-
-    fn read_volume(&self) -> Option<u8> {
+    pub     fn read_volume(&self) -> Option<u8> {
         let a = &self.cfg.actions.volume_get;
         let out = std::process::Command::new(a.first()?).args(&a[1..]).output().ok()?;
         parse_volume(&String::from_utf8_lossy(&out.stdout))
@@ -872,7 +839,7 @@ impl Shell {
 
     /// Frame callbacks for the visible window, after a frame was shown.
     pub fn frame_done(&mut self) {
-        if self.shell_screen() {
+        if self.sui.covers_app(self.visible_app().is_some()) {
             return;
         }
         if let Some(w) = self.visible_window().cloned() {
@@ -903,18 +870,6 @@ pub fn upload(buf: &mut MemoryRenderBuffer, ui: &Ui, r: Rect) {
     });
 }
 
-fn make_view<'a>(
-    apps: &'a Apps<Window>,
-    sys: &'a Sys,
-    volume: Option<u8>,
-    running: &'a [RunningInfo],
-    launcher: &'a [LauncherInfo],
-    current: Option<&'a RunningInfo>,
-) -> View<'a> {
-    let keyboard_app = current.and_then(|c| apps.get(c.uid)).is_some_and(|a| a.gamepad == GamepadMode::Keyboard);
-    View { running, launcher, sys, volume, current, keyboard_app }
-}
-
 /// Brick button -> the evdev code the built-in pad sends.
 pub fn button_code(b: Button) -> Option<u16> {
     use codes::*;
@@ -942,7 +897,7 @@ pub fn button_code(b: Button) -> Option<u16> {
     })
 }
 
-fn run_quiet(argv: &[String]) {
+pub fn run_quiet(argv: &[String]) {
     if let Some((cmd, args)) = argv.split_first() {
         let _ = std::process::Command::new(cmd)
             .args(args)
@@ -952,7 +907,7 @@ fn run_quiet(argv: &[String]) {
     }
 }
 
-fn run_detached(argv: &[String]) {
+pub fn run_detached(argv: &[String]) {
     if let Some((cmd, args)) = argv.split_first()
         && let Err(e) = std::process::Command::new(cmd).args(args).spawn()
     {
@@ -978,10 +933,15 @@ impl CompositorHandler for Shell {
             while let Some(p) = get_parent(&root) {
                 root = p;
             }
-            if let Some((_, w)) = self.window_for_surface(&root) {
+            if let Some((uid, w)) = self.window_for_surface(&root) {
                 w.on_commit();
-                if self.visible_window() == Some(&w) && !self.shell_screen() {
-                    if self.app_covered() && is_dmabuf(&root) {
+                let shown = self.visible_window() == Some(&w) && !self.shell_screen();
+                let in_scene = self.ui_layer() && self.scene_apps.contains(&uid);
+                if shown || in_scene {
+                    // the CPU renders this app's dma-buf from write-combined
+                    // memory: hold those redraws to SLOW_COMPOSITE
+                    let cpu_reads = is_dmabuf(&root) && (self.osk.visible || (in_scene && !self.gpu_ui));
+                    if cpu_reads && self.sui.pace(self.visible_app().is_some()) != Pace::Full {
                         self.slow_redraw = true;
                     } else {
                         self.needs_redraw = true;
@@ -1012,6 +972,8 @@ impl CompositorHandler for Shell {
 
 /// Composited GPU-app frames while something covers the app: at most 5/s.
 const SLOW_COMPOSITE: Duration = Duration::from_millis(200);
+/// Frame interval when only the background drifts.
+const AMBIENT: Duration = Duration::from_millis(50);
 
 /// The surface's current buffer is a dmabuf (a GPU app).
 fn is_dmabuf(s: &WlSurface) -> bool {
@@ -1032,7 +994,14 @@ fn has_buffer(s: &WlSurface) -> bool {
 }
 
 impl BufferHandler for Shell {
-    fn buffer_destroyed(&mut self, _buffer: &WlBuffer) {}
+    fn buffer_destroyed(&mut self, buffer: &WlBuffer) {
+        // drop the GPU UI's import of it now, so its CMA pages go back
+        if let Backend::Drm(d) = &mut self.backend
+            && let Some(g) = &mut d.gpu
+        {
+            g.forget(&buffer.id());
+        }
+    }
 }
 
 impl ShmHandler for Shell {

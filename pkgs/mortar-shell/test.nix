@@ -3,7 +3,10 @@
 # build sandbox, start real Wayland clients through the launcher with
 # injected button presses, switch between them, and screenshot the
 # composited output after each step ($out/*.png, plus state.json and the
-# shell's log).
+# shell's log). The UI is drawn by the CPU renderer here (no GPU in the
+# sandbox); `ctl time manual` freezes UI time so transition frames
+# (drawer, launch, toast, OSD, flash, boot) are captured exactly
+# ($out/t-*.png).
 {
   lib,
   runCommand,
@@ -42,6 +45,20 @@ let
           icon = "term";
           gamepad = "keyboard";
           command = [ "${lib.getExe foot}" "--config" "${footIni}" "${bashInteractive}/bin/bash" "--norc" ];
+        }
+        {
+          id = "claude";
+          name = "Claude";
+          description = "weston-flower stands in";
+          icon = "claude";
+          command = [ "${weston}/bin/weston-flower" ];
+        }
+        {
+          id = "m8";
+          name = "M8";
+          description = "Tracker · top USB-C";
+          icon = "usb";
+          command = [ "${weston}/bin/weston-simple-shm" ];
         }
       ];
       actions = {
@@ -82,29 +99,33 @@ runCommand "mortar-shell-headless-test"
     }
     visible() { echo "[.apps[] | select(.id == \"$1\" and .visible)] | length == 1"; }
 
-    echo "== home screen (no apps)"
+    echo "== boot screen, then home (no apps)"
+    wait_for '.ui.booting == false'
     wait_for '.home == true'
+    sleep 0.3
     shot 01-home
 
-    echo "== A on the first tile starts weston-fullscreen"
+    echo "== A on the first tile: weston-fullscreen grows out of its tile"
     ctl press a
     wait_for "$(visible shm)"
-    sleep 0.5
+    wait_for '.ui.layer == false'
     shot 02-weston-fullscreen
 
-    echo "== MENU, R1 to Launch, Right, A: start the terminal"
+    echo "== MENU: the drawer drops; R1 to Launch, Right, A: start the terminal"
     ctl press menu
     wait_for '.overlay == true'
+    sleep 0.8
     shot 03-menu-apps
     ctl press r1
     ctl press right
+    sleep 0.5
     shot 04-menu-launch
     ctl press a
     wait_for "$(visible terminal)"
-    sleep 1
+    wait_for '.ui.layer == false'
+    sleep 0.5
 
     echo "== type into the terminal: keyboard keys, then pad keys"
-    # e c h o space (evdev codes) then the pad: Y = space? no: type letters
     for k in 18 46 35 24 57 35 23; do ctl key $k >/dev/null; done   # "echo hi"
     ctl press a   # pad A = Enter in keyboard mode
     sleep 0.5
@@ -113,7 +134,6 @@ runCommand "mortar-shell-headless-test"
     echo "== START: on-screen keyboard; type 'ls' with the D-pad, Y = Enter"
     ctl press start
     wait_for '.osk == true'
-    # OSK opens on 'a' (row 3); 'l' is 8 to the right, 's' 1 to the right
     for _ in 1 2 3 4 5 6 7 8; do ctl press right >/dev/null; done
     ctl press a
     for _ in 1 2 3 4 5 6 7; do ctl press left >/dev/null; done
@@ -124,12 +144,12 @@ runCommand "mortar-shell-headless-test"
     ctl press start
     wait_for '.osk == false'
 
-    echo "== MENU, A: back to the previous app (weston-fullscreen kept running)"
+    echo "== MENU, A: back to the previous app (the fan preselects it)"
     ctl press menu
     wait_for '.overlay == true'
     ctl press a
     wait_for "$(visible shm)"
-    sleep 0.3
+    wait_for '.ui.layer == false'
     shot 07-switched-back
     ctl state | jq . > $out/state.json
     jq -e '.apps | length == 2' $out/state.json || echo "FAIL: two apps" >> $out/result
@@ -137,16 +157,97 @@ runCommand "mortar-shell-headless-test"
     echo "== MENU, settings tab"
     ctl press menu
     ctl press l1
+    sleep 0.8
     shot 08-menu-settings
     ctl press b
+    wait_for '.ui.layer == false'
 
-    echo "== close the terminal from the switcher (X twice)"
+    echo "== close the terminal from the fan (X flicks its card away)"
     ctl press menu   # opens with the previous app (the terminal) selected
-    ctl press x
+    sleep 0.5
     ctl press x
     wait_for '.apps | length == 1'
+    sleep 0.6
+    shot 09-card-closed
     ctl press b
-    shot 09-after-close
+    wait_for '.ui.layer == false'
+    shot 10-after-close
+
+    echo "== transition frames (UI time frozen, stepped by hand)"
+    tshot() { ctl time +$1 >/dev/null; shot "t-$2"; }
+    ctl home
+    wait_for '.home == true and .ui.layer == true'
+    ctl time manual
+    tshot 1500 home-settled
+    ctl press right
+    tshot 60 home-move-060
+    tshot 400 home-move-460
+    ctl press menu
+    tshot 50 drawer-050
+    tshot 100 drawer-150
+    tshot 600 drawer-750
+    ctl press b
+    tshot 80 drawer-up-080
+    tshot 600 drawer-up-680
+    ctl press left
+    tshot 600 home-focus-first
+    ctl press a     # weston-fullscreen is running: it grows out of its tile
+    tshot 60 launch-060
+    tshot 60 launch-120
+    tshot 100 launch-220
+    tshot 600 launch-820
+    wait_for "$(visible shm)"
+    tshot 300 launch-done
+    ctl press volup
+    tshot 80 osd-080
+    tshot 400 osd-480
+    ctl toast '{"title":"First jump","sub":"Games · Game Boy","kind":"achievement"}'
+    tshot 60 toast-060
+    tshot 500 toast-560
+    tshot 4000 toast-gone
+    ctl shot
+    tshot 30 shutter-030
+    tshot 300 shutter-330
+    ctl time real
+    sleep 0.4
+    ctl time manual
+    tshot 400 shot-toast
+    ctl time real
+    sleep 3
+    ls $HOME/Pictures/Screenshots/mortar-*.png > $out/screenshots.txt || echo "FAIL: screenshot file" >> $out/result
+
+    echo "== MENU from the app, Home card: the app shrinks back into its tile"
+    ctl time manual
+    ctl press menu
+    tshot 700 menu-over-app
+    ctl press left
+    ctl press left
+    tshot 300 menu-home-card
+    ctl press a
+    tshot 140 close-drawer-up
+    tshot 40 close-040
+    tshot 60 close-100
+    tshot 800 close-done
+
+    echo "== night palette (Settings), saved"
+    ctl press menu
+    ctl press l1
+    for _ in 1 2 3 4; do ctl press down >/dev/null; done
+    ctl press right
+    tshot 800 night-settings
+    ctl press b
+    tshot 800 night-home
+    ctl prefs > $out/prefs.json
+    jq -e '.night == true' $HOME/.local/state/mortar-shell/prefs.json >/dev/null || echo "FAIL: prefs saved" >> $out/result
+
+    echo "== boot replay"
+    ctl boot
+    tshot 200 boot-200
+    tshot 500 boot-700
+    tshot 400 boot-1100
+    tshot 1200 boot-2300
+    tshot 600 boot-done
+    ctl time real
 
     ctl quit
     wait $shell || true

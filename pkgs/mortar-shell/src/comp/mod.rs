@@ -4,10 +4,13 @@
 pub mod backend;
 pub mod ctl;
 pub mod drm;
+pub mod gl;
+pub mod gpu;
 pub mod input;
 pub mod pads;
 pub mod scanout;
 pub mod state;
+pub mod ui;
 
 use backend::{Backend, Headless};
 use input::{DirectOpener, Inputs};
@@ -65,7 +68,7 @@ pub fn run(opts: Opts) -> Result<(), String> {
             (Backend::Headless(Box::new(h)), output, opts.size, Inputs::new(Box::new(DirectOpener), opts.direct_input))
         }
         "drm" | "auto" => {
-            let (d, output, size) = drm::init(&handle)?;
+            let (d, output, size) = drm::init(&handle, &opts.config.ui)?;
             let opener = drm::SessionOpener(d.session.clone());
             (Backend::Drm(Box::new(d)), output, size, Inputs::new(Box::new(opener), true))
         }
@@ -105,6 +108,9 @@ pub fn run(opts: Opts) -> Result<(), String> {
         let _ = shell.dh.flush_clients();
     }
     tracing::info!("exiting; closing apps");
+    if let backend::Backend::Drm(d) = &mut shell.backend {
+        d.shutdown();
+    }
     shell.apps.terminate_all();
     let _ = std::fs::remove_file(&ctl);
     Ok(())
