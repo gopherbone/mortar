@@ -25,6 +25,9 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
+/// The MENU backdrop is blurred again at most this often.
+pub const BLUR_EVERY: Duration = Duration::from_millis(66);
+
 /// A surface's current buffer and commit.
 pub fn surface_buffer(s: &WlSurface) -> Option<(WlBuffer, CommitCounter)> {
     with_states(s, |st| {
@@ -46,6 +49,8 @@ pub fn read_radios() -> Radios {
 #[derive(Default)]
 pub struct CpuImages {
     apps: HashMap<u32, (ObjectId, CommitCounter, Pixmap)>,
+    /// Blurred copies (the MENU backdrop): source commit, when, pixmap.
+    blurs: HashMap<u32, (ObjectId, CommitCounter, Instant, Pixmap)>,
     pub osk: Option<Pixmap>,
     pub page: Option<Pixmap>,
 }
@@ -54,6 +59,7 @@ impl Images for CpuImages {
     fn get(&self, s: Src) -> Option<&Pixmap> {
         match s {
             Src::App(u) => self.apps.get(&u).map(|e| &e.2),
+            Src::Blur(u) => self.blurs.get(&u).map(|e| &e.3),
             Src::Layer(Layer::Osk) => self.osk.as_ref(),
             Src::Layer(Layer::Page) => self.page.as_ref(),
         }
@@ -545,6 +551,19 @@ impl Shell {
             }
             if let Some(pm) = buffer_pixmap(&buf) {
                 self.cpu_imgs.apps.insert(uid, (s.id(), commit, pm));
+            }
+        }
+        // blurred backdrops: again when the app committed, at most ~15/s
+        let blurs = scene.blurs();
+        self.cpu_imgs.blurs.retain(|u, _| blurs.contains(u));
+        for uid in blurs {
+            let Some((sid, commit, pm)) = self.cpu_imgs.apps.get(&uid) else { continue };
+            let stale = match self.cpu_imgs.blurs.get(&uid) {
+                Some((bs, bc, at, _)) => (bs != sid || bc != commit) && at.elapsed() >= BLUR_EVERY,
+                None => true,
+            };
+            if stale && let Some(b) = crate::raster::blur_quarter(pm) {
+                self.cpu_imgs.blurs.insert(uid, (sid.clone(), *commit, Instant::now(), b));
             }
         }
     }

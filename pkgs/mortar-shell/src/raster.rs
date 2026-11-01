@@ -226,6 +226,64 @@ fn blit_coverage(pm: &mut Pixmap, x: i32, y: i32, w: usize, h: usize, cov: &[u8]
     }
 }
 
+/// The MENU backdrop on the CPU, matching the GPU's (gl.rs `blur`): a 4x4
+/// box down to quarter size, then three rounds of a 7-wide box blur each
+/// way (variance 12 texels², like three 9-tap gaussians of sigma 2). The
+/// renderer scales the small result up with bilinear filtering.
+pub fn blur_quarter(img: &Pixmap) -> Option<Pixmap> {
+    let (sw, sh) = (img.width() as usize, img.height() as usize);
+    let (w, h) = ((sw / 4).max(1), (sh / 4).max(1));
+    let src = img.data();
+    let mut buf = vec![0f32; w * h * 4];
+    for y in 0..h {
+        for x in 0..w {
+            let mut acc = [0f32; 4];
+            let mut n: f32 = 0.0;
+            for yy in y * 4..(y * 4 + 4).min(sh) {
+                for xx in x * 4..(x * 4 + 4).min(sw) {
+                    let o = (yy * sw + xx) * 4;
+                    for c in 0..4 {
+                        acc[c] += src[o + c] as f32;
+                    }
+                    n += 1.0;
+                }
+            }
+            for c in 0..4 {
+                buf[(y * w + x) * 4 + c] = acc[c] / n.max(1.0);
+            }
+        }
+    }
+    let mut tmp = vec![0f32; buf.len()];
+    let r = 3i32;
+    for _ in 0..3 {
+        for (horiz, len, lines) in [(true, w, h), (false, h, w)] {
+            for line in 0..lines {
+                let at = |i: usize| if horiz { (line * w + i) * 4 } else { (i * w + line) * 4 };
+                for i in 0..len {
+                    let mut acc = [0f32; 4];
+                    for k in -r..=r {
+                        let j = (i as i32 + k).clamp(0, len as i32 - 1) as usize;
+                        let o = at(j);
+                        for c in 0..4 {
+                            acc[c] += buf[o + c];
+                        }
+                    }
+                    let o = at(i);
+                    for c in 0..4 {
+                        tmp[o + c] = acc[c] / (2 * r + 1) as f32;
+                    }
+                }
+            }
+            std::mem::swap(&mut buf, &mut tmp);
+        }
+    }
+    let mut pm = Pixmap::new(w as u32, h as u32)?;
+    for (d, s) in pm.data_mut().iter_mut().zip(&buf) {
+        *d = s.round().clamp(0.0, 255.0) as u8;
+    }
+    Some(pm)
+}
+
 /// Opaque BGRX/BGRA rows (wl_shm XRGB/ARGB, dma-buf XR24) to a pixmap,
 /// optionally downscaled by an integer factor (thumbnails).
 pub fn pixmap_from_xrgb(src: &[u8], w: usize, h: usize, stride: usize, step: usize) -> Option<Pixmap> {

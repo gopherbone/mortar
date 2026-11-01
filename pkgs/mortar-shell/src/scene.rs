@@ -73,6 +73,9 @@ impl Xf {
 pub enum Src {
     /// The newest buffer of a running app's window (by app uid).
     App(u32),
+    /// The same buffer blurred (the MENU's backdrop): renderers keep a
+    /// small blurred copy, refreshed when the app commits (at most ~15/s).
+    Blur(u32),
     /// A CPU-drawn layer (mortar-ui toolkit screens).
     Layer(Layer),
 }
@@ -142,13 +145,29 @@ impl Scene {
     pub fn new(w: f32, h: f32, clear: Color) -> Scene {
         Scene { w, h, clear, items: Vec::new() }
     }
-    /// The app images this frame samples (their commits need a redraw).
+    /// The app images this frame samples, sharp or blurred (their commits
+    /// need a redraw).
     pub fn apps(&self) -> Vec<u32> {
         let mut v: Vec<u32> = self
             .items
             .iter()
             .filter_map(|i| match i {
-                Item::Image { src: Src::App(u), .. } => Some(*u),
+                Item::Image { src: Src::App(u) | Src::Blur(u), .. } => Some(*u),
+                _ => None,
+            })
+            .collect();
+        v.sort();
+        v.dedup();
+        v
+    }
+
+    /// The apps this frame shows blurred.
+    pub fn blurs(&self) -> Vec<u32> {
+        let mut v: Vec<u32> = self
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                Item::Image { src: Src::Blur(u), .. } => Some(*u),
                 _ => None,
             })
             .collect();

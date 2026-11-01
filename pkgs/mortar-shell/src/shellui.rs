@@ -33,6 +33,11 @@ use mortar_ui::input::Button;
 use mortar_ui::status::Sys;
 use serde::{Deserialize, Serialize};
 
+/// The ground-colour veil over the blurred app behind the MENU (light
+/// enough that its colours and layout show, with the blur its text does
+/// not read).
+const FROST_VEIL: f32 = 0.62;
+
 pub const W: f32 = 1024.0;
 pub const H: f32 = 768.0;
 
@@ -1546,13 +1551,27 @@ impl ShellUi {
             Some(Trans::Close { .. }) => None,
             None => v.current,
         };
+        // the app behind the MENU or the power menu: frosted (blurred
+        // under a light veil) as they open
+        let frost_app = base_app.and_then(|u| v.app(u)).filter(|a| a.has_buffer).map(|a| (a.uid, a.geom));
+        let frost = if frost_app.is_some() { self.frost() } else { 0.0 };
         match base_app {
+            // fully frosted: the sharp app would be drawn for nothing
+            Some(_) if frost >= 0.999 => b.rect(0.0, 0.0, W, H, Color(0, 0, 0, 255)),
             Some(uid) => self.draw_app(&mut b, v, uid, true),
             None => self.draw_home(&mut b, &pal, v),
         }
+        if let Some((uid, g)) = frost_app
+            && frost > 0.0
+        {
+            b.push_alpha(frost);
+            b.image(Src::Blur(uid), g[0], g[1], g[2], g[3], [0.0, 0.0, 1.0, 1.0]);
+            b.pop_alpha();
+            b.rect(0.0, 0.0, W, H, with_a(pal.ground, frost * FROST_VEIL));
+        }
         // the MENU fades out under the transition it started
         if let Some(m) = &self.menu {
-            self.draw_menu(&mut b, &pal, v, m);
+            self.draw_menu(&mut b, &pal, v, m, frost > 0.0);
         }
         self.draw_trans(&mut b, &pal, v);
         if let Some(p) = &self.settings {
@@ -1565,7 +1584,7 @@ impl ShellUi {
             b.image(Src::Layer(Layer::Page), 0.0, 0.0, W, H, [0.0, 0.0, 1.0, 1.0]);
         }
         if let Some(p) = &self.power {
-            self.draw_power(&mut b, &pal, p);
+            self.draw_power(&mut b, &pal, p, frost > 0.0);
         }
         if let Some(o) = &self.osd {
             self.draw_osd(&mut b, &pal, o);
@@ -1586,6 +1605,27 @@ impl ShellUi {
             b.rect(0.0, 0.0, W, H, with_a(Color(0, 0, 0, 255), sl.a.x));
         }
         b.finish()
+    }
+
+    /// How much of the frosted backdrop shows: it follows the MENU's (or
+    /// the power menu's) open spring; with Reduce motion it is simply on
+    /// while they show. None while a full-screen panel hides the app.
+    fn frost(&self) -> f32 {
+        let covered = self.page.is_some()
+            || self.tz.as_ref().is_some_and(|p| !p.closing && p.x.rest())
+            || self.settings.as_ref().is_some_and(|p| !p.closing && p.x.rest());
+        if covered {
+            return 0.0;
+        }
+        let menu = self.menu.as_ref().map(|m| m.open());
+        let power = self.power.as_ref().map(|p| p.x.x.clamp(0.0, 1.0));
+        if menu.is_none() && power.is_none() {
+            return 0.0;
+        }
+        if self.prefs.reduce_motion {
+            return 1.0;
+        }
+        menu.unwrap_or(0.0).max(power.unwrap_or(0.0))
     }
 
     /// The app in its on-screen place (black around a smaller window), plus
@@ -1983,9 +2023,11 @@ impl ShellUi {
         b.pop();
     }
 
-    fn draw_power(&self, b: &mut B, pal: &Pal, p: &PowerMenu) {
+    fn draw_power(&self, b: &mut B, pal: &Pal, p: &PowerMenu, frosted: bool) {
         let x = p.x.x.clamp(0.0, 1.2);
-        b.rect(0.0, 0.0, W, H, Color(29, 29, 29, (0.5 * x.min(1.0) * 255.0) as u8));
+        // over a frosted app a lighter scrim is enough
+        let scrim = if frosted { 0.2 } else { 0.5 };
+        b.rect(0.0, 0.0, W, H, Color(29, 29, 29, (scrim * x.min(1.0) * 255.0) as u8));
         let (pw, ph) = (560.0, 470.0);
         let (px, py) = ((W - pw) / 2.0, (H - ph) / 2.0);
         let s = 0.9 + 0.1 * x;
@@ -2463,6 +2505,48 @@ mod tests {
         // no update module: no rows
         let v0 = view(&[], &l, &sys, None);
         assert!(!settings(&v0).contains(&Setting::Updates));
+    }
+
+    #[test]
+    fn frosted_backdrop_follows_the_menu() {
+        let sys = Sys::demo(None);
+        let l = launcher();
+        let r = [run(2, "term")];
+        let v = view(&r, &l, &sys, Some(2));
+        let mut ui = ShellUi::new(Prefs::default(), false);
+        assert_eq!(ui.frost(), 0.0);
+        ui.menu_key(&v);
+        assert_eq!(ui.frost(), 0.0, "eases in with the open spring");
+        ui.step(0.05, &v);
+        let early = ui.frost();
+        assert!(early > 0.0 && early < 1.0);
+        settle(&mut ui, &v);
+        assert_eq!(ui.frost(), 1.0);
+        // the settings screen covers it: no blur work behind an opaque panel
+        to_settings_from_menu(&mut ui, &v);
+        settle(&mut ui, &v);
+        assert_eq!(ui.frost(), 0.0);
+        ui.menu_key(&v);
+        settle(&mut ui, &v);
+        assert_eq!(ui.frost(), 0.0, "closed: nothing extra drawn");
+        // Reduce motion: on at once, not animated
+        ui.prefs.reduce_motion = true;
+        ui.menu_key(&v);
+        assert_eq!(ui.frost(), 1.0);
+        ui.menu_key(&v);
+        settle(&mut ui, &v);
+        // the power menu frosts the app too
+        ui.prefs.reduce_motion = false;
+        ui.open_power_menu();
+        settle(&mut ui, &v);
+        assert_eq!(ui.frost(), 1.0);
+    }
+
+    fn to_settings_from_menu(ui: &mut ShellUi, v: &View) {
+        press(ui, v, &[Button::R1, Button::Left]);
+        press(ui, v, &[Button::Down; 8]);
+        ui.button(Button::A, false, v);
+        assert!(ui.settings_open());
     }
 
     #[test]

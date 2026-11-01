@@ -109,8 +109,14 @@ blocks with 1 px ink outlines, isometric illustrations.
   shrinks into its tile.
 - MENU (anywhere, on its own) opens the cross menu (`cross.rs`, after the
   approved plan/mortar-cross.html) over the app, which stays on screen
-  dimmed by a veil (the ground colour at 90%). Everything fades and
-  slides 18 px on one spring; MENU or B closes it.
+  frosted: blurred (about 14 px) under a ground-colour veil at 62%, so
+  its colours and layout show but its text does not read. The blur and
+  veil fade in and out with the menu's open spring (Reduce motion: on
+  and off at once); home behind the menu gets the flat veil at 90%. The
+  power menu frosts the app the same way (with a lighter scrim); the
+  settings screen and time zone picker are opaque, so nothing is blurred
+  behind them. Everything fades and slides 18 px on one spring; MENU or
+  B closes it.
   - Status bar: the clock (serif), "N running", SSH, Wi-Fi, battery.
   - Categories run across: Running (with a count badge), Apps, Games,
     Music, Quick, Power. The selected one is bigger and lime and sits at
@@ -341,7 +347,15 @@ draw it:
   fanned or ear-clipped triangles, text comes from a 2048x1024 A8 glyph
   atlas, app images are the clients' dma-bufs imported once per buffer
   (no copy) or wl_shm buffers uploaded on commit; the keyboard strip and
-  setup pages are CPU-drawn layers uploaded when they change. When no UI
+  setup pages are CPU-drawn layers uploaded when they change. The
+  frosted backdrop (`Src::Blur`) is the app's texture drawn into a
+  quarter-size FBO (a 4x4 box: four bilinear taps), then three rounds of
+  a 9-tap gaussian (five bilinear taps, sigma 2) each way between two
+  quarter-size FBOs (256x192, 192 KB each), and drawn back scaled up with
+  linear filtering. It is redone only when the app's buffer changed, at
+  most every 66 ms, and the FBOs are freed with the menu; a fully frosted
+  frame skips the sharp app. The CPU renderer does the same with
+  `raster::blur_quarter` (box blurs of matching variance). When no UI
   layer shows, the DrmCompositor takes over again (`reset_state`, full
   frame): direct scanout of a GPU app, the opaque copy of an shm app.
   Any EGL/GL error, a failed import of a render target or three failed
@@ -358,7 +372,8 @@ draw it:
 
 `MORTAR_SHELL_RENDERER=cpu|gpu` and `MORTAR_SHELL_GL_MSAA=0|4` override
 the config for one run; `ctl state` reports `ui.renderer`, `frames`,
-`gpu_frames`, `scanout_frames`.
+`gpu_frames`, `scanout_frames` and `gpu_ms` (last and smoothed UI frame
+time, the last blur's time and the number of blurs).
 
 ### Apps
 
@@ -493,7 +508,7 @@ What is on screen when:
 | Screen | Path |
 |---|---|
 | GPU app alone | its dma-buf on the primary plane; the shell only flips |
-| MENU / home / transitions / OSD / toasts | GPU UI renderer into its own dumb buffers (app images sampled from their dma-bufs); the app under the MENU is drawn under the veil and `suspended`, the app in the live preview gets `ui.cardFps` frame callbacks. CPU fallback: full frames by tiny-skia, composited by pixman |
+| MENU / home / transitions / OSD / toasts | GPU UI renderer into its own dumb buffers (app images sampled from their dma-bufs); the app under the MENU is drawn blurred under the veil (re-blurred on its commits, at most ~15/s) and `suspended`, the app in the live preview gets `ui.cardFps` frame callbacks. CPU fallback: full frames by tiny-skia, composited by pixman |
 | OSK over a GPU app (nothing else) | composited: pixman reads the app's dma-buf (write-combined, so slower than an shm copy) for those frames only |
 | shm app (foot, llvmpipe SDL) | opaque copy, as above |
 

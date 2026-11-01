@@ -259,6 +259,14 @@ impl Backend {
         }
     }
 
+    /// GPU UI timings: last and smoothed frame ms, last blur ms, blurs.
+    pub fn gpu_stats(&self) -> Option<(f32, f32, f32, u64)> {
+        match self {
+            Backend::Drm(d) => d.gpu.as_ref().map(|g| (g.render_ms, g.render_avg_ms, g.blur_ms, g.blur_count)),
+            _ => None,
+        }
+    }
+
     pub fn frames(&self) -> u64 {
         match self {
             Backend::Headless(h) => h.frames,

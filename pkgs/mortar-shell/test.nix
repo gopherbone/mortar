@@ -151,9 +151,11 @@ runCommand "mortar-shell-headless-test"
     ctl press start
     wait_for '.osk == false'
 
-    echo "== MENU, A: back to the previous app (Running preselects it)"
+    echo "== MENU over the terminal (its text blurred behind), A: back to the previous app"
     ctl press menu
     wait_for '.overlay == true'
+    sleep 0.8
+    shot 06b-menu-over-terminal
     ctl press a
     wait_for "$(visible shm)"
     wait_for '.ui.layer == false'

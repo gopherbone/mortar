@@ -260,6 +260,11 @@ impl Cross {
             || self.ctx.as_ref().is_some_and(|c| !c.op.rest())
     }
 
+    /// How far open (0..1), for the backdrop.
+    pub(super) fn open(&self) -> f32 {
+        self.op.x.clamp(0.0, 1.0)
+    }
+
     /// Fully faded out after closing.
     pub(super) fn gone(&self) -> bool {
         self.closing && self.op.x < 0.02
@@ -626,9 +631,13 @@ impl ShellUi {
 
     // --------------------------------------------------------- drawing ----
 
-    pub(super) fn draw_menu(&self, b: &mut B, pal: &Pal, v: &View, m: &Cross) {
+    /// `frosted`: the app behind is already blurred and veiled; home (or
+    /// an app with nothing to show) gets the flat veil.
+    pub(super) fn draw_menu(&self, b: &mut B, pal: &Pal, v: &View, m: &Cross, frosted: bool) {
         let o = m.op.x.clamp(0.0, 1.0);
-        b.rect(0.0, 0.0, W, H, with_a(pal.ground, o * 0.9));
+        if !frosted {
+            b.rect(0.0, 0.0, W, H, with_a(pal.ground, o * 0.9));
+        }
         if o < 0.01 {
             return;
         }

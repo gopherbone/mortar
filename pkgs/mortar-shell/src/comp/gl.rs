@@ -217,12 +217,38 @@ varying vec2 v_uv; varying vec4 v_col;
 void main() { vec4 t = texture2D(u_tex, v_uv); vec3 c = mix(t.rgb, t.bgr, u_swz);
   float a = mix(t.a, 1.0, u_opaque); gl_FragColor = vec4(c, a) * v_col.a; }";
 
+/// The MENU backdrop blur. Down: a 4x4 box to quarter size (four bilinear
+/// taps one source texel off the centre), straight-alpha swizzle and
+/// opacity applied. Blur: a 9-tap gaussian (sigma 2 texels) in five
+/// bilinear taps along `u_step`; three rounds each way give sigma ~3.5
+/// quarter-size texels, ~14 screen px.
+const FS_DOWN: &str = "precision mediump float; uniform sampler2D u_tex; uniform vec2 u_step; uniform float u_swz; uniform float u_opaque;
+varying vec2 v_uv;
+vec4 f(vec2 o) { vec4 t = texture2D(u_tex, v_uv + o * u_step); return vec4(mix(t.rgb, t.bgr, u_swz), mix(t.a, 1.0, u_opaque)); }
+void main() { gl_FragColor = 0.25 * (f(vec2(-1.0, -1.0)) + f(vec2(1.0, -1.0)) + f(vec2(-1.0, 1.0)) + f(vec2(1.0, 1.0))); }";
+const FS_BLUR: &str = "precision mediump float; uniform sampler2D u_tex; uniform vec2 u_step; varying vec2 v_uv;
+void main() { vec4 c = texture2D(u_tex, v_uv) * 0.2042;
+  c += (texture2D(u_tex, v_uv + u_step * 1.4072) + texture2D(u_tex, v_uv - u_step * 1.4072)) * 0.3040;
+  c += (texture2D(u_tex, v_uv + u_step * 3.2940) + texture2D(u_tex, v_uv - u_step * 3.2940)) * 0.0939;
+  gl_FragColor = c; }";
+
 struct Prog {
     id: GLuint,
     size: GLint,
     tex: GLint,
     swz: GLint,
     opaque: GLint,
+    step: GLint,
+}
+
+const NO_PROG: Prog = Prog { id: 0, size: -1, tex: -1, swz: -1, opaque: -1, step: -1 };
+
+/// An offscreen colour target we sample afterwards (the blur's).
+pub struct Fbo {
+    pub tex: GLuint,
+    fbo: GLuint,
+    pub w: i32,
+    pub h: i32,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -256,7 +282,7 @@ pub struct Gl {
     target_tex: ImageTargetTex,
     fb_tex_ms: Option<FbTexMs>,
     msaa: i32,
-    progs: [Prog; 3],
+    progs: [Prog; 5],
     atlas: Atlas,
     verts: Vec<f32>,
     kind: Kind,
@@ -316,7 +342,7 @@ impl Gl {
             target_tex: unsafe { std::mem::transmute::<*mut c_void, ImageTargetTex>(tt) },
             fb_tex_ms: None,
             msaa: 0,
-            progs: [Prog { id: 0, size: -1, tex: -1, swz: -1, opaque: -1 }, Prog { id: 0, size: -1, tex: -1, swz: -1, opaque: -1 }, Prog { id: 0, size: -1, tex: -1, swz: -1, opaque: -1 }],
+            progs: [NO_PROG, NO_PROG, NO_PROG, NO_PROG, NO_PROG],
             atlas: Atlas { tex: 0, w: 2048, h: 1024, x: 0, y: 0, row_h: 0, map: HashMap::new() },
             verts: Vec::with_capacity(64 * 1024),
             kind: Kind::Solid,
@@ -393,6 +419,8 @@ impl Gl {
         self.progs[0] = self.program(FS_SOLID)?;
         self.progs[1] = self.program(FS_MASK)?;
         self.progs[2] = self.program(FS_IMAGE)?;
+        self.progs[3] = self.program(FS_DOWN)?;
+        self.progs[4] = self.program(FS_BLUR)?;
         // glyph atlas
         let g = &self.gl;
         // SAFETY: GL calls on the current context
@@ -456,6 +484,7 @@ impl Gl {
                 tex: (g.glGetUniformLocation)(p, c"u_tex".as_ptr()),
                 swz: (g.glGetUniformLocation)(p, c"u_swz".as_ptr()),
                 opaque: (g.glGetUniformLocation)(p, c"u_opaque".as_ptr()),
+                step: (g.glGetUniformLocation)(p, c"u_step".as_ptr()),
             })
         }
     }
@@ -627,6 +656,108 @@ impl Gl {
                 (self.destroy_image)(self.dpy, t.img);
             }
         }
+    }
+
+    /// An RGBA texture of `w` x `h` with a framebuffer on it.
+    pub fn fbo(&self, w: i32, h: i32) -> Result<Fbo, String> {
+        let g = &self.gl;
+        // SAFETY: GL calls on the current context; no pixel data
+        unsafe {
+            let (mut tex, mut fbo) = (0, 0);
+            (g.glGenTextures)(1, &mut tex);
+            (g.glBindTexture)(GL_TEXTURE_2D, tex);
+            (g.glTexImage2D)(GL_TEXTURE_2D, 0, GL_RGBA as GLint, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, std::ptr::null());
+            tex_params(g);
+            (g.glGenFramebuffers)(1, &mut fbo);
+            (g.glBindFramebuffer)(GL_FRAMEBUFFER, fbo);
+            (g.glFramebufferTexture2D)(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0);
+            let st = (g.glCheckFramebufferStatus)(GL_FRAMEBUFFER);
+            (g.glBindFramebuffer)(GL_FRAMEBUFFER, 0);
+            let f = Fbo { tex, fbo, w, h };
+            if st != GL_FRAMEBUFFER_COMPLETE {
+                self.drop_fbo(f);
+                return Err(format!("blur FBO incomplete: 0x{st:x}"));
+            }
+            if let Err(e) = self.check("blur FBO") {
+                self.drop_fbo(f);
+                return Err(e);
+            }
+            Ok(f)
+        }
+    }
+
+    pub fn drop_fbo(&self, f: Fbo) {
+        // SAFETY: objects created by `fbo`, not in use (callers finish first)
+        unsafe {
+            (self.gl.glDeleteFramebuffers)(1, &f.fbo);
+            (self.gl.glDeleteTextures)(1, &f.tex);
+        }
+    }
+
+    /// One full-target pass of program `pi` sampling `tex` into `dst`.
+    fn pass(&mut self, pi: usize, tex: GLuint, dst: &Fbo, step: (f32, f32), swz: bool, opq: bool) {
+        self.verts.clear();
+        let (w, h) = (dst.w as f32, dst.h as f32);
+        let c = [1.0; 4];
+        for (p, uv) in [((0.0, 0.0), (0.0, 0.0)), ((w, 0.0), (1.0, 0.0)), ((w, h), (1.0, 1.0)), ((0.0, 0.0), (0.0, 0.0)), ((w, h), (1.0, 1.0)), ((0.0, h), (0.0, 1.0))] {
+            self.vert(p, uv, c);
+        }
+        let g = &self.gl;
+        let p = &self.progs[pi];
+        // SAFETY: GL state on the current context; client-side vertex
+        // arrays from self.verts, alive during the draw
+        unsafe {
+            (g.glBindFramebuffer)(GL_FRAMEBUFFER, dst.fbo);
+            (g.glViewport)(0, 0, dst.w, dst.h);
+            (g.glUseProgram)(p.id);
+            (g.glUniform2f)(p.size, w, h);
+            (g.glActiveTexture)(GL_TEXTURE0);
+            (g.glBindTexture)(GL_TEXTURE_2D, tex);
+            (g.glUniform1i)(p.tex, 0);
+            (g.glUniform2f)(p.step, step.0, step.1);
+            if p.swz >= 0 {
+                (g.glUniform1f)(p.swz, if swz { 1.0 } else { 0.0 });
+            }
+            if p.opaque >= 0 {
+                (g.glUniform1f)(p.opaque, if opq { 1.0 } else { 0.0 });
+            }
+            let base = self.verts.as_ptr() as *const u8;
+            (g.glVertexAttribPointer)(0, 2, GL_FLOAT, 0, 32, base as *const c_void);
+            (g.glVertexAttribPointer)(1, 2, GL_FLOAT, 0, 32, base.add(8) as *const c_void);
+            (g.glVertexAttribPointer)(2, 4, GL_FLOAT, 0, 32, base.add(16) as *const c_void);
+            (g.glEnableVertexAttribArray)(0);
+            (g.glEnableVertexAttribArray)(1);
+            (g.glEnableVertexAttribArray)(2);
+            (g.glDrawArrays)(GL_TRIANGLES, 0, 6);
+        }
+        self.verts.clear();
+    }
+
+    /// Blur a source texture (`sw` x `sh`) into `a`, using `b` as scratch:
+    /// down to the targets' size, then three gaussian rounds each way.
+    #[allow(clippy::too_many_arguments)]
+    pub fn blur(&mut self, src: GLuint, swz: bool, opq: bool, sw: i32, sh: i32, a: &Fbo, b: &Fbo) -> Result<(), String> {
+        // SAFETY: plain state changes on the current context
+        unsafe {
+            (self.gl.glDisable)(GL_BLEND);
+            (self.gl.glDisable)(GL_SCISSOR_TEST);
+            (self.gl.glDisable)(GL_DEPTH_TEST);
+            (self.gl.glDisable)(GL_CULL_FACE);
+        }
+        self.pass(3, src, a, (1.0 / sw.max(1) as f32, 1.0 / sh.max(1) as f32), swz, opq);
+        let (tx, ty) = (1.0 / a.w as f32, 1.0 / a.h as f32);
+        for _ in 0..3 {
+            self.pass(4, a.tex, b, (tx, 0.0), false, false);
+            self.pass(4, b.tex, a, (0.0, ty), false, false);
+        }
+        // SAFETY: state reset
+        unsafe {
+            (self.gl.glDisableVertexAttribArray)(0);
+            (self.gl.glDisableVertexAttribArray)(1);
+            (self.gl.glDisableVertexAttribArray)(2);
+            (self.gl.glBindFramebuffer)(GL_FRAMEBUFFER, 0);
+        }
+        self.check("blur")
     }
 
     pub fn finish(&self) {

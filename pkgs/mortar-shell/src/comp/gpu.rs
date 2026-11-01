@@ -11,8 +11,13 @@
 //! Textures of buffers that went away or were not drawn for a while are
 //! freed after the frame that last used them has finished (we glFinish
 //! every frame), so client CMA is not held longer than needed.
+//!
+//! The MENU's backdrop (`Src::Blur`) is the app's texture blurred into two
+//! quarter-size FBOs (gl.rs `blur`); it is redone only when the app's
+//! buffer changed, at most every `BLUR_EVERY`, and freed with the MENU.
 
-use super::gl::{Gl, Tex, Target};
+use super::gl::{Fbo, Gl, Tex, Target};
+use super::ui::BLUR_EVERY;
 use super::state::Shell;
 use super::ui::surface_buffer;
 use crate::scene::{Layer, Scene, Src};
@@ -44,6 +49,16 @@ struct Entry {
     last: u64,
 }
 
+/// The blurred backdrop of one app.
+struct Blur {
+    uid: u32,
+    /// What it was made from: the source texture and the surface commit.
+    key: (u32, Option<smithay::backend::renderer::utils::CommitCounter>),
+    at: Instant,
+    a: Fbo,
+    b: Fbo,
+}
+
 pub struct GpuUi {
     gl: Gl,
     drm: DrmDeviceFd,
@@ -55,7 +70,13 @@ pub struct GpuUi {
     shm: HashMap<ObjectId, Entry>,
     layers: HashMap<Layer, (u64, Tex)>,
     frame: u64,
+    blur: Option<Blur>,
     pub render_ms: f32,
+    /// Smoothed frame time (ms), and the last blur's GPU time (ms, after
+    /// glFinish) and how many blurs ran.
+    pub render_avg_ms: f32,
+    pub blur_ms: f32,
+    pub blur_count: u64,
 }
 
 impl GpuUi {
@@ -72,7 +93,11 @@ impl GpuUi {
             shm: HashMap::new(),
             layers: HashMap::new(),
             frame: 0,
+            blur: None,
             render_ms: 0.0,
+            render_avg_ms: 0.0,
+            blur_ms: 0.0,
+            blur_count: 0,
         };
         for _ in 0..2 {
             match me.alloc(size) {
@@ -172,11 +197,16 @@ impl GpuUi {
                 Some((u, (s.id(), b)))
             })
             .collect();
+        let blur = &self.blur;
         let lookup = |src: Src| -> Option<(u32, bool, bool, i32, i32)> {
             let t = match src {
                 Src::App(u) => {
                     let (sid, bid) = surfaces.get(&u)?;
                     bid.as_ref().and_then(|b| dmabufs.get(b)).or_else(|| shm.get(sid)).map(|e| &e.tex)?
+                }
+                Src::Blur(u) => {
+                    let b = blur.as_ref().filter(|b| b.uid == u)?;
+                    return Some((b.a.tex, false, true, b.a.w, b.a.h));
                 }
                 Src::Layer(l) => &layers.get(&l)?.1,
             };
@@ -196,6 +226,7 @@ impl GpuUi {
         self.prune();
         self.queued = Some(idx);
         self.render_ms = t0.elapsed().as_secs_f32() * 1000.0;
+        self.render_avg_ms = if self.render_avg_ms == 0.0 { self.render_ms } else { self.render_avg_ms * 0.9 + self.render_ms * 0.1 };
         Ok(self.bufs[idx].fb)
     }
 
@@ -256,6 +287,7 @@ impl GpuUi {
                 Err(e) => tracing::debug!("shm buffer: {e:?}"),
             }
         }
+        self.prepare_blur(shell, scene);
         // CPU layers
         for (l, pm) in [(Layer::Osk, shell.cpu_imgs.osk.as_ref()), (Layer::Page, shell.cpu_imgs.page.as_ref())] {
             let Some(pm) = pm else {
@@ -274,6 +306,66 @@ impl GpuUi {
                 }
                 Err(e) => tracing::debug!("layer upload: {e}"),
             }
+        }
+    }
+
+    /// Blur the backdrop app again if its buffer changed (at most every
+    /// BLUR_EVERY); free the FBOs when no MENU shows it.
+    fn prepare_blur(&mut self, shell: &Shell, scene: &Scene) {
+        let Some(uid) = scene.blurs().first().copied() else {
+            if let Some(b) = self.blur.take() {
+                self.gl.drop_fbo(b.a);
+                self.gl.drop_fbo(b.b);
+            }
+            return;
+        };
+        let Some(s) = shell.app_surface(uid) else { return };
+        let Some((buf, commit)) = surface_buffer(&s) else { return };
+        let src = self.dmabufs.get(&buf.id()).or_else(|| self.shm.get(&s.id())).map(|e| (e.tex.tex, e.tex.swizzle, e.tex.opaque, e.tex.w, e.tex.h));
+        let Some((tex, swz, opq, w, h)) = src else { return };
+        let key = (tex, Some(commit));
+        let (bw, bh) = ((w / 4).max(1), (h / 4).max(1));
+        // a different app or size: new targets
+        if self.blur.as_ref().is_some_and(|b| b.uid != uid || b.a.w != bw || b.a.h != bh)
+            && let Some(b) = self.blur.take()
+        {
+            self.gl.drop_fbo(b.a);
+            self.gl.drop_fbo(b.b);
+        }
+        if self.blur.is_none() {
+            let a = match self.gl.fbo(bw, bh) {
+                Ok(a) => a,
+                Err(e) => {
+                    tracing::warn!("blur: {e}");
+                    return;
+                }
+            };
+            let b = match self.gl.fbo(bw, bh) {
+                Ok(b) => b,
+                Err(e) => {
+                    self.gl.drop_fbo(a);
+                    tracing::warn!("blur: {e}");
+                    return;
+                }
+            };
+            self.blur = Some(Blur { uid, key: (0, None), at: Instant::now() - BLUR_EVERY, a, b });
+        }
+        let Some(bl) = self.blur.as_mut() else { return };
+        if bl.key == key || bl.at.elapsed() < BLUR_EVERY {
+            return;
+        }
+        let t0 = Instant::now();
+        match self.gl.blur(tex, swz, opq, w, h, &bl.a, &bl.b) {
+            Ok(()) => {
+                bl.key = key;
+                bl.at = Instant::now();
+                self.blur_count += 1;
+                // the blur's own GPU time (the frame is finished anyway
+                // before its flip, so waiting here costs nothing extra)
+                self.gl.finish();
+                self.blur_ms = t0.elapsed().as_secs_f32() * 1000.0;
+            }
+            Err(e) => tracing::warn!("blur: {e}"),
         }
     }
 
@@ -315,6 +407,10 @@ impl GpuUi {
         }
         for (_, (_, t)) in self.layers.drain().collect::<Vec<_>>() {
             self.gl.drop_tex(t);
+        }
+        if let Some(b) = self.blur.take() {
+            self.gl.drop_fbo(b.a);
+            self.gl.drop_fbo(b.b);
         }
         for b in &mut self.bufs {
             if let Some(t) = b.target.take() {

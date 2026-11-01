@@ -104,6 +104,12 @@ fn stand_ins(fonts_dir: &Path) -> Result<HashMap<Src, Pixmap>, String> {
         ui.text(100.0 + i as f32 * 200.0, 492.0, t, &TextStyle::new(Face::Body600, 22.0, Color::hex(0x1d1d1d)));
     }
     m.insert(Src::App(2), ui.pm.clone());
+    // their blurred copies (the MENU's backdrop)
+    for u in [1, 2] {
+        if let Some(b) = m.get(&Src::App(u)).and_then(crate::raster::blur_quarter) {
+            m.insert(Src::Blur(u), b);
+        }
+    }
     // the on-screen keyboard strip
     let mut k = Osk::default();
     k.show();
