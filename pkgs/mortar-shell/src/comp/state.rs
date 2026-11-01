@@ -128,6 +128,11 @@ pub struct Shell {
     pub osk_dirty: bool,
     /// Something on screen changed; the backend should render a frame.
     pub needs_redraw: bool,
+    /// A dmabuf (GPU) app committed while the OSD or OSK covers it, so its
+    /// frame must be composited by pixman from write-combined memory
+    /// (~60 ms a frame). Those redraws are held to `SLOW_COMPOSITE`.
+    slow_redraw: bool,
+    last_slow_redraw: Instant,
     /// Screen content changed while nothing was rendered: shown/hidden
     /// windows need a reconfigure.
     pub sys: Sys,
@@ -215,6 +220,8 @@ impl Shell {
             ui_dirty: true,
             osk_dirty: true,
             needs_redraw: true,
+            slow_redraw: false,
+            last_slow_redraw: Instant::now(),
             sys: Sys::read(),
             sys_at: Instant::now(),
             volume: None,
@@ -447,6 +454,9 @@ impl Shell {
         if let Some(d) = self.osd_until {
             t = t.min(d.saturating_duration_since(now));
         }
+        if self.slow_redraw {
+            t = t.min((self.last_slow_redraw + SLOW_COMPOSITE).saturating_duration_since(now));
+        }
         if self.apps.list.len() > 1 && self.cfg.background_fps > 0 {
             t = t.min(Duration::from_millis(1000 / self.cfg.background_fps as u64));
         }
@@ -520,10 +530,21 @@ impl Shell {
                 }
             }
         }
+        if self.slow_redraw && self.last_slow_redraw.elapsed() >= SLOW_COMPOSITE {
+            self.slow_redraw = false;
+            self.last_slow_redraw = Instant::now();
+            self.needs_redraw = true;
+        }
         self.redraw_ui();
         if self.needs_redraw {
+            self.slow_redraw = false;
             super::backend::render(self);
         }
+    }
+
+    /// Something covers the visible app, so it can't be scanned out.
+    fn app_covered(&self) -> bool {
+        self.osd_buf.is_some() || self.osk.visible
     }
 
     /// Redraw the shell's own screens into their buffers when dirty.
@@ -960,7 +981,11 @@ impl CompositorHandler for Shell {
             if let Some((_, w)) = self.window_for_surface(&root) {
                 w.on_commit();
                 if self.visible_window() == Some(&w) && !self.shell_screen() {
-                    self.needs_redraw = true;
+                    if self.app_covered() && is_dmabuf(&root) {
+                        self.slow_redraw = true;
+                    } else {
+                        self.needs_redraw = true;
+                    }
                 }
             }
         }
@@ -983,6 +1008,19 @@ impl CompositorHandler for Shell {
             let _ = p.send_configure();
         }
     }
+}
+
+/// Composited GPU-app frames while something covers the app: at most 5/s.
+const SLOW_COMPOSITE: Duration = Duration::from_millis(200);
+
+/// The surface's current buffer is a dmabuf (a GPU app).
+fn is_dmabuf(s: &WlSurface) -> bool {
+    smithay::wayland::compositor::with_states(s, |st| {
+        st.data_map
+            .get::<smithay::backend::renderer::utils::RendererSurfaceStateUserData>()
+            .and_then(|d| d.lock().unwrap().buffer().map(|b| smithay::wayland::dmabuf::get_dmabuf(b).is_ok()))
+            .unwrap_or(false)
+    })
 }
 
 fn has_buffer(s: &WlSurface) -> bool {
