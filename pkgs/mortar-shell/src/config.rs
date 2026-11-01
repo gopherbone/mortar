@@ -212,6 +212,40 @@ pub struct Config {
     /// Over-the-air updates (modules/mortar-update.nix): Settings > Updates.
     #[serde(default)]
     pub update: Option<UpdateConfig>,
+    /// mortar-play's games, one app each (modules/mortar-play.nix): the
+    /// Games category's library, the game panel, hibernation.
+    #[serde(default)]
+    pub games: Option<GamesConfig>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GamesConfig {
+    /// Print the library as JSON (`mortar-play list --json`).
+    pub list: Vec<String>,
+    /// Start one game: SYSTEM and ROM are appended (`mortar-play run`).
+    pub run: Vec<String>,
+    /// The launcher entry of the full mortar-play library (MENU > Games >
+    /// All systems).
+    #[serde(default)]
+    pub library: Option<String>,
+    /// More games than this awake: the least recently used background one
+    /// saves and sleeps.
+    #[serde(default = "d_max_games")]
+    pub max_games: usize,
+    /// Below this much MemAvailable (MB) too.
+    #[serde(default = "d_low_mem")]
+    pub hibernate_below_mb: u64,
+    /// Environment for every game.
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
+}
+
+fn d_max_games() -> usize {
+    3
+}
+fn d_low_mem() -> u64 {
+    180
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -552,6 +586,17 @@ mod tests {
         assert!(v.ready && !v.busy && v.auto_check);
         assert_eq!(st.available.unwrap().toplevel, "/nix/store/x");
         assert!(UpdateStatus::parse(r#"{"state":"downloading"}"#).unwrap().busy());
+    }
+
+    #[test]
+    fn games_section() {
+        let c: Config = serde_json::from_str(
+            r#"{"games":{"list":["mortar-play","list","--json"],"run":["mortar-play-launch","run"],"library":"play","maxGames":2}}"#,
+        )
+        .unwrap();
+        let g = c.games.unwrap();
+        assert_eq!((g.max_games, g.hibernate_below_mb, g.library.as_deref()), (2, 180, Some("play")));
+        assert!(Config::default().games.is_none());
     }
 
     #[test]

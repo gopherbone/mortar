@@ -69,6 +69,9 @@ pub struct GpuUi {
     dmabufs: HashMap<ObjectId, Entry>,
     shm: HashMap<ObjectId, Entry>,
     layers: HashMap<Layer, (u64, Tex)>,
+    /// Pictures (`Src::Pic`: game thumbnails), uploaded once per id and
+    /// freed when no frame shows them.
+    pics: HashMap<u32, Tex>,
     frame: u64,
     blur: Option<Blur>,
     pub render_ms: f32,
@@ -96,6 +99,7 @@ impl GpuUi {
             dmabufs: HashMap::new(),
             shm: HashMap::new(),
             layers: HashMap::new(),
+            pics: HashMap::new(),
             frame: 0,
             blur: None,
             render_ms: 0.0,
@@ -197,6 +201,7 @@ impl GpuUi {
         let dmabufs = &self.dmabufs;
         let shm = &self.shm;
         let layers = &self.layers;
+        let pics = &self.pics;
         let surfaces: HashMap<u32, (ObjectId, Option<ObjectId>)> = scene
             .apps()
             .into_iter()
@@ -219,6 +224,7 @@ impl GpuUi {
                     return Some((b.a.tex, false, true, b.a.w, b.a.h));
                 }
                 Src::Layer(l) => &layers.get(&l)?.1,
+                Src::Pic(p) => pics.get(&p)?,
                 Src::HomeBlur => {
                     let (_, a, _) = home.as_ref()?;
                     return Some((a.tex, false, true, a.w, a.h));
@@ -303,6 +309,26 @@ impl GpuUi {
         }
         self.prepare_blur(shell, scene);
         self.prepare_home(shell);
+        // pictures: uploaded once, dropped when unused
+        let used = scene.pics();
+        let gone: Vec<u32> = self.pics.keys().filter(|p| !used.contains(p)).copied().collect();
+        for p in gone {
+            if let Some(t) = self.pics.remove(&p) {
+                self.gl.drop_tex(t);
+            }
+        }
+        for p in used {
+            if self.pics.contains_key(&p) {
+                continue;
+            }
+            let Some(pm) = shell.cpu_imgs.pics.get(&p) else { continue };
+            match self.gl.upload(None, pm.width() as i32, pm.height() as i32, pm.width() as usize * 4, pm.data(), false, false) {
+                Ok(t) => {
+                    self.pics.insert(p, t);
+                }
+                Err(e) => tracing::debug!("picture upload: {e}"),
+            }
+        }
         // CPU layers
         for (l, pm) in [(Layer::Osk, shell.cpu_imgs.osk.as_ref()), (Layer::Page, shell.cpu_imgs.page.as_ref())] {
             let Some(pm) = pm else {
@@ -469,6 +495,9 @@ impl GpuUi {
         self.gl.finish();
         for (_, e) in self.dmabufs.drain().chain(self.shm.drain()).collect::<Vec<_>>() {
             self.gl.drop_tex(e.tex);
+        }
+        for t in self.pics.drain().map(|e| e.1).collect::<Vec<_>>() {
+            self.gl.drop_tex(t);
         }
         for (_, (_, t)) in self.layers.drain().collect::<Vec<_>>() {
             self.gl.drop_tex(t);

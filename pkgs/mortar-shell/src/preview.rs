@@ -51,8 +51,62 @@ pub fn demo_running() -> Vec<RunningInfo> {
         has_buffer: true,
         closing: false,
         geom: [0.0, 0.0, W, H],
+        game: false,
+        asleep: false,
+        pic: None,
     };
     vec![r(2, "claude", "Claude", Art::Claude), r(1, "m8", "M8", Art::M8)]
+}
+
+/// A demo library with made-up games (never anything from a device), its
+/// resume pictures and a slot or two, as pictures 900+.
+fn demo_games(pix: &mut HashMap<Src, Pixmap>) -> crate::games::GamesView {
+    use crate::games::{GameStatus, GamesView, Library, Pic, SlotInfo};
+    let list = r#"{"systems":[
+      {"id":"gbc","name":"Game Boy Color","tag":"GBC","order":11,"count":3,"games":[
+        {"path":"/demo/Garden Hop.gbc","name":"Garden Hop","region":"Europe","resume":false},
+        {"path":"/demo/Pocket King.gbc","name":"Pocket King","region":"World","resume":true,"thumb":"/demo/pk.png"},
+        {"path":"/demo/Tiny Tanks.gbc","name":"Tiny Tanks","region":"USA","resume":true,"thumb":"/demo/tt.png"}]},
+      {"id":"nes","name":"NES","tag":"NES","order":20,"count":2,"games":[
+        {"path":"/demo/Moon Miner.nes","name":"Moon Miner","resume":false},
+        {"path":"/demo/Star Courier.nes","name":"Star Courier","region":"USA","resume":true,"thumb":"/demo/sc.png"}]},
+      {"id":"snes","name":"Super Nintendo","tag":"SNES","order":21,"count":0,"games":[]},
+      {"id":"2048","name":"2048","tag":"2048","order":90,"noContent":true}],
+     "recent":[
+      {"system":"gbc","path":"/demo/Pocket King.gbc","name":"Pocket King","tag":"GBC","resume":true,"thumb":"/demo/pk.png"},
+      {"system":"nes","path":"/demo/Star Courier.nes","name":"Star Courier","tag":"NES","resume":true,"thumb":"/demo/sc.png"}]}"#;
+    let lib = Library::parse(list).ok();
+    let mut g = GamesView { lib, library_app: Some("play".into()), ..Default::default() };
+    // pictures: flat game-like screens (sky, ground, a block)
+    let scene = |sky: (u8, u8, u8), ground: (u8, u8, u8), w: u32, h: u32| {
+        let mut pm = Pixmap::new(w, h).unwrap();
+        pm.fill(resvg::tiny_skia::Color::from_rgba8(sky.0, sky.1, sky.2, 255));
+        let mut paint = resvg::tiny_skia::Paint::default();
+        paint.set_color_rgba8(ground.0, ground.1, ground.2, 255);
+        let r = |x: f32, y: f32, ww: f32, hh: f32| resvg::tiny_skia::Rect::from_xywh(x, y, ww, hh).unwrap();
+        pm.fill_rect(r(0.0, h as f32 * 0.72, w as f32, h as f32 * 0.28), &paint, resvg::tiny_skia::Transform::identity(), None);
+        paint.set_color_rgba8(250, 220, 60, 255);
+        pm.fill_rect(r(w as f32 * 0.3, h as f32 * 0.5, w as f32 * 0.08, h as f32 * 0.22), &paint, resvg::tiny_skia::Transform::identity(), None);
+        paint.set_color_rgba8(240, 240, 240, 255);
+        pm.fill_rect(r(w as f32 * 0.6, h as f32 * 0.15, w as f32 * 0.2, h as f32 * 0.07), &paint, resvg::tiny_skia::Transform::identity(), None);
+        pm
+    };
+    for (id, path, sky, ground, w, h) in [
+        (900, "/demo/pk.png", (120, 180, 250), (70, 150, 60), 320, 288),
+        (901, "/demo/tt.png", (40, 40, 70), (150, 110, 70), 320, 288),
+        (902, "/demo/sc.png", (20, 20, 40), (90, 90, 120), 320, 240),
+        (903, "/demo/s1.png", (250, 170, 120), (70, 150, 60), 320, 288),
+    ] {
+        pix.insert(Src::Pic(id), scene(sky, ground, w, h));
+        g.thumbs.insert(path.into(), Pic { id, w, h });
+    }
+    // the running game's screen
+    pix.insert(Src::App(3), scene((120, 180, 250), (70, 150, 60), 1024, 768));
+    let mut st = GameStatus { can_save: true, ..Default::default() };
+    st.slots[0] = Some(SlotInfo { age_s: 420, thumb: Some("/demo/s1.png".into()) });
+    st.slots[1] = Some(SlotInfo { age_s: 2 * 86400, thumb: Some("/demo/pk.png".into()) });
+    g.status.insert(3, st);
+    g
 }
 
 struct Demo {
@@ -208,7 +262,16 @@ pub fn run(o: &Opts) -> Result<(), String> {
     let mut ui = ShellUi::new(prefs, s == "boot");
     let over_app = s.starts_with("menu") || s.starts_with("cross") || s.starts_with("saver") || matches!(s, "running" | "cross-switch" | "mixer" | "bluetooth" | "setup-wifi" | "setup-bluetooth" | "settings" | "app" | "osd" | "osd-mute" | "osd-bri" | "osd-home" | "toast" | "achievement" | "flash" | "osk" | "osk-chips" | "osk-chips-focus" | "close" | "swap" | "remote" | "wifi");
     let mut current = if s == "cross-dark" { Some(1) } else if over_app { Some(2) } else { None };
-    let run_ref: &[RunningInfo] = if s == "home-empty" { &none } else { &running };
+    // games: a demo library (made-up titles), one game running
+    let games = demo_games(&mut demo.pix);
+    let mut with_game = running.clone();
+    with_game.insert(0, RunningInfo { uid: 3, entry: Some("game:gbc:/demo/Pocket King.gbc".into()), name: "Pocket King · GBC".into(), art: Art::Games, game: true, ..running[0].clone() });
+    with_game.push(RunningInfo { uid: 4, entry: Some("game:nes:/demo/Star Courier.nes".into()), name: "Star Courier · NES".into(), art: Art::Games, game: true, asleep: true, has_buffer: false, pic: Some(902), ..running[0].clone() });
+    let game_screen = matches!(s, "game-panel" | "game-asleep");
+    if game_screen {
+        current = Some(3);
+    }
+    let run_ref: &[RunningInfo] = if s == "home-empty" { &none } else if game_screen { &with_game } else { &running };
     let host = "brick";
     let demo_st = { use mortar_setup::ui::Device; mortar_setup::ui::demo::DemoDevice::settings().status().clone() };
     let net = crate::shellui::NetState { wifi: demo_st.wifi.clone(), bt: demo_st.bluetooth.clone(), error: None };
@@ -230,6 +293,7 @@ pub fn run(o: &Opts) -> Result<(), String> {
         muted: false,
         net: Some(&net),
         mixer: &mixer,
+        games: Some(&games),
     };
     let dt = 1.0 / 120.0;
     let settle = |ui: &mut ShellUi, v: &View, secs: f64| {
@@ -287,6 +351,35 @@ pub fn run(o: &Opts) -> Result<(), String> {
             }
             for _ in 0..a {
                 ui.button(Button::A, false, &v0);
+            }
+        }
+        "games" | "games-system" => {
+            // MENU, ▶ ▶: the cross on Games (Continue selected); A on a
+            // system opens its page
+            ui.menu_key(&v0);
+            ui.button(Button::Right, false, &v0);
+            ui.button(Button::Right, false, &v0);
+            if s == "games-system" {
+                for _ in 0..3 {
+                    ui.button(Button::Down, false, &v0);
+                }
+                ui.button(Button::A, false, &v0);
+                settle(&mut ui, &v0, 0.6);
+                ui.button(Button::Down, false, &v0);
+            }
+        }
+        "game-panel" | "game-asleep" => {
+            // MENU on Running: the game in front, Y opens its panel
+            ui.menu_key(&v0);
+            if s == "game-asleep" {
+                for _ in 0..3 {
+                    ui.button(Button::Down, false, &v0);
+                }
+            } else {
+                ui.button(Button::Up, false, &v0);
+                ui.button(Button::Y, false, &v0);
+                settle(&mut ui, &v0, 0.4);
+                ui.button(Button::Right, false, &v0);
             }
         }
         "menu-options" => {
@@ -376,7 +469,7 @@ pub fn run(o: &Opts) -> Result<(), String> {
         }
         other => {
             return Err(format!(
-                "unknown preview screen '{other}' (boot, home, home-empty, app, running, cross-apps, home-menu (the cross over home), menu-games, menu-music, cross-settings, menu-adjust, menu-confirm, menu-options, wifi, bluetooth, mixer, cross-games, cross-music, cross-switch (Apps to Games: use --frames), settings, remote, setup-wifi, setup-bluetooth, timezone, timezone-zones, launch, close, swap, osd, osd-mute, osd-bri, osd-home, toast, achievement, flash, osk, osk-chips, osk-chips-focus, power)"
+                "unknown preview screen '{other}' (boot, home, home-empty, app, running, cross-apps, home-menu (the cross over home), menu-games, menu-music, cross-settings, menu-adjust, menu-confirm, menu-options, games, games-system, game-panel, game-asleep, wifi, bluetooth, mixer, cross-games, cross-music, cross-switch (Apps to Games: use --frames), settings, remote, setup-wifi, setup-bluetooth, timezone, timezone-zones, launch, close, swap, osd, osd-mute, osd-bri, osd-home, toast, achievement, flash, osk, osk-chips, osk-chips-focus, power)"
             ))
         }
     }

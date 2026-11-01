@@ -10,7 +10,9 @@
 #          missing, e.g. scph5501.bin for the PlayStation)
 #   Saves  /var/lib/mortar-play/saves/<system>/, states in .../states/
 #
-# Off by default. When enabled it adds a "Games" launcher entry to
+# Off by default. When enabled every game runs as its own mortar-shell app
+# (MENU > Games lists the library; `mortar.shell.games`), it adds a "Games"
+# launcher entry (mortar-play's own library, "All systems") to
 # mortar-shell (and a greeter session when the greeter is on; it then runs
 # on the PowerVR GPU through mortar-sdl-run).
 #
@@ -424,6 +426,14 @@ in
               category = "games";
               gamepad = "forward";
               command = [ "${launcher}/bin/mortar-play-launch" ];
+            };
+            # every game its own app: MENU > Games lists the library (read
+            # with `list --json` off the shell's event loop), A starts
+            # `run SYSTEM ROM`; the play entry above is "All systems"
+            mortar.shell.games = {
+              list = [ (lib.getExe cfg.package) "--config" "/etc/mortar-play/config.json" "list" "--json" ];
+              run = [ "${launcher}/bin/mortar-play-launch" "run" ];
+              library = "play";
             };
           }
         ))

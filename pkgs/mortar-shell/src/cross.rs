@@ -21,6 +21,7 @@
 //!
 //! A child module of `shellui`: it works on the `ShellUi` state directly.
 
+use super::gamepages::{GamePage, GamePanel, GRow};
 use super::menupages::{Sub, SubKind};
 use super::*;
 use crate::config::Category;
@@ -87,6 +88,8 @@ pub(super) enum Row {
     App(u32),
     /// A launcher entry (by id).
     Launch(String),
+    /// A game, a recently played one, a system (gamepages.rs).
+    Game(GRow),
     Brightness,
     Volume,
     Mixer,
@@ -175,6 +178,10 @@ pub(super) struct Cross {
     /// A level row is being adjusted (◀▶ change it instead of category).
     adjusting: bool,
     pub(super) sub: Option<Sub>,
+    /// A system's games (MENU > Games > a system).
+    pub(super) gpage: Option<GamePage>,
+    /// The game panel (Y on a game in Running).
+    pub(super) gpanel: Option<GamePanel>,
     pub(super) patterns: Patterns,
     /// The pattern a category change leaves (it slides out as the new one
     /// slides in, `pat_x` 0 -> 1, `pat_dir` the way the categories move).
@@ -197,8 +204,8 @@ const CATS_TOP: f32 = 164.0;
 const ICON: f32 = 116.0;
 /// The selected row (taller, a serif title) right under the categories,
 /// the others below it; one dimmed row above the categories.
-const ROW_TOP: f32 = 344.0;
-const SEL_H: f32 = 96.0;
+pub(super) const ROW_TOP: f32 = 344.0;
+pub(super) const SEL_H: f32 = 96.0;
 const ROWH: f32 = 80.0;
 /// Unselected rows' icon tiles (the selected row's are TILE).
 const TILE_S: f32 = 60.0;
@@ -240,7 +247,10 @@ fn row_op(j: usize, s: usize) -> f32 {
 /// The cross's categories (Games only when something is in it; Music
 /// always has the Mixer).
 pub(super) fn cats(v: &View) -> Vec<Cat> {
-    CROSS_CATS.into_iter().filter(|c| *c != Cat::Games || v.launcher.iter().any(|l| l.category == Category::Games)).collect()
+    CROSS_CATS
+        .into_iter()
+        .filter(|c| *c != Cat::Games || v.launcher.iter().any(|l| l.category == Category::Games) || super::gamepages::has_games(v))
+        .collect()
 }
 
 pub(super) fn running_rows(v: &View, hidden: &[u32]) -> Vec<Row> {
@@ -252,7 +262,7 @@ pub(super) fn rows(cat: Cat, v: &View) -> Vec<Row> {
     match cat {
         Cat::Running => running_rows(v, &[]),
         Cat::Apps => launch(&|_| true),
-        Cat::Games => launch(&|l| l.category == Category::Games),
+        Cat::Games => super::gamepages::games_rows(v),
         Cat::Music => std::iter::once(Row::Mixer).chain(launch(&|l| l.category == Category::Music)).collect(),
         Cat::Settings => {
             let mut r = vec![Row::Brightness, Row::Volume, Row::Mixer, Row::Wifi, Row::Bluetooth, Row::Sleep];
@@ -268,6 +278,11 @@ pub(super) fn rows(cat: Cat, v: &View) -> Vec<Row> {
 impl Cross {
     fn sel_row(&self, sel: usize) -> Option<&Row> {
         self.rows.get(sel).map(|r| &r.key)
+    }
+
+    /// The cross's row at `sel`.
+    pub(super) fn sel_key_now(&self, sel: usize) -> Option<Row> {
+        self.sel_row(sel).cloned()
     }
 
     #[cfg(test)]
@@ -321,6 +336,12 @@ impl Cross {
         if let Some(s) = &mut self.sub {
             v.extend(s.springs());
         }
+        if let Some(p) = &mut self.gpage {
+            v.extend(p.springs());
+        }
+        if let Some(p) = &mut self.gpanel {
+            v.extend(p.springs());
+        }
         v
     }
 
@@ -340,6 +361,8 @@ impl Cross {
             || !self.rows.iter().all(|r| r.y.rest() && r.op.rest() && r.bw.rest())
             || self.ctx.as_ref().is_some_and(|c| !c.op.rest())
             || self.sub.as_ref().is_some_and(|s| s.moving())
+            || self.gpage.as_ref().is_some_and(|p| p.moving())
+            || self.gpanel.as_ref().is_some_and(|p| p.moving())
             || !(self.patterns.nudge.rest() && self.pat_x.rest())
     }
 
@@ -356,7 +379,7 @@ impl Cross {
     /// The screensaver may grow here: the cross alone, settled (not
     /// Running, a glass page or the options popup).
     pub(super) fn saver_ok(&self) -> bool {
-        !self.closing && self.on_cross && self.sub.is_none() && self.ctx.is_none() && self.page_x.x > 0.99
+        !self.closing && self.on_cross && self.sub.is_none() && self.ctx.is_none() && self.gpage.is_none() && self.gpanel.is_none() && self.page_x.x > 0.99
     }
 
     pub(super) fn on_cross(&self) -> bool {
@@ -403,6 +426,8 @@ impl ShellUi {
             confirm: None,
             adjusting: false,
             sub: None,
+            gpage: None,
+            gpanel: None,
             patterns: Patterns::new(),
             pat_from: None,
             pat_x: Spring { k_mul: 0.7, ..Spring::new(1.0) },
@@ -544,6 +569,7 @@ impl ShellUi {
         {
             m.ctx = None;
         }
+        self.sync_games(v);
     }
 
     /// A button with the MENU up; the pattern feels ▲▼.
@@ -568,12 +594,17 @@ impl ShellUi {
     }
 
     fn menu_button_inner(&mut self, b: Button, repeat: bool, v: &View) {
+        let games = self.games_take();
         let Some(m) = &mut self.menu else { return };
         if m.closing {
             return;
         }
         if m.ctx.is_some() {
             self.ctx_button(b, repeat, v);
+            return;
+        }
+        if games {
+            self.games_button(b, repeat, v);
             return;
         }
         // a page sliding out no longer takes buttons
@@ -691,6 +722,7 @@ impl ShellUi {
                 _ => self.fx(Sfx::Deny, None),
             },
             Button::Y if !repeat => match row {
+                Some(Row::App(uid)) if v.app(uid).is_some_and(|a| a.game) => self.open_gpanel(uid, v),
                 Some(Row::App(uid)) => {
                     let mut items = vec![CtxItem::Switch];
                     if v.app(uid).is_some_and(|a| a.entry.is_some()) {
@@ -765,6 +797,7 @@ impl ShellUi {
             return;
         }
         match row {
+            Row::Game(g) => self.activate_game(g, v),
             Row::Launch(id) => {
                 let Some(l) = v.launcher.iter().find(|l| l.id == id) else { return };
                 match v.by_entry(&id) {
@@ -815,14 +848,14 @@ impl ShellUi {
     }
 
     /// Where the selected row's icon is (the zoom starts there).
-    fn sel_rect(&self) -> R4 {
+    pub(super) fn sel_rect(&self) -> R4 {
         let Some(m) = &self.menu else { return R4 { x: LISTX + IX_W, y: ROW_TOP, w: TILE, h: TILE } };
         let s = self.cross_sel[m.cat.i()];
         let y = m.rows.get(s).map(|r| r.y.x).unwrap_or(ROW_TOP);
         R4 { x: LISTX + IX_W, y: y + (SEL_H - TILE) / 2.0, w: TILE, h: TILE }
     }
 
-    fn start_trans(&mut self, target: Target, name: String, art: Art, from: R4, prev: Option<u32>) {
+    pub(super) fn start_trans(&mut self, target: Target, name: String, art: Art, from: R4, prev: Option<u32>) {
         self.trans = Some(Trans::Launch { target, name, art, from, prev, t0: self.t });
         self.lp.snap(0.0);
         self.lp.set(1.0);
@@ -830,11 +863,11 @@ impl ShellUi {
     }
 
     /// A on a window: it zooms from its place to the full screen.
-    fn switch_from_menu(&mut self, uid: u32, v: &View) {
+    pub(super) fn switch_from_menu(&mut self, uid: u32, v: &View) {
         self.switch_from_menu_at(uid, v, R4 { x: 0.0, y: RUN_Y, w: W, h: RUN_H });
     }
 
-    fn switch_from_menu_at(&mut self, uid: u32, v: &View, from: R4) {
+    pub(super) fn switch_from_menu_at(&mut self, uid: u32, v: &View, from: R4) {
         if v.current == Some(uid) {
             self.close_menu();
             return;
@@ -846,13 +879,16 @@ impl ShellUi {
     }
 
     /// X: close the app; its window goes at once.
-    fn close_from_menu(&mut self, uid: u32, v: &View) {
+    pub(super) fn close_from_menu(&mut self, uid: u32, v: &View) {
         let Some(m) = &mut self.menu else { return };
         m.hidden.push(uid);
         self.out.push(Out::Close(uid));
         self.fx(Sfx::Close, Some(Haptic::Double));
         let name = v.app(uid).map(|a| a.name.clone()).unwrap_or_default();
-        self.show_toast(Toast { sub: name, sound: None, ..Toast::info("Closed") });
+        // a game that runs says "Saved" itself once its state is written
+        if !v.app(uid).is_some_and(|a| a.game && !a.asleep) {
+            self.show_toast(Toast { sub: name, sound: None, ..Toast::info("Closed") });
+        }
         self.sync_menu(v);
     }
 
@@ -916,6 +952,9 @@ impl ShellUi {
         if let Some(c) = &m.ctx {
             draw_ctx(b, pal, c, g);
         }
+        if let Some(p) = &m.gpanel {
+            self.draw_gpanel(b, pal, v, p, g);
+        }
         // the bars fade with the menu under the screensaver
         let (e, _) = self.saver();
         b.push_alpha(1.0 - e);
@@ -943,6 +982,11 @@ impl ShellUi {
                         b.rect(0.0, 0.0, W, H, Color(0, 0, 0, 255));
                         let gg = a.geom;
                         b.image(Src::App(*uid), gg[0], gg[1], gg[2], gg[3], [0.0, 0.0, 1.0, 1.0]);
+                    }
+                    // a game asleep (or waking): its last frame
+                    Some(a) if a.pic.is_some() => {
+                        b.rect(0.0, 0.0, W, H, Color(0, 0, 0, 255));
+                        b.image(Src::Pic(a.pic.unwrap_or(0)), 0.0, 0.0, W, H, [0.0, 0.0, 1.0, 1.0]);
                     }
                     Some(a) => self.splash(b, pal, a.art, &a.name, 0.0),
                     None => {}
@@ -977,7 +1021,9 @@ impl ShellUi {
             Row::Home => ("Home".to_string(), String::new()),
             Row::App(u) => match v.app(*u) {
                 Some(a) => {
-                    let st = if a.closing {
+                    let st = if a.asleep {
+                        "asleep · saved"
+                    } else if a.closing {
                         "closing"
                     } else if !a.has_buffer {
                         "starting"
@@ -1054,8 +1100,16 @@ impl ShellUi {
             b.pop();
         }
         self.draw_cats(b, pal, v, m, g);
+        if let Some(Row::Game(gr)) = m.sel_row(s).filter(|_| m.cat == Cat::Games && m.gpage.is_none())
+            && matches!(gr, GRow::Continue | GRow::Recent(_))
+        {
+            self.draw_games_pic(b, pal, v, gr, g);
+        }
         if let Some(sub) = &m.sub {
             self.draw_sub(b, pal, v, m, sub, g);
+        }
+        if let Some(p) = &m.gpage {
+            self.draw_gpage(b, pal, v, p, g);
         }
         b.pop_alpha();
     }
@@ -1182,9 +1236,12 @@ impl ShellUi {
         arrow_text(b, tx, top + title.line_px() + 2.0, &s, &sub, true);
     }
 
-    fn menu_hints(&self, m: &Cross, v: &View) -> Vec<(&'static str, &'static str)> {
+    pub(super) fn menu_hints(&self, m: &Cross, v: &View) -> Vec<(&'static str, &'static str)> {
         if let Some(sub) = &m.sub {
             return self.sub_hints(sub, v);
+        }
+        if let Some(h) = self.games_hints(v) {
+            return h;
         }
         if m.ctx.is_some() {
             return vec![("▲▼", "Choose"), ("B", "Back"), ("A", "Select")];
@@ -1193,6 +1250,10 @@ impl ShellUi {
             let mut h = vec![("▲▼", "Scroll"), ("▶", "Apps")];
             match m.run_keys.get(m.run_sel) {
                 Some(Row::Home) => h.push(("A", "Go home")),
+                Some(Row::App(u)) if v.app(*u).is_some_and(|a| a.game) => {
+                    let wake = v.app(*u).is_some_and(|a| a.asleep);
+                    h.extend([("X", "Close"), ("Y", "Game menu"), ("A", if wake { "Wake" } else { "Switch" })]);
+                }
                 Some(_) => h.extend([("X", "Close"), ("Y", "Options"), ("A", "Switch")]),
                 None => {}
             }
@@ -1208,6 +1269,7 @@ impl ShellUi {
             Some(r) if r.level() => h.push(("A", "Adjust")),
             Some(r) if r.warn() => h.push(("A", "Choose")),
             Some(Row::Sleep) => h.push(("A", "Sleep")),
+            Some(Row::Game(g)) => h.push(("A", super::gamepages::game_hint(g, v))),
             Some(Row::Launch(id)) => {
                 let running = v.launcher.iter().find(|l| l.id == *id).is_some_and(|l| l.running && l.single_instance);
                 h.push(("A", if running { "Switch" } else { "Open" }));
@@ -1350,6 +1412,11 @@ fn row_info(row: &Row, v: &View, _ui_vol: u8) -> RowInfo {
             Some(a) => ri(&a.name, String::new(), Ic::art(a.art)),
             None => ri("", String::new(), Ic::Apps),
         },
+        Row::Game(g) => super::gamepages::game_row_info(g, v),
+        Row::Launch(id) if super::gamepages::launch_label(id, v).is_some() => {
+            let (t, s) = super::gamepages::launch_label(id, v).unwrap_or_default();
+            ri(&t, s, Ic::Games)
+        }
         Row::Launch(id) => match v.launcher.iter().find(|l| l.id == *id) {
             Some(l) => {
                 let sub = if l.running && l.single_instance { format!("{} · running", l.description) } else { l.description.clone() };

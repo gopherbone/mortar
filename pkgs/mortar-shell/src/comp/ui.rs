@@ -122,6 +122,8 @@ pub struct CpuImages {
     pub page: Option<Pixmap>,
     /// The home screen blurred (Shell::home_gen it was made from).
     pub home_blur: Option<(u64, Pixmap)>,
+    /// Pictures (`Src::Pic`): game thumbnails, sleeping games' last frames.
+    pub pics: HashMap<u32, Pixmap>,
 }
 
 impl Images for CpuImages {
@@ -132,12 +134,14 @@ impl Images for CpuImages {
             Src::Layer(Layer::Osk) => self.osk.as_ref(),
             Src::Layer(Layer::Page) => self.page.as_ref(),
             Src::HomeBlur => self.home_blur.as_ref().map(|e| &e.1),
+            Src::Pic(p) => self.pics.get(&p),
         }
     }
 }
 
-/// Copy a buffer's pixels (wl_shm or a linear XRGB dma-buf).
-fn buffer_pixmap(b: &WlBuffer) -> Option<Pixmap> {
+/// Copy a buffer's pixels (wl_shm or a linear XRGB dma-buf), every
+/// `step`th pixel each way.
+pub fn buffer_pixmap(b: &WlBuffer, step: usize) -> Option<Pixmap> {
     if let Ok(dmabuf) = smithay::wayland::dmabuf::get_dmabuf(b) {
         use smithay::backend::allocator::dmabuf::DmabufMappingMode;
         let size = dmabuf.size();
@@ -150,7 +154,7 @@ fn buffer_pixmap(b: &WlBuffer) -> Option<Pixmap> {
         }
         // SAFETY: the mapping is `len` bytes, checked above
         let data = unsafe { std::slice::from_raw_parts((map.ptr() as *const u8).add(off), stride * size.h as usize) };
-        return pixmap_from_xrgb(data, size.w as usize, size.h as usize, stride, 1);
+        return pixmap_from_xrgb(data, size.w as usize, size.h as usize, stride, step);
     }
     with_buffer_contents(b, |ptr, len, d| {
         if !matches!(d.format, wl_shm::Format::Argb8888 | wl_shm::Format::Xrgb8888) {
@@ -162,7 +166,7 @@ fn buffer_pixmap(b: &WlBuffer) -> Option<Pixmap> {
         }
         // SAFETY: bounds checked; the client may scribble concurrently
         let data = unsafe { std::slice::from_raw_parts(ptr.add(off), stride * h) };
-        pixmap_from_xrgb(data, w, h, stride, 1)
+        pixmap_from_xrgb(data, w, h, stride, step)
     })
     .ok()
     .flatten()
@@ -188,6 +192,9 @@ impl Shell {
     }
 
     fn art_for(&self, entry: Option<&str>, name: &str, icon: mortar_ui::icons::Icon) -> Art {
+        if entry.is_some_and(crate::games::is_game_key) {
+            return Art::Games;
+        }
         entry
             .and_then(|id| self.cfg.app(id))
             .and_then(|e| e.art)
@@ -221,6 +228,7 @@ impl Shell {
                         [x as f32, y as f32, bw as f32, bh as f32]
                     })
                     .unwrap_or([0.0, 0.0, self.size.0 as f32, self.size.1 as f32]);
+                let waking = self.games.as_ref().and_then(|g| g.waking_pic(a.uid));
                 RunningInfo {
                     uid: a.uid,
                     entry: a.entry_id.clone(),
@@ -229,6 +237,9 @@ impl Shell {
                     has_buffer,
                     closing: a.closing.is_some(),
                     geom,
+                    game: a.is_game(),
+                    asleep: a.asleep.is_some(),
+                    pic: a.asleep.or(waking).filter(|p| !has_buffer && self.cpu_imgs.pics.contains_key(p)),
                 }
             })
             .collect();
@@ -281,6 +292,7 @@ impl Shell {
             muted: self.muted,
             net: self.net.as_ref(),
             mixer: &self.mixer,
+            games: self.games.as_ref().map(|g| &g.view),
         };
         f(&mut self.sui, &v)
     }
@@ -371,7 +383,21 @@ impl Shell {
                         self.sui.launch_failed(&e);
                     }
                 },
+                Out::Focus(uid) if self.apps.get(uid).is_some_and(|a| a.sleeping()) => {
+                    if let Err(e) = self.wake_game(uid) {
+                        tracing::warn!(uid, "wake: {e}");
+                        self.sui.launch_failed(&e);
+                    }
+                }
                 Out::Focus(uid) => self.show_app(uid),
+                Out::LaunchGame(g) => match self.launch_game(&g) {
+                    Ok(uid) => self.sui.launched(&g.key(), uid),
+                    Err(e) => {
+                        tracing::warn!("launch game: {e}");
+                        self.sui.launch_failed(&e);
+                    }
+                },
+                Out::GameCtl(uid, cmd) => self.game_ctl(uid, cmd),
                 Out::Close(uid) => self.close_app(uid),
                 Out::Restart(uid) => {
                     if let Some(id) = self.apps.get(uid).and_then(|a| a.entry_id.clone()) {
@@ -539,6 +565,7 @@ impl Shell {
                 self.ui_dirty = true;
             }
         }
+        self.games_poll();
         self.mixer_worker.set_active(self.sui.wants_mixer());
         if let Some(s) = self.mixer_worker.take() {
             self.streams = s;
@@ -794,7 +821,7 @@ impl Shell {
             if fresh {
                 continue;
             }
-            if let Some(pm) = buffer_pixmap(&buf) {
+            if let Some(pm) = buffer_pixmap(&buf, 1) {
                 self.cpu_imgs.apps.insert(uid, (s.id(), commit, pm));
             }
         }
@@ -852,8 +879,36 @@ impl Shell {
 
     /// The screenshot combo: capture, flash + shutter, write the PNG in the
     /// background, then a toast.
+    /// The app in front alone (and its keyboard strip): no toast, OSD or
+    /// other shell UI over it. None when the shell's screens cover it.
+    fn capture_app(&mut self) -> Option<Pixmap> {
+        let uid = self.visible_app()?;
+        if self.sui.covers_app(true) {
+            return None;
+        }
+        let (running, _) = self.view_parts();
+        let a = running.iter().find(|r| r.uid == uid)?;
+        let (w, h) = (self.size.0 as f32, self.size.1 as f32);
+        let mut scene = Scene::new(w, h, mortar_ui::gfx::Color(0, 0, 0, 255));
+        let (sx, sy) = (w / crate::shellui::W, h / crate::shellui::H);
+        let g = a.geom;
+        let quad = |x: f32, y: f32, ww: f32, hh: f32| [(x * sx, y * sy), ((x + ww) * sx, y * sy), ((x + ww) * sx, (y + hh) * sy), (x * sx, (y + hh) * sy)];
+        scene.items.push(crate::scene::Item::Image { src: Src::App(uid), quad: quad(g[0], g[1], g[2], g[3]), uv: [0.0, 0.0, 1.0, 1.0], alpha: 1.0 });
+        if self.osk_shown() {
+            let oh = self.osk_height() as f32;
+            scene.items.push(crate::scene::Item::Image { src: Src::Layer(Layer::Osk), quad: quad(0.0, crate::shellui::H - oh, crate::shellui::W, oh), uv: [0.0, 0.0, 1.0, 1.0], alpha: 1.0 });
+        }
+        self.refresh_cpu_images(&scene);
+        let mut pm = Pixmap::new(self.size.0 as u32, self.size.1 as u32)?;
+        let t = self.typo.as_ref()?;
+        self.raster.render(&mut pm, &scene, t, &self.cpu_imgs);
+        Some(pm)
+    }
+
     pub fn screenshot_combo(&mut self) {
-        let Some(pm) = self.capture() else {
+        // a game (or any app) in front: just its frame
+        let pm = self.capture_app().or_else(|| self.capture());
+        let Some(pm) = pm else {
             self.sui.show_toast(Toast::info("Screenshot failed"));
             return;
         };
@@ -895,6 +950,7 @@ impl Shell {
             haptic: Option<String>,
         }
         let t: T = serde_json::from_str(arg).map_err(|e| format!("toast: {e}"))?;
+        tracing::info!(title = %t.title, sub = %t.sub, "toast from an app");
         let mut toast = match t.kind.as_deref() {
             Some("achievement") => Toast::achievement(t.title, t.sub),
             Some("info") | None => Toast { sub: t.sub, ..Toast::info(t.title) },

@@ -6,6 +6,7 @@ pub mod bg;
 pub mod ctl;
 pub mod drm;
 pub mod gl;
+pub mod gamectl;
 pub mod gpu;
 pub mod input;
 pub mod osk_slide;

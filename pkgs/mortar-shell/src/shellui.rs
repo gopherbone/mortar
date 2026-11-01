@@ -20,6 +20,8 @@
 mod cross;
 #[path = "menupages.rs"]
 mod menupages;
+#[path = "gamepages.rs"]
+mod gamepages;
 pub use cross::Cat;
 #[cfg(test)]
 use menupages::SubKind;
@@ -130,6 +132,12 @@ pub struct RunningInfo {
     pub closing: bool,
     /// Where its buffer goes on screen when shown alone (x, y, w, h).
     pub geom: [f32; 4],
+    /// A game (mortar-play, one app per game): Y opens the game panel.
+    pub game: bool,
+    /// A game put to sleep: its picture stands in for the window.
+    pub asleep: bool,
+    /// Its last frame (`Src::Pic`), while asleep or waking.
+    pub pic: Option<u32>,
 }
 
 #[derive(Clone, Debug)]
@@ -179,6 +187,8 @@ pub struct View<'a> {
     pub net: Option<&'a NetState>,
     /// The running apps' PipeWire streams (the Mixer).
     pub mixer: &'a [MixChan],
+    /// mortar-play's library and the game apps' states (None: no games).
+    pub games: Option<&'a crate::games::GamesView>,
 }
 
 /// mortar-setupd's view of Wi-Fi (iwd) and Bluetooth (BlueZ).
@@ -260,6 +270,10 @@ pub enum Out {
     MixMute(u32, bool),
     /// The default sink muted or not.
     MasterMute(bool),
+    /// Start a game as its own app (or switch to it if it runs).
+    LaunchGame(crate::games::GameRef),
+    /// A request to a game's control socket (the game panel).
+    GameCtl(u32, crate::games::GameCmd),
 }
 
 /// Rows of the settings screen (MENU > Settings > More settings). Volume,
@@ -2144,7 +2158,12 @@ impl ShellUi {
                     None if p > 0.9 => {
                         let a = ((p - 0.9) / 0.1).clamp(0.0, 1.0);
                         b.push_alpha(a);
-                        self.splash(b, pal, *art, name, 0.0);
+                        // a game waking from sleep: its last frame while it
+                        // restarts, so the restart does not show
+                        match target_uid(target, v).and_then(|u| v.app(u)).and_then(|a| a.pic) {
+                            Some(pic) => b.image(Src::Pic(pic), 0.0, 0.0, W, H, [0.0, 0.0, 1.0, 1.0]),
+                            None => self.splash(b, pal, *art, name, 0.0),
+                        }
                         b.pop_alpha();
                     }
                     None => {}
@@ -2554,7 +2573,7 @@ mod tests {
     use super::*;
 
     fn run(uid: u32, entry: &str) -> RunningInfo {
-        RunningInfo { uid, entry: Some(entry.into()), name: entry.into(), art: Art::Generic, has_buffer: true, closing: false, geom: [0.0, 0.0, W, H] }
+        RunningInfo { uid, entry: Some(entry.into()), name: entry.into(), art: Art::Generic, has_buffer: true, closing: false, geom: [0.0, 0.0, W, H], game: false, asleep: false, pic: None }
     }
     fn launcher() -> Vec<LauncherInfo> {
         [("term", Category::Apps), ("m8", Category::Music), ("pico", Category::Games)]
@@ -2579,6 +2598,7 @@ mod tests {
             muted: false,
             net: None,
             mixer: &[],
+            games: None,
         }
     }
     fn settle(ui: &mut ShellUi, v: &View) -> Vec<Out> {

@@ -82,6 +82,10 @@ pub enum Src {
     /// front): rendered once when it is first needed, blurred like
     /// `Blur`, kept while frames keep using it.
     HomeBlur,
+    /// A still picture decoded on the CPU (a game's resume or slot
+    /// thumbnail, a sleeping game's last frame), by id; an id's pixels
+    /// never change.
+    Pic(u32),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -157,6 +161,21 @@ impl Scene {
             .iter()
             .filter_map(|i| match i {
                 Item::Image { src: Src::App(u) | Src::Blur(u), .. } => Some(*u),
+                _ => None,
+            })
+            .collect();
+        v.sort();
+        v.dedup();
+        v
+    }
+
+    /// The pictures this frame shows.
+    pub fn pics(&self) -> Vec<u32> {
+        let mut v: Vec<u32> = self
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                Item::Image { src: Src::Pic(p), .. } => Some(*p),
                 _ => None,
             })
             .collect();

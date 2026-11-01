@@ -28,11 +28,27 @@ pub struct App<W> {
     pub windows: Vec<W>,
     /// Close requested at this time (escalates to SIGTERM / SIGKILL).
     pub closing: Option<Instant>,
+    /// What started it (a launcher entry, or a game the shell made one
+    /// for): Restart and waking start it again from this.
+    pub spec: Option<AppEntry>,
+    /// When its process was started.
+    pub started: Option<Instant>,
+    /// A game put to sleep (its state saved, its process gone): it stays in
+    /// Running with its last frame (this picture id) until it is woken.
+    pub asleep: Option<u32>,
 }
 
 impl<W> App<W> {
     pub fn alive(&self) -> bool {
-        self.child.is_some() || !self.windows.is_empty()
+        self.child.is_some() || !self.windows.is_empty() || self.asleep.is_some()
+    }
+    /// Asleep and its process gone (nothing left to wait for).
+    pub fn sleeping(&self) -> bool {
+        self.asleep.is_some() && self.child.is_none() && self.windows.is_empty()
+    }
+    /// A game (one app per game, see games.rs).
+    pub fn is_game(&self) -> bool {
+        self.entry_id.as_deref().is_some_and(crate::games::is_game_key)
     }
 }
 
@@ -104,6 +120,9 @@ impl<W> Apps<W> {
             pid: None,
             windows: Vec::new(),
             closing: None,
+            spec: None,
+            started: None,
+            asleep: None,
         });
         Some(uid)
     }
@@ -117,7 +136,31 @@ impl<W> Apps<W> {
         slot_env: impl Fn(u8) -> Vec<(String, String)>,
     ) -> Result<u32, String> {
         let uid = self.add(Some(e.id.clone()), e.name.clone(), e.icon, e.gamepad).ok_or("too many apps running")?;
-        let slot = self.get(uid).unwrap().slot;
+        self.get_mut(uid).unwrap().spec = Some(e.clone());
+        if let Err(err) = self.spawn(uid, e, env, slot_env) {
+            self.list.retain(|a| a.uid != uid);
+            return Err(err);
+        }
+        Ok(uid)
+    }
+
+    /// Start a sleeping app's process again (same uid, slot and place in
+    /// the MRU list).
+    pub fn respawn(&mut self, uid: u32, env: &LaunchEnv, slot_env: impl Fn(u8) -> Vec<(String, String)>) -> Result<(), String> {
+        let a = self.get(uid).ok_or("no such app")?;
+        if a.child.is_some() {
+            return Err("still running".into());
+        }
+        let e = a.spec.clone().ok_or("nothing to start it from")?;
+        self.spawn(uid, &e, env, slot_env)?;
+        let a = self.get_mut(uid).unwrap();
+        a.asleep = None;
+        a.closing = None;
+        Ok(())
+    }
+
+    fn spawn(&mut self, uid: u32, e: &AppEntry, env: &LaunchEnv, slot_env: impl Fn(u8) -> Vec<(String, String)>) -> Result<(), String> {
+        let slot = self.get(uid).ok_or("no such app")?.slot;
         let mut cmd = Command::new(&e.command[0]);
         cmd.args(&e.command[1..]);
         cmd.env("WAYLAND_DISPLAY", env.wayland_display);
@@ -143,12 +186,10 @@ impl<W> Apps<W> {
                 let a = self.get_mut(uid).unwrap();
                 a.pid = Some(child.id());
                 a.child = Some(child);
-                Ok(uid)
+                a.started = Some(Instant::now());
+                Ok(())
             }
-            Err(err) => {
-                self.list.retain(|a| a.uid != uid);
-                Err(format!("{}: {err}", e.command[0]))
-            }
+            Err(err) => Err(format!("{}: {err}", e.command[0])),
         }
     }
 
@@ -173,6 +214,13 @@ impl<W> Apps<W> {
     /// `tick`).
     pub fn close(&mut self, uid: u32, close_windows: impl Fn(&W)) {
         if let Some(a) = self.get_mut(uid) {
+            if a.sleeping() {
+                // nothing runs: it just goes (tick drops it)
+                a.asleep = None;
+                return;
+            }
+            // closed while going to sleep: it goes for good
+            a.asleep = None;
             for w in &a.windows {
                 close_windows(w);
             }
@@ -192,8 +240,12 @@ impl<W> Apps<W> {
             {
                 tracing::info!(app = %a.name, status = %st, "app exited");
                 a.child = None;
+                if a.asleep.is_some() {
+                    // put to sleep: it saved and quit as asked
+                    a.closing = None;
+                }
             }
-            if let Some(t) = a.closing {
+            if let Some(t) = a.closing.filter(|_| a.child.is_some()) {
                 let el = t.elapsed();
                 if el > Duration::from_secs(6) {
                     signal(a, libc::SIGKILL);
@@ -274,6 +326,24 @@ mod tests {
         assert_eq!(apps.ordered(), vec![b, a]);
         apps.focus(a);
         assert_eq!(apps.ordered(), vec![a, b]);
+    }
+
+    #[test]
+    fn asleep_apps_stay() {
+        let mut apps: Apps<u8> = Apps::default();
+        let a = apps.add(Some("game:gbc:/g.gbc".into()), "G · GBC".into(), Icon::Pad, GamepadMode::Forward).unwrap();
+        assert!(apps.get(a).unwrap().is_game());
+        apps.get_mut(a).unwrap().windows.push(1);
+        apps.focus(a);
+        // put to sleep: its window and process go, it stays (with its picture)
+        apps.get_mut(a).unwrap().asleep = Some(7);
+        apps.get_mut(a).unwrap().windows.clear();
+        assert!(apps.tick().is_empty());
+        assert!(apps.get(a).unwrap().sleeping());
+        assert_eq!(apps.focused(), Some(a));
+        // closed while asleep: gone, nothing to signal
+        apps.close(a, |_| {});
+        assert_eq!(apps.tick(), vec![a]);
     }
 
     #[test]

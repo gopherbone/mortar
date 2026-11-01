@@ -278,6 +278,16 @@ let
       setupSocket = if config.mortar ? setup && config.mortar.setup.enable then "/run/mortar-setup/control.sock" else null;
       # Settings > Updates (modules/mortar-update.nix)
       update = if config.mortar ? update && config.mortar.update.enable then config.mortar.update.shell else null;
+      # MENU > Games: mortar-play's library, one app per game (modules/mortar-play.nix)
+      games =
+        if cfg.games != null then
+          {
+            inherit (cfg.games) list run library env;
+            inherit (cfg) maxGames;
+            hibernateBelowMb = cfg.games.hibernateBelowMb;
+          }
+        else
+          null;
     }
   );
 
@@ -384,6 +394,32 @@ in
       default = [ ];
       example = [ "m8" ];
       description = "App ids to start with the shell; the first one is shown.";
+    };
+
+    games = mkOption {
+      type = types.nullOr (
+        types.submodule {
+          options = {
+            list = mkOption { type = types.listOf types.str; description = "Print the library as JSON (`mortar-play list --json`)."; };
+            run = mkOption { type = types.listOf types.str; description = "Start one game; SYSTEM and ROM are appended (`mortar-play run`)."; };
+            library = mkOption { type = types.nullOr types.str; default = null; description = "The launcher entry of the full library (MENU > Games > All systems)."; };
+            hibernateBelowMb = mkOption { type = types.ints.unsigned; default = 180; description = "Below this much available memory (MB), the least recently used background game saves and sleeps."; };
+            env = mkOption { type = types.attrsOf types.str; default = { }; description = "Environment for every game."; };
+          };
+        }
+      );
+      default = null;
+      description = ''
+        Games as apps (set by modules/mortar-play.nix): MENU > Games lists
+        the library, each game runs as its own app, Y on one in Running
+        opens its game panel.
+      '';
+    };
+
+    maxGames = mkOption {
+      type = types.ints.positive;
+      default = 3;
+      description = "Games awake at once; beyond that the least recently used background game saves its state and sleeps (it stays in Running and resumes when chosen).";
     };
 
     backgroundFps = mkOption {

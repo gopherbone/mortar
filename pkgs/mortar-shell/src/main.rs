@@ -7,6 +7,7 @@ mod art;
 #[cfg(target_os = "linux")]
 mod comp;
 mod config;
+mod games;
 mod haptics;
 mod patterns;
 mod mixer;

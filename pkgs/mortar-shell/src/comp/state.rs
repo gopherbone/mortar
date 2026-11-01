@@ -224,6 +224,8 @@ pub struct Shell {
     last_bg_tick: Instant,
     /// Settings > Updates (mortar-update's status file).
     pub update: super::ui::UpdateWatch,
+    /// mortar-play's games (one app each; None: not set up).
+    pub games: Option<super::gamectl::GamesState>,
 }
 
 impl Shell {
@@ -271,6 +273,7 @@ impl Shell {
         let volume_worker = super::ui::VolumeWorker::new(cfg.actions.volume_set.clone(), cfg.actions.volume_get.clone());
         let net_worker = cfg.setup_socket.clone().map(super::bg::NetWorker::new);
         let mixer_worker = super::bg::MixerWorker::new(cfg.actions.pw_dump.clone());
+        let games = cfg.games.as_ref().map(|g| super::gamectl::GamesState::new(g.library.clone()));
         let mut shell = Shell {
             dh,
             loop_handle,
@@ -368,6 +371,7 @@ impl Shell {
             backdrop_rgb: None,
             last_bg_tick: Instant::now(),
             update: Default::default(),
+            games,
         };
         shell.apply_prefs();
         shell.refresh_timezone();
@@ -506,6 +510,20 @@ impl Shell {
         if !e.available() {
             return Err(format!("{} is not installed", e.name));
         }
+        self.launch_entry(e)
+    }
+
+    /// Environment every app gets besides its entry's.
+    pub fn launch_env(&self) -> Vec<(String, String)> {
+        let mut extra: Vec<(String, String)> = self.cfg.env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+        // Settings > Palette, for apps that start in it (the terminal)
+        extra.push(("MORTAR_PALETTE".into(), if self.sui.prefs.night { "night" } else { "day" }.into()));
+        extra
+    }
+
+    /// Start an entry: a launcher entry, or one the shell made (a game).
+    pub fn launch_entry(&mut self, e: crate::config::AppEntry) -> Result<u32, String> {
+        let id = e.id.as_str();
         if e.single_instance
             && let Some(a) = self.apps.by_entry(id)
         {
@@ -524,9 +542,7 @@ impl Shell {
         {
             self.pads.add_slot(s);
         }
-        let mut extra: Vec<(String, String)> = self.cfg.env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-        // Settings > Palette, for apps that start in it (the terminal)
-        extra.push(("MORTAR_PALETTE".into(), if self.sui.prefs.night { "night" } else { "day" }.into()));
+        let extra = self.launch_env();
         let env = LaunchEnv { wayland_display: &self.socket_name, extra };
         let pads = &self.pads;
         let uid = self.apps.launch(&e, &env, |slot| {
@@ -665,6 +681,7 @@ impl Shell {
         }
         self.suspend_tick();
         self.idle_tick();
+        self.hibernate_tick();
         self.page_poll();
         self.update_poll();
         // status while a shell screen shows
@@ -996,6 +1013,9 @@ impl Shell {
             return;
         }
         self.suspend_at = None;
+        // games write their resume state first (a dead battery in suspend
+        // must not cost progress)
+        self.save_games_for_suspend();
         tracing::info!("suspending");
         if let Some((cmd, args)) = self.cfg.actions.sleep.split_first() {
             match std::process::Command::new(cmd).args(args).spawn() {

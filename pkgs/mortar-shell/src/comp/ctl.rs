@@ -8,7 +8,7 @@
 //!   mortar-shell ctl screenshot /tmp/screen.png
 //!
 //! Commands: state | press B | down B | up B | key CODE | launch ID |
-//! focus UID|ID | close UID|ID | screenshot PATH | home | quit, and for the
+//! focus UID|ID | close UID|ID | game SYSTEM [ROM] | hibernate UID | save-games | screenshot PATH | home | quit, and for the
 //! UI: shot (the screenshot combo: flash, sound, file in screenshotDir),
 //! toast JSON ({"title", "sub", "kind": "info"|"achievement", "sound", "haptic",
 //! "secs"}; `mortar-shell toast` builds it), boot (replay the boot screen),
@@ -124,6 +124,34 @@ pub fn command(shell: &mut Shell, line: &str) -> Result<String, String> {
             "ok".into()
         }
         "launch" => format!("{}", shell.launch(arg)?),
+        "game" => {
+            // `game SYSTEM [ROM]`: a game as its own app (named from the
+            // library when it knows it)
+            let (sys, rom) = arg.split_once(' ').map(|(s, r)| (s, Some(r.trim()))).unwrap_or((arg, None));
+            if sys.is_empty() {
+                return Err("game SYSTEM [ROM]".into());
+            }
+            let lib = shell.games.as_ref().and_then(|g| g.view.lib.clone());
+            let g = rom
+                .and_then(|r| lib.as_ref()?.game_ref(sys, Path::new(r)))
+                .unwrap_or_else(|| {
+                    let s = lib.as_ref().and_then(|l| l.system(sys).cloned());
+                    let tag = s.as_ref().map(|s| s.tag.clone()).unwrap_or_else(|| sys.to_uppercase());
+                    let name = rom.map(|r| Path::new(r).file_stem().unwrap_or_default().to_string_lossy().into_owned()).unwrap_or_else(|| tag.clone());
+                    crate::games::GameRef { system: sys.into(), path: rom.map(PathBuf::from), name, tag, system_name: s.map(|s| s.name).unwrap_or_default() }
+                });
+            format!("{}", shell.launch_game(&g)?)
+        }
+        "hibernate" => {
+            let uid = find_app(shell, arg)?;
+            shell.hibernate(uid);
+            "ok".into()
+        }
+        "save-games" => {
+            // what happens before a suspend (tests)
+            shell.save_games_for_suspend();
+            "ok".into()
+        }
         "focus" => {
             let uid = find_app(shell, arg)?;
             shell.show_app(uid);
@@ -222,6 +250,7 @@ fn state(shell: &Shell) -> String {
                 "uid": a.uid, "id": a.entry_id, "name": a.name, "pid": a.pid, "slot": a.slot,
                 "windows": a.windows.len(), "visible": Some(a.uid) == vis,
                 "closing": a.closing.is_some(), "gamepad": format!("{:?}", a.gamepad),
+                "game": a.is_game(), "asleep": a.asleep.is_some(), "sleeping": a.sleeping(),
                 "geometry": a.windows.last().map(|w| { let g = w.geometry(); [g.loc.x, g.loc.y, g.size.w, g.size.h] }),
                 "buffer": a.windows.last().and_then(|w| w.toplevel()).and_then(|t| smithay::wayland::compositor::with_states(t.wl_surface(), |st| {
                     st.data_map.get::<smithay::backend::renderer::utils::RendererSurfaceStateUserData>()
@@ -236,6 +265,16 @@ fn state(shell: &Shell) -> String {
         "category": shell.sui.menu_category().map(|c| c.name()),
         "settings": shell.sui.settings_open(),
         "menu_page": shell.sui.menu_sub().map(|s| s.name()),
+        "game_panel": shell.sui.game_panel(),
+        "game_page": shell.sui.game_page(),
+        "games": shell.games.as_ref().map(|g| json!({
+            "systems": g.view.lib.as_ref().map(|l| l.shelves().iter().map(|s| json!({"id": s.id, "count": s.count})).collect::<Vec<_>>()),
+            "recent": g.view.lib.as_ref().map(|l| l.recent.len()),
+            "pictures": g.view.thumbs.len(),
+            "status": g.view.status.iter().map(|(u, s)| (u.to_string(), json!({
+                "slots": s.slots.iter().map(|x| x.is_some()).collect::<Vec<_>>(), "fast_forward": s.fast_forward,
+            }))).collect::<serde_json::Map<_, _>>(),
+        })),
         "home": shell.visible_app().is_none() && !shell.sui.menu_open(),
         "ui": {
             "layer": shell.ui_layer(),
