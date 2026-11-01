@@ -205,6 +205,64 @@ impl Recents {
     }
 }
 
+// ------------------------------------------------------------ list JSON ----
+
+/// The library for mortar-shell's Games category (`mortar-play list
+/// --json`): every system with its games (cleaned names, the first tag,
+/// whether a resume state exists and its picture), the recently played
+/// games, and `watch`: the folders whose modification times say the
+/// answer may have changed (the shell caches it by them).
+pub fn list_json(cfg: &Config) -> serde_json::Value {
+    use crate::session::{SavePaths, Slot};
+    use serde_json::json;
+    let resume = |sys: &System, p: &Path| -> (bool, Option<PathBuf>) {
+        let sp = SavePaths::new(cfg, sys, p);
+        let has = sp.state(Slot::Auto).exists();
+        let thumb = sp.thumb(Slot::Auto);
+        (has, if has && thumb.exists() { Some(thumb) } else { None })
+    };
+    let mut watch: Vec<PathBuf> = vec![expand(&cfg.data_dir)];
+    let mut systems = Vec::new();
+    for sys in &cfg.systems {
+        let shelf = if sys.no_content { Shelf::default() } else { scan_system(cfg, sys) };
+        for d in system_dirs(cfg, sys).into_iter().filter(|d| d.is_dir()) {
+            // a game copied into a sub-folder changes only that folder
+            if let Ok(rd) = std::fs::read_dir(&d) {
+                watch.extend(rd.flatten().map(|e| e.path()).filter(|p| p.is_dir()));
+            }
+            watch.push(d);
+        }
+        watch.push(expand(&cfg.state_dir).join(&sys.id));
+        let games: Vec<_> = shelf
+            .games
+            .iter()
+            .map(|g| {
+                let (has, thumb) = resume(sys, &g.path);
+                json!({ "path": g.path, "name": g.name, "region": g.tags.first(), "resume": has, "thumb": thumb })
+            })
+            .collect();
+        systems.push(json!({
+            "id": sys.id, "name": sys.name, "tag": sys.tag, "order": sys.order,
+            "noContent": sys.no_content, "count": games.len(), "games": games,
+        }));
+    }
+    let recent: Vec<_> = Recents::load(&cfg.data_dir())
+        .list
+        .iter()
+        .filter(|r| r.path.exists())
+        .filter_map(|r| {
+            let sys = cfg.system(&r.system)?;
+            let (name, tags) = display_name(&r.path.file_stem().unwrap_or_default().to_string_lossy());
+            let (has, thumb) = resume(sys, &r.path);
+            Some(json!({ "system": sys.id, "path": r.path, "name": name, "region": tags.first(), "tag": sys.tag, "resume": has, "thumb": thumb }))
+        })
+        .take(6)
+        .collect();
+    watch.sort();
+    watch.dedup();
+    json!({ "version": 1, "systems": systems, "recent": recent, "watch": watch })
+}
+
 // -------------------------------------------------------------- archives ----
 
 /// The file to hand the core: archives go as-is when the core reads them
@@ -304,6 +362,46 @@ mod tests {
         assert_eq!(std::fs::read(&out).unwrap(), b"ROMDATA");
         // and passed through when it can
         assert_eq!(prepare(&zp, &sys, &["zip".into()], &scratch).unwrap(), zp);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn list_for_the_shell() {
+        let root = std::env::temp_dir().join(format!("mp-list-{}", std::process::id()));
+        let d = root.join("roms/gb");
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("Pocket King (World).gb"), b"x").unwrap();
+        std::fs::write(d.join("Another One.gb"), b"x").unwrap();
+        let states = root.join("states/gb");
+        std::fs::create_dir_all(&states).unwrap();
+        std::fs::write(states.join("Pocket King (World).state.auto"), b"s").unwrap();
+        std::fs::write(states.join("Pocket King (World).state.auto.png"), b"p").unwrap();
+        let s = |p: &str| root.join(p).to_string_lossy().into_owned();
+        let cfg = Config {
+            rom_dirs: vec![s("roms")],
+            state_dir: s("states"),
+            save_dir: s("saves"),
+            data_dir: s(""),
+            systems: vec![
+                System { id: "gb".into(), name: "Game Boy".into(), tag: "GB".into(), folders: vec!["gb".into()], extensions: vec!["gb".into()], ..Default::default() },
+                System { id: "2048".into(), name: "2048".into(), tag: "2048".into(), no_content: true, ..Default::default() },
+            ],
+            ..Default::default()
+        };
+        let mut r = Recents::load(&root);
+        r.touch("gb", &d.join("Pocket King (World).gb"));
+        let v = list_json(&cfg);
+        let gb = &v["systems"][0];
+        assert_eq!(gb["count"], 2);
+        assert_eq!(gb["games"][0]["name"], "Another One");
+        assert_eq!(gb["games"][1]["name"], "Pocket King");
+        assert_eq!(gb["games"][1]["region"], "World");
+        assert_eq!(gb["games"][1]["resume"], true);
+        assert!(gb["games"][1]["thumb"].as_str().unwrap().ends_with(".state.auto.png"));
+        assert_eq!(gb["games"][0]["resume"], false);
+        assert_eq!(v["systems"][1]["noContent"], true);
+        assert_eq!(v["recent"][0]["tag"], "GB");
+        assert!(v["watch"].as_array().unwrap().iter().any(|w| w.as_str() == Some(d.to_str().unwrap())));
         std::fs::remove_dir_all(&root).unwrap();
     }
 

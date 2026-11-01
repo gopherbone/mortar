@@ -164,6 +164,13 @@ pub struct App {
     headless: bool,
     /// Frames emulated (for logs).
     pub frames: u64,
+    /// The control socket (inside mortar-shell): the shell's game panel.
+    control: Option<crate::control::Control>,
+    /// Fast-forward switched on from the shell's game panel (until off).
+    ff_on: bool,
+    /// The quit was asked for quietly (the shell putting the game to
+    /// sleep): no "Saved" toast.
+    quiet_quit: bool,
 }
 
 impl App {
@@ -206,7 +213,19 @@ impl App {
             script_wait: 0,
             headless,
             frames: 0,
+            control: None,
+            ff_on: false,
+            quiet_quit: false,
         };
+        if app.under_shell && !headless {
+            match crate::control::Control::open() {
+                Ok(c) => {
+                    eprintln!("mortar-play: control socket {}", c.path.display());
+                    app.control = Some(c);
+                }
+                Err(e) => eprintln!("mortar-play: control socket: {e}"),
+            }
+        }
         app.pacer.enabled = !headless;
         app.recents.prune();
         Ok(app)
@@ -232,6 +251,7 @@ impl App {
             for e in evs.drain(..) {
                 self.event(e);
             }
+            self.control_step();
             if self.quit {
                 break;
             }
@@ -328,9 +348,120 @@ impl App {
 
     fn on_quit(&mut self) {
         if let Some(mut s) = self.session.take() {
-            s.finish();
+            let saved = s.finish();
+            self.saved_toast(&s, saved);
         }
         self.quit = true;
+    }
+
+    /// Inside the shell: a "Saved" toast once the resume state is written
+    /// (not when the shell put the game to sleep itself).
+    fn saved_toast(&self, s: &Session, saved: bool) {
+        if saved && self.under_shell && !self.quiet_quit && !self.headless {
+            let (name, tag) = s.title();
+            crate::control::shell_toast("Saved", &format!("{name} · {tag}"));
+        }
+    }
+
+    /// Requests from the shell's game panel (control.rs).
+    fn control_step(&mut self) {
+        let Some(c) = &self.control else { return };
+        for p in c.poll() {
+            let v = match p.req.clone() {
+                Ok(r) => self.control_request(r),
+                Err(e) => serde_json::json!({ "ok": false, "error": e }),
+            };
+            p.reply(v);
+            if self.quit {
+                return;
+            }
+        }
+    }
+
+    fn control_request(&mut self, req: crate::control::Request) -> serde_json::Value {
+        use crate::control::{Request, parse_on, parse_slot};
+        use serde_json::json;
+        let err = |e: String| json!({ "ok": false, "error": e });
+        let slot_of = |n: Option<u8>| n.map(Slot::N).unwrap_or(Slot::Auto);
+        if let Request::Quit { quiet } = req {
+            self.quiet_quit = quiet;
+            let saved = match self.session.take() {
+                Some(mut s) => {
+                    let saved = s.finish();
+                    self.saved_toast(&s, saved);
+                    saved
+                }
+                None => false,
+            };
+            self.quit = true;
+            return json!({ "ok": true, "saved": saved });
+        }
+        let ff_on = self.ff_on;
+        let Some(s) = self.session.as_mut() else { return err("no game is running".into()) };
+        match req {
+            Request::ListStates => {
+                let slot = |sl: Slot| -> serde_json::Value {
+                    let thumb = s.slot_paths(sl).map(|p| p.1).filter(|t| t.exists());
+                    match s.state_time(sl).and_then(|t| t.elapsed().ok()) {
+                        Some(d) => json!({ "age_s": d.as_secs(), "thumb": thumb }),
+                        None => serde_json::Value::Null,
+                    }
+                };
+                let slots: Vec<serde_json::Value> = (0..crate::session::SLOTS).map(|n| slot(Slot::N(n))).collect();
+                let (name, tag) = s.title();
+                let discs = s.core.disk_count().map(|(i, n)| json!([i + 1, n]));
+                json!({
+                    "ok": true, "game": name, "tag": tag, "system": s.sys.id,
+                    "slots": slots, "auto": slot(Slot::Auto),
+                    "discs": discs, "fast_forward": ff_on,
+                    "can_save": s.saves.is_some(),
+                })
+            }
+            Request::SaveState { slot } => match parse_slot(&slot).and_then(|n| s.save_state(slot_of(n))) {
+                Ok(()) => json!({ "ok": true }),
+                Err(e) => err(e),
+            },
+            Request::LoadState { slot } => {
+                let r = parse_slot(&slot).and_then(|n| {
+                    let sl = slot_of(n);
+                    if !s.has_state(sl) {
+                        return Err("that slot is empty".to_string());
+                    }
+                    s.load_state(sl)
+                });
+                match r {
+                    Ok(()) => {
+                        if matches!(self.screen, Screen::Menu) {
+                            self.resume();
+                        }
+                        self.pacer.reset();
+                        json!({ "ok": true })
+                    }
+                    Err(e) => err(e),
+                }
+            }
+            Request::Reset => {
+                s.reset();
+                json!({ "ok": true })
+            }
+            Request::FastForward { on } => match parse_on(&on, ff_on) {
+                Ok(v) => {
+                    self.ff_on = v;
+                    json!({ "ok": true, "on": v })
+                }
+                Err(e) => err(e),
+            },
+            Request::ChangeDisc { to } => {
+                if to.as_deref().is_some_and(|t| t != "next") {
+                    return err("change_disc: only next".into());
+                }
+                match s.core.disk_next() {
+                    Some(i) => json!({ "ok": true, "disc": i + 1, "of": s.core.disk_count().map(|d| d.1).unwrap_or(0) }),
+                    None => err("this game has one disc".into()),
+                }
+            }
+            Request::Quit { .. } => unreachable!(),
+        }
     }
 
     fn step_ui(&mut self) {
@@ -366,7 +497,7 @@ impl App {
             self.screen = Screen::Home;
             return;
         };
-        let ff = s.sys.fast_forward_button(&hot).is_some_and(|b| self.held.is(b));
+        let ff = self.ff_on || s.sys.fast_forward_button(&hot).is_some_and(|b| self.held.is(b));
         let runs = if ff { hot.fast_forward_speed.max(2) } else { 1 };
         self.pacer.wait();
         let mut new_frame = false;
@@ -506,8 +637,10 @@ impl App {
 
     fn end_game(&mut self) {
         if let Some(mut s) = self.session.take() {
-            s.finish();
+            let saved = s.finish();
+            self.saved_toast(&s, saved);
         }
+        self.ff_on = false;
         self.mixer.out.clear();
         self.mixer.out.set_paused(true);
         self.thumbs.clear();

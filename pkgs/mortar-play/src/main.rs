@@ -6,6 +6,7 @@
 //!   mortar-play selftest SYSTEM [ROM] --out DIR [--frames N] [--shots 60,120]
 //!   mortar-play check                       load every core, validate option presets
 //!   mortar-play make-test-rom OUT.nes       the built-in NES test program
+//!   mortar-play list --json                 the library as JSON (mortar-shell's Games)
 //!   mortar-play --script "wait 30, press a, shot x.png" [...]   scripted input
 //!
 //! The library UI starts by default. Config: /etc/mortar-play/config.json
@@ -14,6 +15,7 @@
 mod app;
 mod audio;
 mod config;
+mod control;
 mod input;
 mod library;
 mod lr;
@@ -69,6 +71,7 @@ fn parse_args() -> Result<Args, String> {
                 a.size = (w.parse().map_err(|_| "--size")?, h.parse().map_err(|_| "--size")?);
             }
             "--script" => a.script = Some(val()?),
+            "--json" => {}
             "--out" => a.out = Some(PathBuf::from(val()?)),
             "--frames" => a.frames = val()?.parse().map_err(|_| "--frames N")?,
             "--shots" => a.shots = val()?.split(',').filter_map(|s| s.trim().parse().ok()).collect(),
@@ -82,7 +85,7 @@ fn parse_args() -> Result<Args, String> {
                 }
             }
             s if s.starts_with("--") => return Err(format!("unknown option {s}\n{USAGE}")),
-            s if a.cmd.is_none() && matches!(s, "run" | "selftest" | "make-test-rom" | "check") => a.cmd = Some(s.into()),
+            s if a.cmd.is_none() && matches!(s, "run" | "selftest" | "make-test-rom" | "check" | "list") => a.cmd = Some(s.into()),
             s => a.pos.push(s.into()),
         }
     }
@@ -112,6 +115,11 @@ fn main() {
             std::process::exit(1);
         }
     };
+    if a.cmd.as_deref() == Some("list") {
+        // `--json` is the only format
+        println!("{}", library::list_json(&cfg));
+        return;
+    }
     if a.cmd.as_deref() == Some("check") {
         std::process::exit(selftest::check(&cfg));
     }

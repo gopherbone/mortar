@@ -253,15 +253,35 @@ impl Session {
         if self.core.unserialize(&data) { Ok(()) } else { Err("the core rejected the state".into()) }
     }
 
-    /// Quit: auto state + SRAM. Errors are logged, not fatal.
-    pub fn finish(&mut self) {
-        if self.game.is_some()
-            && let Err(e) = self.save_state(Slot::Auto) {
-                eprintln!("mortar-play: auto state: {e}");
+    /// Quit: auto state + SRAM. Errors are logged, not fatal. True when the
+    /// resume state was written.
+    pub fn finish(&mut self) -> bool {
+        let mut saved = false;
+        if self.game.is_some() {
+            match self.save_state(Slot::Auto) {
+                Ok(()) => saved = true,
+                Err(e) => eprintln!("mortar-play: auto state: {e}"),
             }
+        }
         if let Err(e) = self.save_sram() {
             eprintln!("mortar-play: save RAM: {e}");
         }
+        saved
+    }
+
+    /// The state slot's file and thumbnail paths (None without a game file).
+    pub fn slot_paths(&self, s: Slot) -> Option<(PathBuf, PathBuf)> {
+        let sp = self.saves.as_ref()?;
+        Some((sp.state(s), sp.thumb(s)))
+    }
+
+    /// The game's cleaned name and the system tag ("Pocket King", "GBC").
+    pub fn title(&self) -> (String, String) {
+        let name = match &self.game {
+            Some(p) => library::display_name(&p.file_stem().unwrap_or_default().to_string_lossy()).0,
+            None => self.sys.name.clone(),
+        };
+        (name, self.sys.tag.clone())
     }
 }
 
