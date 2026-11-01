@@ -6,12 +6,14 @@
 //!   released; on resume they come back and the screen is redrawn.
 //! - Card: $MORTAR_DRM_DEVICE or the first /dev/dri/card* with a connected
 //!   connector (sun4i-drm's card0 on the Brick; the PowerVR has no KMS).
-//! - Buffers: GBM (Mesa kms_swrast = dumb buffers) for the swapchain, so the
-//!   GBM framebuffer exporter can also import client dmabufs for direct
-//!   scanout.
+//! - Buffers: GBM (Mesa kms_swrast = dumb buffers) or plain dumb buffers for
+//!   the swapchain. Client dmabufs (GPU apps through mortar-wlegl) are
+//!   PRIME-imported for direct scanout by `scanout::ClientScanout` with
+//!   either allocator.
 
 use super::backend::{elements, CLEAR};
 use super::input::Opener;
+use super::scanout::ClientScanout;
 use super::state::Shell;
 use smithay::backend::allocator::dumb::DumbAllocator;
 use smithay::backend::allocator::gbm::{GbmAllocator, GbmBufferFlags, GbmDevice};
@@ -32,12 +34,12 @@ use std::io;
 use std::os::fd::OwnedFd;
 use std::path::{Path, PathBuf};
 
-type GbmComp = DrmCompositor<GbmAllocator<DrmDeviceFd>, GbmFramebufferExporter<DrmDeviceFd>, (), DrmDeviceFd>;
-type DumbComp = DrmCompositor<DumbAllocator, DrmDeviceFd, (), DrmDeviceFd>;
+type GbmComp = DrmCompositor<GbmAllocator<DrmDeviceFd>, ClientScanout<GbmFramebufferExporter<DrmDeviceFd>>, (), DrmDeviceFd>;
+type DumbComp = DrmCompositor<DumbAllocator, ClientScanout<DrmDeviceFd>, (), DrmDeviceFd>;
 
-/// GBM buffers (default; allows direct scanout of client dmabufs) or plain
-/// KMS dumb buffers (fallback when libgbm/Mesa is unusable, or
-/// MORTAR_SHELL_ALLOCATOR=dumb).
+/// GBM buffers (default) or plain KMS dumb buffers (fallback when
+/// libgbm/Mesa is unusable, or MORTAR_SHELL_ALLOCATOR=dumb). Both scan out
+/// client dmabufs directly.
 enum Comp {
     Gbm(Box<GbmComp>),
     Dumb(Box<DumbComp>),
@@ -62,6 +64,8 @@ pub struct DrmBackend {
     active: bool,
     pub frames: u64,
     pub scanout_frames: u64,
+    /// The last frame put a client buffer on the primary plane.
+    direct: bool,
 }
 
 /// Session-backed input opener (fds are revoked on pause).
@@ -148,6 +152,7 @@ pub fn init(handle: &LoopHandle<'static, Shell>) -> Result<(DrmBackend, Output, 
     let renderer = PixmanRenderer::new().map_err(|e| format!("pixman: {e:?}"))?;
     let formats = [Fourcc::Xrgb8888, Fourcc::Argb8888];
     let want_dumb = std::env::var("MORTAR_SHELL_ALLOCATOR").is_ok_and(|v| v == "dumb");
+    let scanout = std::env::var_os("MORTAR_SHELL_NO_SCANOUT").is_none();
     let gbm = if want_dumb {
         None
     } else {
@@ -156,7 +161,7 @@ pub fn init(handle: &LoopHandle<'static, Shell>) -> Result<(DrmBackend, Output, 
     let comp = match gbm {
         Some(gbm) => {
             let allocator = GbmAllocator::new(gbm.clone(), GbmBufferFlags::RENDERING | GbmBufferFlags::SCANOUT);
-            let exporter = GbmFramebufferExporter::new(gbm.clone(), None);
+            let exporter = ClientScanout { inner: GbmFramebufferExporter::new(gbm.clone(), None), enabled: scanout };
             DrmCompositor::new(&output, surface, None, allocator, exporter, formats, renderer.dmabuf_formats(), drm.cursor_size(), Some(gbm))
                 .map(|c| Comp::Gbm(Box::new(c)))
                 .map_err(|e| format!("drm compositor (gbm): {e:?}"))?
@@ -168,7 +173,7 @@ pub fn init(handle: &LoopHandle<'static, Shell>) -> Result<(DrmBackend, Output, 
                 surface,
                 None,
                 allocator,
-                fd.clone(),
+                ClientScanout { inner: fd.clone(), enabled: scanout },
                 formats,
                 renderer.dmabuf_formats(),
                 drm.cursor_size(),
@@ -216,7 +221,7 @@ pub fn init(handle: &LoopHandle<'static, Shell>) -> Result<(DrmBackend, Output, 
         .map_err(|e| e.to_string())?;
 
     Ok((
-        DrmBackend { session, drm, comp, renderer, pending: false, active: true, frames: 0, scanout_frames: 0 },
+        DrmBackend { session, drm, comp, renderer, pending: false, active: true, frames: 0, scanout_frames: 0, direct: false },
         output,
         (w, h),
     ))
@@ -243,7 +248,15 @@ impl DrmBackend {
             return; // stays dirty; rendered at the next vblank / resume
         }
         let els = elements(shell, &mut self.renderer);
-        let flags = if std::env::var_os("MORTAR_SHELL_NO_SCANOUT").is_some() { FrameFlags::empty() } else { FrameFlags::DEFAULT };
+        // _ANY: a client buffer may go on the primary plane even if its
+        // format/modifier differs from the swapchain's (dumb slots say
+        // Linear, GBM ones Invalid, client framebuffers Invalid); the
+        // atomic test commit decides.
+        let flags = if std::env::var_os("MORTAR_SHELL_NO_SCANOUT").is_some() {
+            FrameFlags::empty()
+        } else {
+            FrameFlags::DEFAULT | FrameFlags::ALLOW_PRIMARY_PLANE_SCANOUT_ANY
+        };
         let renderer = &mut self.renderer;
         let r: Result<(bool, bool), String> = with_comp!(&mut self.comp, c => {
             c.render_frame(renderer, &els, CLEAR, flags)
@@ -258,6 +271,10 @@ impl DrmBackend {
                 shell.needs_redraw = false;
                 if direct {
                     self.scanout_frames += 1; // a client buffer went straight to the panel
+                }
+                if direct != self.direct && !empty {
+                    tracing::info!("{}", if direct { "direct scanout: client buffer on the primary plane" } else { "composited" });
+                    self.direct = direct;
                 }
                 if empty {
                     shell.frame_done();

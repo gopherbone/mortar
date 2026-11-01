@@ -23,7 +23,7 @@ Updates are built on your computer and pushed over SSH.
 | Wi-Fi | XR829, 2.4 GHz, station mode, via iwd. |
 | Bluetooth | XR829, via BlueZ. |
 | Display | JD9168 DSI panel, 1024×768, KMS console. |
-| GPU | PowerVR GE8300 with TrimUI's stock DDK 1.19 userspace. EGL window surfaces present on the panel through our display-class driver (`brick_dc_drm`), vsync-paced at 60 fps. GLES also renders into dma-bufs for KMS apps. |
+| GPU | PowerVR GE8300 with TrimUI's stock DDK 1.19 userspace. EGL window surfaces present on the panel through our display-class driver (`brick_dc_drm`), vsync-paced at 60 fps. GLES also renders into dma-bufs for KMS apps, and for Wayland clients inside mortar-shell (`mortar-wlegl`), which the shell scans out directly. |
 | Buttons | GPIO keys, power key. |
 | Apps | PuzzleScript, m8c (M8 tracker client; plug the M8 into the top port; its audio is routed to the codec). Greeter sessions. SDL3 apps render on the GPU (`mortar-sdl-run`: SDL's vivante backend on the stock EGL; a busy M8 screen at ~10% CPU), falling back to Mesa's software GL (~2 cores). |
 | Debug | Each boot saves logs to `mortar-logs/` on the card's FAT partition. |
@@ -81,6 +81,8 @@ pkgs/
   linux-trimui-brick.nix  jkingston's Linux 7.3 Brick tree, pinned, + patches/kernel/
   brick-dc-drm/           display-class driver: GPU frames → DRM atomic flips
   pvr-ddk-userspace.nix   stock EGL/GLES libs, patched for NixOS
+  mortar-wlegl/            Wayland EGL platform on the stock EGL (GPU apps in mortar-shell)
+  mortar-shell/            multitasking Wayland compositor (Rust, Smithay)
   trimui-brick-firmware.nix, m8c/, mortar-cli/ (Rust), mortar-gpu-tests/
 firmware/mainline/        U-Boot SPL + TF-A + U-Boot, with jkingston's patches
 image/build-image-mainline.nix   SD image (bootloader at 128 KiB, FAT /boot, ext4 /)
