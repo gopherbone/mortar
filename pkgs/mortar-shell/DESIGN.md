@@ -20,7 +20,7 @@ pkgs/mortar-shell/
   src/cross.rs       the MENU: Running page, the cross, glass (a child
                      module of shellui)
   src/menupages.rs   the MENU's glass pages: Wi-Fi, Bluetooth, Mixer
-  src/lava.rs        the lava lamp: physics and its distance field
+  src/patterns.rs    the cross's background patterns (zig-zags, Life, orbits, checkers)
   src/mixer.rs       PipeWire output streams from pw-dump (the Mixer)
   src/radio.rs       Wi-Fi / Bluetooth on/off (rfkill)
   src/motion.rs      springs and the Bouncy/Calm/Snappy presets
@@ -137,9 +137,9 @@ blocks with 1 px ink outlines, isometric illustrations.
     as frosted glass, as do the category and item icons, the glass
     pages, the options popup and the window labels: the blurred backdrop
     (`Src::Blur`, cut to the pane in screen space) under its veil, a
-    light ground at 40-62%, a light 1 px top edge. The lava lamp is seen
-    softly through the bars and pages (drawn again there with a 10 px
-    edge blend). Selected things keep solid ink outlines.
+    light ground at 40-62%, a light 1 px top edge. Selected things keep
+    solid ink outlines. The veil adapts: over a dark backdrop it rises
+    (62% to 90%, eased) until ink-soft text keeps 4.5:1.
   - Running: Home, then every running app, most recent first, each a
     live window edge to edge (1024 x 600: the app's middle rows; Home
     draws the real home screen), stacked vertically like a scrolling
@@ -225,23 +225,25 @@ blocks with 1 px ink outlines, isometric illustrations.
       thread runs these, every second while the Mixer shows. No level
       meters: PipeWire has no cheap way to read peaks without capturing
       every stream.
-  - The lava lamp (`lava.rs`) runs behind the cross (not behind
-    Running), a quiet strip about 260 px wide by the right edge (clear
-    of the rows' text), in the category's colour mixed 35% toward the
-    ground with a 2 px ink edge and no drop shadow (the full-width,
-    saturated, shadowed first version dominated the menu on the device),
-    flush from the top edge to the bottom: a heavy pool
-    along the bottom, a layer hanging from the top, five bottom-heavy wax
-    pieces that heat at the bottom, rise, cool and sink (about 15 s from
-    bottom to top), each joined to its pool by a column that thins and
-    pinches off as it moves away; outlines wobble slowly. Physics: mass
-    grows with the square of the size, drag, soft walls, cohesion; each
-    category has its own heat, drag and buoyancy (the mockup's tuned
-    constants). Navigation nudges it (▲▼ slosh it, a category change
-    shoves it sideways, bumping the end of a list jolts it; heavier
-    pieces lag and settle). It is simulated only while the cross shows
-    and nothing covers it; Reduce motion freezes it. Drawn as a signed
-    distance field (see Rendering).
+  - Behind the cross (not behind Running) runs a quiet pattern per
+    category (`patterns.rs`) in a strip at the right edge (x 744 to the
+    edge, full height, clear of the rows' band and text), made of the
+    home screen's flat shapes: fills in the category's colour mixed 35%
+    toward the ground, thin ink edges, no gradients. Apps: zig-zag
+    chevron stripes drifting slowly on the diagonal. Games: Conway's
+    Game of Life on 24 px cells (a 12 x 32 torus) stepped 4 times a
+    second, each cell growing in and shrinking out over ~120 ms; it
+    starts from an R-pentomino and two gliders, and a glider drops in
+    when it dies out or repeats. Music: orbits, small circles going
+    round two centres on three ellipses each at their own speeds, faint
+    rings. Settings: a checkerboard sliding slowly whose squares turn
+    like cards as a wave passes down the diagonal (each pass swaps the
+    board). A category change pushes the old pattern out and the new one
+    in, the way the categories move, on a spring; ▲▼ nudge it (a scroll
+    step, one Life generation, a burst of orbit speed). It runs only
+    while the cross shows and nothing covers it; Reduce motion keeps it
+    on a still frame. (A lava lamp came first; on the device it was too
+    dominant, and the user preferred screensaver-like patterns.)
   - The hint bar follows the selection.
   - Sounds: move (category), tick (item), tab (page), drawer / drawerUp
     (open, close, popup), open (go), close (kill), deny (nothing there),
@@ -331,10 +333,10 @@ and `ctl time +MS` step it by hand for test frames.
 
 The compositor redraws every vblank while something moves (`Pace::Full`),
 at 20 fps while only the background drifts, at 30 fps while only the
-MENU's lava lamp flows (`Pace::Lava`; a kick makes it Full until it
-calms), and not at all at rest; with no UI layer the app is shown
-exactly as before (direct scanout), and with the MENU closed nothing of
-the lamp exists (no simulation, no FBO).
+cross's pattern moves (`Pace::Pattern`; full rate during its slides),
+and not at all at rest; with no UI layer the app is shown exactly as
+before (direct scanout), and with the MENU closed nothing of the
+pattern runs.
 
 ### Sounds and haptics
 
@@ -520,24 +522,10 @@ draw it:
   frame skips the sharp app. The CPU renderer does the same with
   `raster::blur_quarter` (box blurs of matching variance). Glass panes
   draw the same blurred texture again, cut to the pane, so the backdrop
-  is blurred once a frame however many panes there are. The lava lamp
-  (`Item::Lava`) is two passes: its signed distance field (two pools,
-  five wobbling, stretched pieces and five tapered columns, ~25 ALU ops
-  per primitive plus one exp each for the metaball union, -k ln sum
-  e^(-d/k), which closes gaps a pairwise smooth minimum left as ink-
-  rimmed pinholes) at 1/6 resolution over the lamp's 324x768 region into
-  a 54x128 RGBA8 FBO (highp; the distance stored as two bytes, which
-  bilinear filtering still interpolates exactly), recomputed at most
-  every 32 ms (30 Hz) before a frame and reused in between; then a
-  full-resolution quad thresholds it (one texture read: the fill and a
-  2 px ink edge). The first version (quarter resolution over 640x768,
-  every frame, a shadow read) measured 3.25 ms on the device; this one
-  has 4.5x fewer field texels, half the composite area and runs the
-  field at most every other frame, so expect well under 1 ms (re-read
-  `gpu_ms.lava`, the field pass's own time sampled every 30th field). The
-  FBO is freed
-  when the lamp is not on screen; shaders that fail to build (or fewer
-  than 48 fragment uniform vectors) disable only the lamp. When no UI
+  is blurred once a frame however many panes there are; the backdrop's
+  mean colour is read back from the blur (eight rows) for the adaptive
+  veil. The cross's patterns are ordinary fills and strokes (a few
+  hundred small quads a frame, no shaders of their own). When no UI
   layer shows, the DrmCompositor takes over again (`reset_state`, full
   frame): direct scanout of a GPU app, the opaque copy of an shm app.
   Any EGL/GL error, a failed import of a render target or three failed
@@ -555,8 +543,7 @@ draw it:
 `MORTAR_SHELL_RENDERER=cpu|gpu` and `MORTAR_SHELL_GL_MSAA=0|4` override
 the config for one run; `ctl state` reports `ui.renderer`, `frames`,
 `gpu_frames`, `scanout_frames` and `gpu_ms` (last and smoothed UI frame
-time, the last blur's time and the number of blurs, the lava field
-pass's time).
+time, the last blur's time and the number of blurs).
 
 ### Apps
 
@@ -795,9 +782,12 @@ shell through it; over SSH it gives remote screenshots and app control
   its live windows, Running/cross navigation, categories and their
   memory, Settings adjust mode, Restart/Power off confirm, the Wi-Fi,
   Bluetooth and Mixer pages' requests, options popup, settings screen,
-  time zone picker), the lava lamp (rises in ~15 s, walls, kicks by
-  mass, the field; frozen with Reduce motion, stopped with the MENU
-  closed), pw-dump parsing, rfkill state, gamepad blacklist.
+  time zone picker, the row above clearing the lifted category icon and
+  its shadow by 16 px for every category and selection), the patterns
+  (Life's rules, it never dies out; moving, nudged, sliding on a
+  category change, still with Reduce motion, stopped with the MENU
+  closed), the adaptive veil (4.5:1 for ink-soft over black, 62% over
+  light, eased), pw-dump parsing, rfkill state, gamepad blacklist.
 - `passthru.tests.headless`: the compositor on the headless backend in
   the build sandbox; weston-fullscreen (wl_shm) and foot started from the
   MENU with injected buttons; typing through keys and the OSK;
@@ -805,7 +795,7 @@ shell through it; over SSH it gives remote screenshots and app control
   first, choosing one, R1 typing it); a screenshot after every step;
   MENU > Settings and its Mixer, Wi-Fi and Bluetooth pages;
   then UI time frozen and stepped for transition frames (`t-*.png`:
-  MENU, the cross sliding in, the lava flowing, launch, close, OSD,
+  MENU, the cross sliding in, its pattern moving, launch, close, OSD,
   toast, shutter, settings, night palette,
   time zone, power menu, boot), the screenshot file and the saved
   settings checked.
@@ -837,8 +827,6 @@ shell through it; over SSH it gives remote screenshots and app control
   mockup) has no backend yet; the row opens mortar-setup's Wi-Fi page
   (WPS, the full list). The Mixer's level meters are left out: PipeWire
   peaks would need a capture stream per app.
-- The lava lamp's GPU cost after the 1/6-resolution rework is an estimate; read `gpu_ms.lava`
-  on the device.
 - The mockup's per-app subtitles ("Song · playing") need data apps do
   not give the shell; window labels say on screen / background /
   starting / closing instead.

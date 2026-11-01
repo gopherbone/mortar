@@ -204,7 +204,7 @@ pub fn run(o: &Opts) -> Result<(), String> {
     let prefs = Prefs { night: o.night, ..Prefs::default() };
     let s = o.screen.as_str();
     let mut ui = ShellUi::new(prefs, s == "boot");
-    let over_app = s.starts_with("menu") || s.starts_with("cross") || matches!(s, "running" | "lava" | "mixer" | "bluetooth" | "setup-wifi" | "setup-bluetooth" | "settings" | "app" | "osd" | "osd-mute" | "osd-bri" | "osd-home" | "toast" | "achievement" | "flash" | "osk" | "osk-chips" | "osk-chips-focus" | "close" | "swap" | "remote" | "wifi");
+    let over_app = s.starts_with("menu") || s.starts_with("cross") || matches!(s, "running" | "cross-switch" | "mixer" | "bluetooth" | "setup-wifi" | "setup-bluetooth" | "settings" | "app" | "osd" | "osd-mute" | "osd-bri" | "osd-home" | "toast" | "achievement" | "flash" | "osk" | "osk-chips" | "osk-chips-focus" | "close" | "swap" | "remote" | "wifi");
     let mut current = if s == "cross-dark" { Some(1) } else if over_app { Some(2) } else { None };
     let run_ref: &[RunningInfo] = if s == "home-empty" { &none } else { &running };
     let host = "brick";
@@ -244,18 +244,23 @@ pub fn run(o: &Opts) -> Result<(), String> {
         "menu" | "menu-running" | "running" => {
             ui.menu_key(&v0);
         }
-        "menu-apps" | "cross-apps" | "cross-dark" | "home-menu" | "menu-games" | "menu-music" => {
+        "menu-apps" | "cross-apps" | "cross-dark" | "home-menu" | "menu-games" | "cross-games" | "menu-music" | "cross-music" | "cross-switch" => {
             ui.menu_key(&v0);
             let n = match s {
-                "menu-games" => 2,
-                "menu-music" => 3,
+                "menu-games" | "cross-games" => 2,
+                "menu-music" | "cross-music" => 3,
                 _ => 1,
             };
             for _ in 0..n {
                 ui.button(Button::Right, false, &v0);
             }
+            if s == "cross-switch" {
+                // settled on Apps, then Games: the patterns trade places
+                settle(&mut ui, &v0, 1.0);
+                ui.button(Button::Right, false, &v0);
+            }
         }
-        "menu-settings" | "cross-settings" | "lava" | "menu-adjust" | "menu-confirm" | "settings" | "wifi" | "bluetooth" | "mixer" => {
+        "menu-settings" | "cross-settings" | "menu-adjust" | "menu-confirm" | "settings" | "wifi" | "bluetooth" | "mixer" => {
             // MENU, R1: Settings (Brightness, Volume, Mixer, Wi-Fi,
             // Bluetooth, Sleep, Keyboard, More settings, Restart, Power off)
             ui.menu_key(&v0);
@@ -274,10 +279,6 @@ pub fn run(o: &Opts) -> Result<(), String> {
             }
             for _ in 0..a {
                 ui.button(Button::A, false, &v0);
-            }
-            if s == "lava" {
-                // the wax has flowed for a while
-                settle(&mut ui, &v0, 9.0);
             }
         }
         "menu-options" => {
@@ -367,7 +368,7 @@ pub fn run(o: &Opts) -> Result<(), String> {
         }
         other => {
             return Err(format!(
-                "unknown preview screen '{other}' (boot, home, home-empty, app, running, cross-apps, home-menu (the cross over home), menu-games, menu-music, cross-settings, menu-adjust, menu-confirm, menu-options, wifi, bluetooth, mixer, lava, settings, remote, setup-wifi, setup-bluetooth, timezone, timezone-zones, launch, close, swap, osd, osd-mute, osd-bri, osd-home, toast, achievement, flash, osk, osk-chips, osk-chips-focus, power)"
+                "unknown preview screen '{other}' (boot, home, home-empty, app, running, cross-apps, home-menu (the cross over home), menu-games, menu-music, cross-settings, menu-adjust, menu-confirm, menu-options, wifi, bluetooth, mixer, cross-games, cross-music, cross-switch (Apps to Games: use --frames), settings, remote, setup-wifi, setup-bluetooth, timezone, timezone-zones, launch, close, swap, osd, osd-mute, osd-bri, osd-home, toast, achievement, flash, osk, osk-chips, osk-chips-focus, power)"
             ))
         }
     }

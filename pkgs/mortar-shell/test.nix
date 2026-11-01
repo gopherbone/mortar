@@ -233,7 +233,7 @@ runCommand "mortar-shell-headless-test"
     ctl state | jq . > $out/state.json
     jq -e '.apps | length == 2' $out/state.json || echo "FAIL: two apps" >> $out/result
 
-    echo "== MENU, R1: the cross on Settings (lava lamp), then its glass pages"
+    echo "== MENU, R1: the cross on Settings (its pattern), then its glass pages"
     ctl press menu
     ctl press r1
     wait_for '.category == "Settings"'
@@ -293,10 +293,10 @@ runCommand "mortar-shell-headless-test"
     ctl press right   # Running slides off, the cross slides in
     tshot 120 cross-in-120
     tshot 600 cross-in-720
-    ctl press down    # the lava sloshes
-    tshot 300 lava-0300
-    tshot 1500 lava-1800
-    tshot 4000 lava-5800
+    ctl press down    # the pattern takes a nudge
+    tshot 300 pattern-0300
+    tshot 1500 pattern-1800
+    tshot 4000 pattern-5800
     ctl press b
     tshot 80 menu-close-080
     tshot 600 menu-close-680

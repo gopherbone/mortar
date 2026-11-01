@@ -524,10 +524,8 @@ impl ShellUi {
         let dx = s.x.x * W;
         b.push(Xf::translate(dx, 0.0));
         let (y0, h) = (BAR_H, H - BAR_H - HINT_H);
-        let lava_dx = (1.0 - m.page_x.x) * W;
         let accent = m.cat.accent(pal);
-        let prims = m.lava_visible().then(|| m.lamp.prims());
-        glass(b, pal, g, 0.0, y0, W, h, 0.62, prims.as_ref().map(|p| (p, super::cross::lava_fill(pal, m.cat), lava_dx)));
+        glass(b, pal, g, 0.0, y0, W, h, 0.62);
         // header: serif title, a mono line, an icon block with a hard shadow
         let (title, line, icon) = match s.kind {
             SubKind::Wifi => ("Wi-Fi", wifi_line(v), Ic::Wifi),

@@ -518,8 +518,8 @@ pub enum Pace {
     Full,
     /// Only the slow background drift: ~20 fps is plenty.
     Ambient,
-    /// Only the lava lamp's slow flow: ~30 fps.
-    Lava,
+    /// Only the MENU's background pattern moves: ~30 fps.
+    Pattern,
     /// Nothing moves: redraw on change only.
     Idle,
 }
@@ -887,9 +887,9 @@ impl ShellUi {
         if !has_app && over_home && self.drifting() {
             return Pace::Ambient;
         }
-        // the lava lamp flows while the cross shows (Reduce motion: still)
-        if !self.prefs.reduce_motion && self.page.is_none() && self.settings.is_none() && self.tz.is_none() && self.menu.as_ref().is_some_and(|m| m.lava_visible()) {
-            return Pace::Lava;
+        // the cross's pattern moves while it shows (Reduce motion: still)
+        if !self.prefs.reduce_motion && self.page.is_none() && self.settings.is_none() && self.tz.is_none() && self.menu.as_ref().is_some_and(|m| m.pattern_visible()) {
+            return Pace::Pattern;
         }
         Pace::Idle
     }
@@ -979,10 +979,10 @@ impl ShellUi {
             let mut s = self.springs_mut();
             motion::step_all(&mut s, dt as f32, p);
         }
-        // the lava only while it is on screen (nothing when the MENU is shut
+        // the pattern only while it is on screen (nothing when the MENU is shut
         // or covered)
         if self.page.is_none() && self.settings.as_ref().is_none_or(|p| p.closing) && self.tz.is_none() {
-            self.step_lava(dt as f32);
+            self.step_pattern(dt as f32);
         }
         self.timers(v);
         std::mem::take(&mut self.out)
@@ -2647,20 +2647,29 @@ mod tests {
         assert_eq!(sel_row(&ui), Some(cross::Row::App(2)));
         press(&mut ui, &v, &[Button::Up]);
         assert_eq!(sel_row(&ui), Some(cross::Row::Home));
-        // R1 from Running: straight to Settings; the lamp shows and flows
+        // R1 from Running: straight to Settings; its pattern shows and moves
         press(&mut ui, &v, &[Button::R1]);
         assert_eq!(ui.menu_category(), Some(Cat::Settings));
         settle(&mut ui, &v);
         assert!(ui.live_previews().is_empty(), "no live windows once the cross covers them");
-        assert_eq!(ui.pace(true), Pace::Lava);
-        let before = ui.menu.as_ref().unwrap().lamp.prims();
+        assert_eq!(ui.pace(true), Pace::Pattern);
+        let before = ui.menu.as_ref().unwrap().patterns.t;
         ui.step(0.03, &v);
-        assert_ne!(ui.menu.as_ref().unwrap().lamp.prims(), before, "the wax moves");
+        assert!(ui.menu.as_ref().unwrap().patterns.t > before, "it moves");
+        // ▲▼ nudge it; a category change slides the old one out
+        let n0 = ui.menu.as_ref().unwrap().patterns.nudge.t;
+        press(&mut ui, &v, &[Button::Down]);
+        assert!(ui.menu.as_ref().unwrap().patterns.nudge.t > n0);
+        press(&mut ui, &v, &[Button::Left]);
+        assert_eq!(ui.pace(true), Pace::Full, "the patterns slide");
+        settle(&mut ui, &v);
+        press(&mut ui, &v, &[Button::Right]);
+        settle(&mut ui, &v);
         // Reduce motion freezes it, and nothing redraws
         ui.prefs.reduce_motion = true;
-        let still = ui.menu.as_ref().unwrap().lamp.prims();
+        let still = ui.menu.as_ref().unwrap().patterns.t;
         ui.step(0.03, &v);
-        assert_eq!(ui.menu.as_ref().unwrap().lamp.prims(), still);
+        assert_eq!(ui.menu.as_ref().unwrap().patterns.t, still);
         assert_eq!(ui.pace(true), Pace::Idle);
         ui.prefs.reduce_motion = false;
         // closed: gone, nothing simulated
@@ -2982,8 +2991,8 @@ mod tests {
         for _ in 0..(40 * 60) {
             ui.step(1.0 / 60.0, &v);
         }
-        // only the lava lamp flows (30 fps); with Reduce motion nothing moves
-        assert_eq!(ui.pace(false), Pace::Lava);
+        // only the pattern moves (30 fps); with Reduce motion nothing does
+        assert_eq!(ui.pace(false), Pace::Pattern);
         ui.prefs.reduce_motion = true;
         assert_eq!(ui.pace(false), Pace::Idle);
     }

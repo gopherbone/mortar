@@ -131,7 +131,6 @@ impl Images for CpuImages {
             Src::Blur(u) => self.blurs.get(&u).map(|e| &e.3),
             Src::Layer(Layer::Osk) => self.osk.as_ref(),
             Src::Layer(Layer::Page) => self.page.as_ref(),
-            Src::Lava => None,
             Src::HomeBlur => self.home_blur.as_ref().map(|e| &e.1),
         }
     }

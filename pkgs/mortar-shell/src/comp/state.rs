@@ -575,7 +575,7 @@ impl Shell {
             match self.sui.pace(self.visible_app().is_some()) {
                 Pace::Full => t = t.min(Duration::from_millis(8)),
                 Pace::Ambient => t = t.min(AMBIENT.saturating_sub(self.last_ambient.elapsed())),
-                Pace::Lava => t = t.min(LAVA_EVERY.saturating_sub(self.last_ambient.elapsed())),
+                Pace::Pattern => t = t.min(PATTERN_EVERY.saturating_sub(self.last_ambient.elapsed())),
                 Pace::Idle => {}
             }
             if let Some(d) = self.sui.next_deadline() {
@@ -718,7 +718,7 @@ impl Shell {
                         self.last_ambient = Instant::now();
                         self.needs_redraw = true;
                     }
-                    Pace::Lava if self.last_ambient.elapsed() >= LAVA_EVERY => {
+                    Pace::Pattern if self.last_ambient.elapsed() >= PATTERN_EVERY => {
                         self.last_ambient = Instant::now();
                         self.needs_redraw = true;
                     }
@@ -1336,8 +1336,8 @@ const SLOW_COMPOSITE: Duration = Duration::from_millis(200);
 const POWER_HOLD: f32 = 0.8;
 /// Frame interval when only the background drifts.
 const AMBIENT: Duration = Duration::from_millis(50);
-/// The lava lamp alone flows at ~30 fps (its slow wax needs no more).
-const LAVA_EVERY: Duration = Duration::from_millis(33);
+/// The MENU's background pattern alone moves at ~30 fps (it is slow).
+const PATTERN_EVERY: Duration = Duration::from_millis(33);
 
 /// The surface's current buffer is a dmabuf (a GPU app).
 fn is_dmabuf(s: &WlSurface) -> bool {

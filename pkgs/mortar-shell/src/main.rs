@@ -8,7 +8,7 @@ mod art;
 mod comp;
 mod config;
 mod haptics;
-mod lava;
+mod patterns;
 mod mixer;
 mod motion;
 mod osk;

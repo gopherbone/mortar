@@ -18,7 +18,7 @@ over SSH.
 | Area | State |
 |---|---|
 | Boot | U-Boot SPL → TF-A → U-Boot → `extlinux.conf` → Linux 7.3 → NixOS. All 4 cores. |
-| Shell | `mortar-shell`, a Wayland compositor (Rust, Smithay). Apps run fullscreen side by side; **MENU** opens your running apps as live full-screen windows; ▶ brings the cross menu: launchers by category, settings (Wi-Fi, Bluetooth, a per-app mixer) and power, over a lava lamp. Its UI is drawn on the GPU with spring animations, synthesized UI sounds and haptic ticks. |
+| Shell | `mortar-shell`, a Wayland compositor (Rust, Smithay). Apps run fullscreen side by side; **MENU** opens your running apps as live full-screen windows; ▶ brings the cross menu: launchers by category, settings (Wi-Fi, Bluetooth, a per-app mixer) and power, over a quiet animated pattern per category. Its UI is drawn on the GPU with spring animations, synthesized UI sounds and haptic ticks. |
 | GPU | PowerVR GE8300 on TrimUI's stock DDK 1.19 userspace. GPU apps inside the shell render into dma-bufs (`mortar-wlegl`) that the shell scans out directly; outside the shell, `brick_dc_drm` flips them at 60 fps. A busy M8 screen costs ~12% CPU. |
 | Greeter | `mortar-ui` greeter (greetd): pick **Mortar** (the shell) or launch an app directly. |
 | Apps | M8 (m8c; plug the M8 into the top port), ChooChooTracker, PICO-8 (your own licensed copy), PuzzleScript, Games (emulators), Terminal, Claude Code. |

@@ -93,7 +93,6 @@ const GL_VERSION: GLenum = 0x1F02;
 const GL_UNPACK_ALIGNMENT: GLenum = 0x0CF5;
 const GL_PACK_ALIGNMENT: GLenum = 0x0D05;
 const GL_TEXTURE0: GLenum = 0x84C0;
-const GL_MAX_FRAGMENT_UNIFORM_VECTORS: GLenum = 0x8DFD;
 
 macro_rules! fns {
     ($name:ident { $($f:ident : fn($($a:ty),*) $(-> $r:ty)?;)* }) => {
@@ -174,9 +173,6 @@ fns!(Gles {
     glUniform1i: fn(GLint, GLint);
     glUniform1f: fn(GLint, GLfloat);
     glUniform2f: fn(GLint, GLfloat, GLfloat);
-    glUniform4f: fn(GLint, GLfloat, GLfloat, GLfloat, GLfloat);
-    glUniform4fv: fn(GLint, GLsizei, *const GLfloat);
-    glGetIntegerv: fn(GLenum, *mut GLint);
     glVertexAttribPointer: fn(GLuint, GLint, GLenum, u8, GLsizei, *const c_void);
     glEnableVertexAttribArray: fn(GLuint);
     glDisableVertexAttribArray: fn(GLuint);
@@ -238,103 +234,6 @@ void main() { vec4 c = texture2D(u_tex, v_uv) * 0.2042;
   c += (texture2D(u_tex, v_uv + u_step * 3.2940) + texture2D(u_tex, v_uv - u_step * 3.2940)) * 0.0939;
   gl_FragColor = c; }";
 
-/// The lava lamp (lava.rs), pass 1: its signed distance field at 1/6
-/// resolution over the lamp region (`u_org` + uv x `u_reg`), the same maths
-/// as `lava::Prims::dist`: two pools with swells under nearby pieces, five
-/// wobbling, stretched, leaning pieces, five tapered columns, joined by an
-/// exponential (metaball) union, -k ln sum e^(-d/k), each distance clamped
-/// to +-60 first. highp: positions are hundreds of px and get squared.
-/// Stored as two bytes (r: high, g: low) of d/128 + 0.5, so bilinear
-/// filtering still interpolates the distance exactly (it is linear in both
-/// bytes).
-const FS_LAVA_FIELD: &str = "#ifdef GL_FRAGMENT_PRECISION_HIGH
-precision highp float;
-#else
-precision mediump float;
-#endif
-uniform vec4 u_b[20]; uniform vec4 u_p[4]; uniform vec4 u_bump[5]; uniform vec4 u_n[10];
-uniform vec2 u_org; uniform vec2 u_reg; uniform float u_merge;
-varying vec2 v_uv;
-float ex(float d) { return exp(-clamp(d, -60.0, 60.0) / u_merge); }
-void main() {
-  vec2 p = u_org + v_uv * u_reg;
-  float s = 0.0;
-  for (int k = 0; k < 2; k++) {
-    vec4 a = u_p[k * 2]; vec4 b = u_p[k * 2 + 1];
-    float u = clamp((p.x - a.x) * a.y, 0.0, 1.0);
-    float env = sin(3.14159265 * u);
-    float bump = 0.0;
-    for (int i = 0; i < 5; i++) { vec4 q = u_bump[i]; float t = (q.x - p.x) * q.y; bump += exp(-t * t) * (k == 0 ? q.z : q.w); }
-    float hh = a.z * env * (1.0 + 0.12 * sin(u * 7.0 + b.y)) + bump * env;
-    s += ex((a.w - b.x * hh - p.y) * b.x);
-  }
-  for (int i = 0; i < 5; i++) {
-    vec4 c = u_b[i * 4]; vec4 up = u_b[i * 4 + 1]; vec4 lo = u_b[i * 4 + 2]; vec4 hm = u_b[i * 4 + 3];
-    float qy = p.y - c.y;
-    float lx = p.x - c.x + qy * c.w * 0.5;
-    vec3 sc = mix(up.xyz, lo.xyz, clamp(qy / (c.z * 0.6) + 0.5, 0.0, 1.0));
-    vec2 uu = vec2(lx / sc.x, qy / sc.y);
-    float s0 = uu.y / max(length(uu), 0.001);
-    float tf = 1.0 - sc.z * abs(s0);
-    uu.x /= tf;
-    float l = max(length(uu), 0.001);
-    float co = uu.x / l; float si = uu.y / l;
-    float c2 = co * co - si * si; float s2 = 2.0 * si * co;
-    float c3 = 4.0 * co * co * co - 3.0 * co; float s3 = 3.0 * si - 4.0 * si * si * si;
-    float c5 = c3 * c2 - s3 * s2; float s5 = s3 * c2 + c3 * s2;
-    float wob = 0.1 * (s3 * hm.x + c3 * hm.y) + 0.07 * (s2 * hm.z + c2 * hm.w) + 0.03 * (s5 * up.w + c5 * lo.w);
-    float f = l - c.z * (1.0 + wob);
-    vec2 g = vec2(co / (sc.x * tf), si / sc.y);
-    s += ex(f / max(length(g), 0.001));
-  }
-  for (int i = 0; i < 5; i++) {
-    vec4 n = u_n[i * 2]; vec4 w = u_n[i * 2 + 1];
-    if (w.x > 0.0) {
-      vec2 ba = n.zw - n.xy;
-      float t = clamp(dot(p - n.xy, ba) / max(dot(ba, ba), 0.001), 0.0, 1.0);
-      float base = w.x + 0.6 * w.x * t;
-      float r = base + (w.y - base) * 4.0 * t * (1.0 - t) - 2.0;
-      s += ex(length(p - n.xy - ba * t) - r);
-    }
-  }
-  float d = -u_merge * log(s);
-  float v = clamp(d / 128.0 + 0.5, 0.0, 1.0) * 255.0;
-  float hi = floor(v);
-  gl_FragColor = vec4(hi / 255.0, v - hi, 0.0, 1.0);
-}";
-
-/// The lava lamp, pass 2: the field (bilinear) thresholded at full
-/// resolution: the fill inside, a 2 px ink edge outside it, no shadow.
-/// `u_soft`: half-width of the edge blend.
-const FS_LAVA: &str = "precision mediump float; uniform sampler2D u_tex;
-uniform vec4 u_fill; uniform vec4 u_ink; uniform float u_soft; varying vec2 v_uv; varying vec4 v_col;
-void main() {
-  vec4 t = texture2D(u_tex, v_uv);
-  float d = ((t.r * 255.0 + t.g) / 255.0 - 0.5) * 128.0;
-  float f = 1.0 - smoothstep(-u_soft, u_soft, d);
-  float e = 1.0 - smoothstep(2.0 - u_soft, 2.0 + u_soft, d);
-  gl_FragColor = (u_fill * f + u_ink * e * (1.0 - f)) * v_col.a;
-}";
-
-/// Uniform locations of the lava programs.
-struct LavaProgs {
-    field: GLuint,
-    draw: GLuint,
-    f_b: GLint,
-    f_p: GLint,
-    f_bump: GLint,
-    f_n: GLint,
-    f_org: GLint,
-    f_reg: GLint,
-    f_merge: GLint,
-    f_size: GLint,
-    d_size: GLint,
-    d_tex: GLint,
-    d_fill: GLint,
-    d_ink: GLint,
-    d_soft: GLint,
-}
-
 struct Prog {
     id: GLuint,
     size: GLint,
@@ -386,8 +285,6 @@ pub struct Gl {
     fb_tex_ms: Option<FbTexMs>,
     msaa: i32,
     progs: [Prog; 5],
-    /// None: the lava shaders did not build here (no lava, the rest works).
-    lava: Option<LavaProgs>,
     atlas: Atlas,
     verts: Vec<f32>,
     kind: Kind,
@@ -448,7 +345,6 @@ impl Gl {
             fb_tex_ms: None,
             msaa: 0,
             progs: [NO_PROG, NO_PROG, NO_PROG, NO_PROG, NO_PROG],
-            lava: None,
             atlas: Atlas { tex: 0, w: 2048, h: 1024, x: 0, y: 0, row_h: 0, map: HashMap::new() },
             verts: Vec::with_capacity(64 * 1024),
             kind: Kind::Solid,
@@ -527,11 +423,6 @@ impl Gl {
         self.progs[2] = self.program(FS_IMAGE)?;
         self.progs[3] = self.program(FS_DOWN)?;
         self.progs[4] = self.program(FS_BLUR)?;
-        // the lava lamp is optional: without its shaders it is not drawn
-        match self.lava_programs() {
-            Ok(l) => self.lava = Some(l),
-            Err(e) => tracing::warn!("lava shaders: {e}; no lava lamp"),
-        }
         // glyph atlas
         let g = &self.gl;
         // SAFETY: GL calls on the current context
@@ -598,155 +489,6 @@ impl Gl {
                 step: (g.glGetUniformLocation)(p, c"u_step".as_ptr()),
             })
         }
-    }
-
-    fn lava_programs(&self) -> Result<LavaProgs, String> {
-        let mut maxu = 0;
-        // SAFETY: plain query
-        unsafe { (self.gl.glGetIntegerv)(GL_MAX_FRAGMENT_UNIFORM_VECTORS, &mut maxu) };
-        self.check("uniform limit")?;
-        if maxu < 48 {
-            return Err(format!("only {maxu} fragment uniform vectors"));
-        }
-        let f = self.program(FS_LAVA_FIELD)?;
-        let d = match self.program(FS_LAVA) {
-            Ok(d) => d,
-            Err(e) => {
-                // SAFETY: the program made above
-                unsafe { (self.gl.glDeleteProgram)(f.id) };
-                return Err(e);
-            }
-        };
-        let u = |p: GLuint, n: &CStr| {
-            // SAFETY: a linked program and a C string
-            unsafe { (self.gl.glGetUniformLocation)(p, n.as_ptr()) }
-        };
-        Ok(LavaProgs {
-            field: f.id,
-            draw: d.id,
-            f_b: u(f.id, c"u_b"),
-            f_p: u(f.id, c"u_p"),
-            f_bump: u(f.id, c"u_bump"),
-            f_n: u(f.id, c"u_n"),
-            f_org: u(f.id, c"u_org"),
-            f_reg: u(f.id, c"u_reg"),
-            f_merge: u(f.id, c"u_merge"),
-            f_size: f.size,
-            d_size: d.size,
-            d_tex: d.tex,
-            d_fill: u(d.id, c"u_fill"),
-            d_ink: u(d.id, c"u_ink"),
-            d_soft: u(d.id, c"u_soft"),
-        })
-    }
-
-    pub fn has_lava(&self) -> bool {
-        self.lava.is_some()
-    }
-
-    /// Six vertices of a quad with uv 0..1 into `verts`.
-    fn quad(&mut self, x0: f32, y0: f32, x1: f32, y1: f32, a: f32) {
-        self.verts.clear();
-        for (p, uv) in [((x0, y0), (0.0, 0.0)), ((x1, y0), (1.0, 0.0)), ((x1, y1), (1.0, 1.0)), ((x0, y0), (0.0, 0.0)), ((x1, y1), (1.0, 1.0)), ((x0, y1), (0.0, 1.0))] {
-            self.vert(p, uv, [a, a, a, a]);
-        }
-    }
-
-    /// # Safety
-    /// A program using a_pos/a_uv/a_col is bound; `verts` holds the quad.
-    unsafe fn draw_verts(&self) {
-        let g = &self.gl;
-        let base = self.verts.as_ptr() as *const u8;
-        // SAFETY: client-side arrays from self.verts, alive during the draw
-        unsafe {
-            (g.glVertexAttribPointer)(0, 2, GL_FLOAT, 0, 32, base as *const c_void);
-            (g.glVertexAttribPointer)(1, 2, GL_FLOAT, 0, 32, base.add(8) as *const c_void);
-            (g.glVertexAttribPointer)(2, 4, GL_FLOAT, 0, 32, base.add(16) as *const c_void);
-            (g.glEnableVertexAttribArray)(0);
-            (g.glEnableVertexAttribArray)(1);
-            (g.glEnableVertexAttribArray)(2);
-            (g.glDrawArrays)(GL_TRIANGLES, 0, (self.verts.len() / 8) as GLsizei);
-        }
-    }
-
-    /// The lava field (lava.rs `Prims`) into `dst` (FW x FH): one pass,
-    /// before the frame (it binds its own framebuffer).
-    pub fn lava_field(&mut self, dst: &Fbo, p: &crate::lava::Prims) -> Result<(), String> {
-        let Some(lp) = &self.lava else { return Err("no lava shaders".into()) };
-        let mut b = [0f32; 80];
-        for (i, o) in p.blobs.iter().enumerate() {
-            b[i * 16..i * 16 + 16].copy_from_slice(&[
-                o.x, o.y, o.r, o.lean, o.upper[0], o.upper[1], o.upper[2], o.harm[2].0, o.lower[0], o.lower[1], o.lower[2], o.harm[2].1, o.harm[0].0, o.harm[0].1, o.harm[1].0, o.harm[1].1,
-            ]);
-        }
-        let mut pl = [0f32; 16];
-        for (k, q) in p.pools.iter().enumerate() {
-            pl[k * 8..k * 8 + 8].copy_from_slice(&[q.x0, 1.0 / q.w, q.hgt, q.y_base, q.up, q.phase, 0.0, 0.0]);
-        }
-        let mut bump = [0f32; 20];
-        for i in 0..5 {
-            let (x, iw, a0) = p.pools[0].bumps[i];
-            bump[i * 4..i * 4 + 4].copy_from_slice(&[x, iw, a0, p.pools[1].bumps[i].2]);
-        }
-        let mut n = [0f32; 40];
-        for (i, q) in p.necks.iter().enumerate() {
-            n[i * 8..i * 8 + 8].copy_from_slice(&[q.bx, q.by, q.ax, q.ay, q.w0, q.waist, 0.0, 0.0]);
-        }
-        let (field, size, ub, up, ubump, un, org, reg, merge) = (lp.field, lp.f_size, lp.f_b, lp.f_p, lp.f_bump, lp.f_n, lp.f_org, lp.f_reg, lp.f_merge);
-        let (w, h) = (dst.w as f32, dst.h as f32);
-        self.quad(0.0, 0.0, w, h, 1.0);
-        let g = &self.gl;
-        // SAFETY: GL state on the current context; arrays alive during the calls
-        unsafe {
-            (g.glDisable)(GL_BLEND);
-            (g.glDisable)(GL_SCISSOR_TEST);
-            (g.glDisable)(GL_DEPTH_TEST);
-            (g.glDisable)(GL_CULL_FACE);
-            (g.glBindFramebuffer)(GL_FRAMEBUFFER, dst.fbo);
-            (g.glViewport)(0, 0, dst.w, dst.h);
-            (g.glUseProgram)(field);
-            (g.glUniform2f)(size, w, h);
-            (g.glUniform4fv)(ub, 20, b.as_ptr());
-            (g.glUniform4fv)(up, 4, pl.as_ptr());
-            (g.glUniform4fv)(ubump, 5, bump.as_ptr());
-            (g.glUniform4fv)(un, 10, n.as_ptr());
-            (g.glUniform2f)(org, crate::lava::LX0, 0.0);
-            (g.glUniform2f)(reg, crate::lava::LW, crate::lava::LH);
-            (g.glUniform1f)(merge, crate::lava::MERGE);
-            self.draw_verts();
-            (g.glDisableVertexAttribArray)(0);
-            (g.glDisableVertexAttribArray)(1);
-            (g.glDisableVertexAttribArray)(2);
-            (g.glBindFramebuffer)(GL_FRAMEBUFFER, 0);
-        }
-        self.verts.clear();
-        self.check("lava field")
-    }
-
-    /// Composite the lava from its field texture (inside `render`).
-    fn lava_draw(&mut self, l: &crate::scene::LavaDraw, field: GLuint, tw: f32, th: f32) {
-        use crate::lava::{LH, LW, LX0};
-        self.flush();
-        let Some(lp) = &self.lava else { return };
-        let (prog, size, tex, fill, ink, soft) = (lp.draw, lp.d_size, lp.d_tex, lp.d_fill, lp.d_ink, lp.d_soft);
-        self.quad(LX0 + l.dx, 0.0, LX0 + l.dx + LW, LH, l.alpha);
-        let (f, k) = (pm(l.fill), pm(l.ink));
-        let g = &self.gl;
-        // SAFETY: GL state on the current context; arrays alive during the draw
-        unsafe {
-            (g.glUseProgram)(prog);
-            (g.glUniform2f)(size, tw, th);
-            (g.glActiveTexture)(GL_TEXTURE0);
-            (g.glBindTexture)(GL_TEXTURE_2D, field);
-            (g.glUniform1i)(tex, 0);
-            (g.glUniform4f)(fill, f[0], f[1], f[2], f[3]);
-            (g.glUniform4f)(ink, k[0], k[1], k[2], k[3]);
-            (g.glUniform1f)(soft, l.soft.max(0.5));
-            self.draw_verts();
-        }
-        self.verts.clear();
-        // the batched programs set their state again on the next flush
-        self.kind = Kind::Solid;
     }
 
     /// GL errors since the last check, as an Err.
@@ -1289,11 +1031,6 @@ impl Gl {
                         self.vert(q[3], (u0, v1), c);
                     }
                 }
-                Item::Lava(l) => {
-                    if let Some((id, ..)) = tex(Src::Lava) {
-                        self.lava_draw(l, id, cw, ch);
-                    }
-                }
                 Item::Image { src, quad, uv, alpha } => {
                     let Some((id, swz, opq, _, _)) = tex(*src) else { continue };
                     self.kind(Kind::Image(id, swz, opq));
@@ -1349,10 +1086,6 @@ impl Gl {
                     if p.id != 0 {
                         (self.gl.glDeleteProgram)(p.id);
                     }
-                }
-                if let Some(l) = self.lava.take() {
-                    (self.gl.glDeleteProgram)(l.field);
-                    (self.gl.glDeleteProgram)(l.draw);
                 }
                 (self.gl.glFinish)();
             }

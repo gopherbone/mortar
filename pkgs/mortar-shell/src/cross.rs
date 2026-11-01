@@ -11,8 +11,8 @@
 //! - The cross: Apps, Games, Music and Settings across the middle, the
 //!   selected category lifted in its accent; the selected item right under
 //!   it as a bold band from the left edge, the items below continuing down
-//!   and the two above dimmed above the category row. A lava lamp in the
-//!   category's colour runs behind it (lava.rs).
+//!   and the one above dimmed above the category row. A quiet animated
+//!   pattern per category runs in a strip at the right edge (patterns.rs).
 //!
 //! ▶ slides Running off to the left and the cross in; ◀ from Apps (or L1)
 //! goes back. The clock and hint bars float over both as frosted glass.
@@ -24,7 +24,7 @@
 use super::menupages::{Sub, SubKind};
 use super::*;
 use crate::config::Category;
-use crate::lava::{self, Lamp};
+use crate::patterns::{self, Patterns};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Cat {
@@ -60,7 +60,7 @@ impl Cat {
             Cat::Settings => Ic::Quick,
         }
     }
-    /// The category's accent (the band, its icon, the lava).
+    /// The category's accent (the band, its icon, its pattern).
     pub(super) fn accent(self, pal: &Pal) -> Color {
         match self {
             Cat::Running => pal.lavender,
@@ -70,12 +70,12 @@ impl Cat {
             Cat::Settings => pal.pink,
         }
     }
-    fn feel(self) -> lava::Feel {
+    fn pattern(self) -> patterns::Kind {
         match self {
-            Cat::Games => lava::GAMES,
-            Cat::Music => lava::MUSIC,
-            Cat::Settings => lava::SETTINGS,
-            _ => lava::APPS,
+            Cat::Games => patterns::Kind::Life,
+            Cat::Music => patterns::Kind::Orbits,
+            Cat::Settings => patterns::Kind::Checker,
+            _ => patterns::Kind::Zigzag,
         }
     }
 }
@@ -175,7 +175,12 @@ pub(super) struct Cross {
     /// A level row is being adjusted (◀▶ change it instead of category).
     adjusting: bool,
     pub(super) sub: Option<Sub>,
-    pub(super) lamp: Lamp,
+    pub(super) patterns: Patterns,
+    /// The pattern a category change leaves (it slides out as the new one
+    /// slides in, `pat_x` 0 -> 1, `pat_dir` the way the categories move).
+    pat_from: Option<Cat>,
+    pat_x: Spring,
+    pat_dir: f32,
     pub closing: bool,
 }
 
@@ -188,14 +193,15 @@ const RUN_STEP: f32 = 612.0;
 const COLX: f32 = 100.0;
 const CATW: f32 = 180.0;
 /// Category icons: ICON square at (x + 16, CATS_TOP + 10), names below.
-const CATS_TOP: f32 = 150.0;
+const CATS_TOP: f32 = 164.0;
 const ICON: f32 = 116.0;
 /// The selected row (taller, a serif title) right under the categories,
 /// the others below it; one dimmed row above the categories.
-const ROW_TOP: f32 = 332.0;
+const ROW_TOP: f32 = 344.0;
 const SEL_H: f32 = 96.0;
 const ROWH: f32 = 80.0;
-const ABOVE_H: f32 = 74.0;
+/// Unselected rows' icon tiles (the selected row's are TILE).
+const TILE_S: f32 = 60.0;
 /// A row: the index, the icon tile, the text, the value column ending at
 /// ITEM_W (all from LISTX).
 const LISTX: f32 = 68.0;
@@ -214,7 +220,8 @@ fn slot_y(j: usize, s: usize) -> f32 {
     } else if d > 0.0 {
         ROW_TOP + SEL_H + 8.0 + (d - 1.0) * ROWH
     } else {
-        CATS_TOP - ABOVE_H + (d + 1.0) * ABOVE_H
+        // under the status bar, clear of the lifted icon and its shadow
+        BAR_H + 4.0 + (d + 1.0) * ROWH
     }
 }
 
@@ -303,7 +310,7 @@ impl Cross {
     }
 
     fn springs_mut(&mut self) -> Vec<&mut Spring> {
-        let mut v: Vec<&mut Spring> = vec![&mut self.op, &mut self.page_x, &mut self.run_scroll, &mut self.cat_x, &mut self.lamp.cx, &mut self.lamp.sx];
+        let mut v: Vec<&mut Spring> = vec![&mut self.op, &mut self.page_x, &mut self.run_scroll, &mut self.cat_x, &mut self.patterns.nudge, &mut self.pat_x];
         v.extend(self.lift.iter_mut());
         for r in &mut self.rows {
             v.extend([&mut r.y, &mut r.op, &mut r.bw]);
@@ -321,8 +328,8 @@ impl Cross {
         self.springs_mut()
     }
 
-    /// The lamp shows (the cross is at least partly on screen).
-    pub(super) fn lava_visible(&self) -> bool {
+    /// The pattern shows (the cross is at least partly on screen).
+    pub(super) fn pattern_visible(&self) -> bool {
         !self.closing && self.page_x.x > 0.01
     }
 
@@ -333,7 +340,7 @@ impl Cross {
             || !self.rows.iter().all(|r| r.y.rest() && r.op.rest() && r.bw.rest())
             || self.ctx.as_ref().is_some_and(|c| !c.op.rest())
             || self.sub.as_ref().is_some_and(|s| s.moving())
-            || (self.lava_visible() && self.lamp.lively())
+            || !(self.patterns.nudge.rest() && self.pat_x.rest())
     }
 
     /// How far open (0..1), for the backdrop.
@@ -390,7 +397,10 @@ impl ShellUi {
             confirm: None,
             adjusting: false,
             sub: None,
-            lamp: Lamp::new(cat.feel()),
+            patterns: Patterns::new(),
+            pat_from: None,
+            pat_x: Spring { k_mul: 0.7, ..Spring::new(1.0) },
+            pat_dir: 1.0,
             closing: false,
         };
         let s = self.sel_idx(cat);
@@ -448,10 +458,20 @@ impl ShellUi {
 
     fn set_cat(&mut self, cat: Cat, v: &View, snap: bool) {
         let s = self.sel_idx(cat);
-        let pal = self.pal();
+        let reduce = self.prefs.reduce_motion;
         let Some(m) = &mut self.menu else { return };
         let list = cats(v);
         let idx = list.iter().position(|c| *c == cat).unwrap_or(0);
+        let old = m.cat;
+        if !snap && old != cat && !reduce {
+            // the old pattern slides out the way the categories go, the
+            // new one in after it
+            let oi = list.iter().position(|c| *c == old).unwrap_or(0);
+            m.pat_dir = if idx > oi { 1.0 } else { -1.0 };
+            m.pat_from = Some(old);
+            m.pat_x.snap(0.0);
+            m.pat_x.set(1.0);
+        }
         m.cat = cat;
         m.confirm = None;
         m.adjusting = false;
@@ -465,8 +485,6 @@ impl ShellUi {
                 l.set(if *c == cat { 1.0 } else { 0.0 });
             }
         }
-        m.lamp.aim(cat.feel(), s);
-        let _ = pal;
         if snap {
             m.cat_x.snap(m.cat_x.t);
             for l in &mut m.lift {
@@ -477,8 +495,8 @@ impl ShellUi {
                 r.op.snap(r.op.t);
                 r.bw.snap(r.bw.t);
             }
-            m.lamp.cx.snap(m.lamp.cx.t);
-            m.lamp.sx.snap(m.lamp.sx.t);
+            m.pat_from = None;
+            m.pat_x.snap(1.0);
         }
     }
 
@@ -522,7 +540,7 @@ impl ShellUi {
         }
     }
 
-    /// A button with the MENU up; the lava lamp feels the navigation.
+    /// A button with the MENU up; the pattern feels ▲▼.
     pub(super) fn menu_button(&mut self, b: Button, repeat: bool, v: &View) {
         self.sync_menu(v);
         let before = self.menu.as_ref().map(|m| (m.on_cross, m.cat, self.cross_sel[m.cat.i()], m.sub.as_ref().is_some_and(|s| !s.closing), m.ctx.is_some(), m.adjusting));
@@ -536,30 +554,10 @@ impl ShellUi {
             return;
         }
         let s = self.cross_sel[m.cat.i()];
-        let dir = matches!(b, Button::Up | Button::Down | Button::Left | Button::Right);
-        if !cross0 && m.on_cross {
-            m.lamp.kick(-520.0, -40.0);
-        } else if !m.on_cross {
-        } else if m.cat != cat0 {
-            let d = if m.cat.i() > cat0.i() { -1.0 } else { 1.0 };
-            m.lamp.kick(d * 460.0, -80.0);
-        } else if s != s0 {
-            m.lamp.kick(if s % 2 == 1 { 60.0 } else { -60.0 }, if s > s0 { -300.0 } else { 300.0 });
-        } else if adj0 && matches!(b, Button::Left | Button::Right) {
-            m.lamp.kick(0.0, -30.0);
-        } else if dir {
-            // bumping the end of a list jolts it
-            let dx = match b {
-                Button::Left => 160.0,
-                Button::Right => -160.0,
-                _ => 0.0,
-            };
-            let dy = match b {
-                Button::Down => -140.0,
-                Button::Up => 140.0,
-                _ => -60.0,
-            };
-            m.lamp.kick(dx, dy);
+        let _ = (cross0, adj0);
+        if m.on_cross && m.cat == cat0 && matches!(b, Button::Up | Button::Down) {
+            let dir = if s != s0 { if s > s0 { 1.0 } else { -1.0 } } else if b == Button::Down { 0.5 } else { -0.5 };
+            m.patterns.nudge(m.cat.pattern(), dir);
         }
     }
 
@@ -640,7 +638,6 @@ impl ShellUi {
                     self.cross_sel[cat.i()] = ns;
                     m.confirm = None;
                     m.layout(ns);
-                    m.lamp.aim(cat.feel(), ns);
                     self.fx(Sfx::Tick, Some(Haptic::Tick));
                 }
             }
@@ -872,16 +869,16 @@ impl ShellUi {
             .collect()
     }
 
-    /// The lava lamp: simulated only while the cross shows and motion is
+    /// The pattern: stepped only while the cross shows and motion is
     /// not reduced (then it stands still).
-    pub(super) fn step_lava(&mut self, dt: f32) {
+    pub(super) fn step_pattern(&mut self, dt: f32) {
         if self.prefs.reduce_motion {
             return;
         }
         if let Some(m) = &mut self.menu
-            && m.lava_visible()
+            && m.pattern_visible()
         {
-            m.lamp.step(dt);
+            m.patterns.step(dt);
         }
     }
 
@@ -899,7 +896,6 @@ impl ShellUi {
         }
         b.push_alpha(o);
         let px = m.page_x.x;
-        let lava = m.lava_visible().then(|| (m.lamp.prims(), lava_fill(pal, m.cat)));
         if px < 0.99 {
             let s = 1.04 - 0.04 * o;
             b.push(Xf::translate(-px * W, 0.0).mul(&Xf::about(W / 2.0, H / 2.0, Xf::scale(s, s))));
@@ -914,10 +910,9 @@ impl ShellUi {
         if let Some(c) = &m.ctx {
             draw_ctx(b, pal, c, g);
         }
-        let lava_ref = lava.as_ref().map(|(p, c)| (p, *c, (1.0 - px) * W));
-        self.glass_status(b, pal, v, g, lava_ref);
+        self.glass_status(b, pal, v, g);
         let hints = self.menu_hints(m, v);
-        glass_hints(b, pal, g, &hints, lava_ref);
+        glass_hints(b, pal, g, &hints);
         b.pop_alpha();
     }
 
@@ -998,7 +993,7 @@ impl ShellUi {
         let name = b.fit(&name, &nm, 600.0);
         let nw = b.measure(&name, &nm) + 28.0;
         let nx = x + iw;
-        glass(b, pal, g, nx, top, nw, h, 0.6, None);
+        glass(b, pal, g, nx, top, nw, h, 0.6);
         b.text(nx + 14.0, top + h / 2.0 - nm.line_px() / 2.0, &name, &nm);
         open_box(b, nx, top, nw, h, 3.0, pal.dark);
         if !status.is_empty() {
@@ -1006,7 +1001,7 @@ impl ShellUi {
             let sw = b.measure(&status, &st) + 24.0;
             let (sx, sh) = (nx + nw, 56.0);
             let sy = top + (h - sh) / 2.0;
-            glass(b, pal, g, sx, sy, sw, sh, 0.6, None);
+            glass(b, pal, g, sx, sy, sw, sh, 0.6);
             b.text(sx + 12.0, sy + sh / 2.0 - st.line_px() / 2.0, &status, &st);
             open_box(b, sx, sy, sw, sh, 3.0, pal.dark);
         }
@@ -1014,11 +1009,18 @@ impl ShellUi {
 
     fn draw_cross(&self, b: &mut B, pal: &Pal, v: &View, m: &Cross, g: &Glass) {
         let accent = m.cat.accent(pal);
-        if m.lava_visible() {
-            b.lava(&m.lamp.prims(), lava_fill(pal, m.cat), pal.ink, 1.0);
+        if m.pattern_visible() {
+            // the new pattern slides in as the old one slides out
+            let p = m.pat_x.x;
+            let off = patterns::STRIP_W * m.pat_dir;
+            if let Some(old) = m.pat_from.filter(|_| p < 0.999) {
+                m.patterns.draw(b, pal, old.pattern(), -p * off);
+            }
+            m.patterns.draw(b, pal, m.cat.pattern(), (1.0 - p) * off);
         }
         let s = self.cross_sel[m.cat.i()];
-        self.draw_cats(b, pal, v, m, g);
+        // rows first, the categories over them (a row moving past never
+        // covers an icon or its shadow)
         for (j, r) in m.rows.iter().enumerate() {
             let a = r.op.x.clamp(0.0, 1.0);
             if a < 0.01 || r.y.x > H {
@@ -1030,6 +1032,7 @@ impl ShellUi {
             b.pop_alpha();
             b.pop();
         }
+        self.draw_cats(b, pal, v, m, g);
         if let Some(sub) = &m.sub {
             self.draw_sub(b, pal, v, m, sub, g);
         }
@@ -1064,7 +1067,7 @@ impl ShellUi {
                 b.frame(ix, iy, ICON, ICON, 2.0, pal.dark);
                 draw_icon(b, c.icon(), ix + ICON / 2.0, iy + ICON / 2.0, glyph, pal, pal.dark);
             } else {
-                glass(b, pal, g, ix, iy, ICON, ICON, 0.4, None);
+                glass(b, pal, g, ix, iy, ICON, ICON, 0.4);
                 b.frame(ix, iy, ICON, ICON, 1.0, Color(255, 255, 255, 190));
                 draw_icon(b, c.icon(), ix + ICON / 2.0, iy + ICON / 2.0, glyph, pal, pal.ink);
             }
@@ -1086,7 +1089,8 @@ impl ShellUi {
         let bw = r.bw.x;
         if bw > 0.01 {
             // the band, from the left screen edge, with its offset shadow
-            let x1 = bw * (ITEM_W + 24.0);
+            // (a bouncy spring overshoots: the band never reaches the pattern)
+            let x1 = bw.min(1.0) * (ITEM_W + 24.0);
             let (by, bh) = (4.0, SEL_H - 8.0);
             b.rect(-LISTX - 8.0, by + 10.0, x1 + LISTX + 8.0 + 10.0, bh, pal.dark);
             b.rect(-LISTX - 8.0, by, x1 + LISTX + 8.0, bh, accent);
@@ -1100,18 +1104,19 @@ impl ShellUi {
         let ix = ts(Face::Mono400, 18.0, soft);
         b.text(0.0, cy - ix.line_px() / 2.0, &info.index_of(m, row), &ix);
         // the icon tile: glass, or solid with an ink outline when selected
-        let (sx, sy) = (IX_W, cy - TILE / 2.0);
+        let tile = if on { TILE } else { TILE_S };
+        let (sx, sy) = (IX_W, cy - tile / 2.0);
         if confirm {
-            b.rect(sx, sy, TILE, TILE, pal.orange);
-            b.frame(sx, sy, TILE, TILE, 2.0, pal.dark);
+            b.rect(sx, sy, tile, tile, pal.orange);
+            b.frame(sx, sy, tile, tile, 2.0, pal.dark);
         } else if on {
-            b.rect(sx, sy, TILE, TILE, DAY.ground);
-            b.frame(sx, sy, TILE, TILE, 2.0, pal.dark);
+            b.rect(sx, sy, tile, tile, DAY.ground);
+            b.frame(sx, sy, tile, tile, 2.0, pal.dark);
         } else {
-            glass(b, pal, g, sx, sy, TILE, TILE, 0.45, None);
-            b.frame(sx, sy, TILE, TILE, 1.0, Color(255, 255, 255, 190));
+            glass(b, pal, g, sx, sy, tile, tile, 0.45);
+            b.frame(sx, sy, tile, tile, 1.0, Color(255, 255, 255, 190));
         }
-        draw_icon(b, info.icon, sx + TILE / 2.0, sy + TILE / 2.0, TILE * 0.62, pal, if on || confirm { pal.dark } else { pal.ink });
+        draw_icon(b, info.icon, sx + tile / 2.0, sy + tile / 2.0, tile * 0.62, pal, if on || confirm { pal.dark } else { pal.ink });
         // the value column, right-aligned at the item's right edge
         let adjusting = on && m.adjusting;
         let mut right = ITEM_W;
@@ -1140,7 +1145,7 @@ impl ShellUi {
         }
         let title = if on { ts(Face::SerifItalic, 56.0, ink).line_height(0.95) } else { ts(Face::Body600, 32.0, ink).line_height(1.05) };
         let sub = ts(Face::Mono400, 20.0, soft);
-        let tx = sx + TILE + 20.0;
+        let tx = IX_W + TILE + 20.0;
         let top = cy - (title.line_px() + 2.0 + sub.line_px()) / 2.0;
         let t = b.fit(&info.title, &title, right - tx);
         b.text(tx, top, &t, &title);
@@ -1194,8 +1199,8 @@ impl ShellUi {
 
     /// The status bar: frosted glass with the clock and the device's state
     /// (no hairline, no category tabs).
-    fn glass_status(&self, b: &mut B, pal: &Pal, v: &View, g: &Glass, lava: Option<(&lava::Prims, Color, f32)>) {
-        glass(b, pal, g, 0.0, 0.0, W, BAR_H, 0.42, lava);
+    fn glass_status(&self, b: &mut B, pal: &Pal, v: &View, g: &Glass) {
+        glass(b, pal, g, 0.0, 0.0, W, BAR_H, 0.42);
         let clock = ts(Face::SerifItalic, 48.0, pal.ink).line_height(1.0);
         b.text(28.0, BAR_H / 2.0 - clock.line_px() / 2.0, &v.sys.time, &clock);
         let mono = ts(Face::Mono400, 19.0, pal.ink);
@@ -1239,7 +1244,7 @@ impl ShellUi {
 }
 
 /// A frosted pane over the backdrop the MENU sits on: the blurred app (cut
-/// to the pane) under its veil, the lava seen softly through it, then a
+/// to the pane) under its veil, then a
 /// light ground at `tint` and a light top edge. With nothing blurred (an
 /// app still starting) a flat ground.
 #[derive(Clone, Copy, Debug, Default)]
@@ -1251,7 +1256,7 @@ pub(super) struct Glass {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) fn glass(b: &mut B, pal: &Pal, g: &Glass, x: f32, y: f32, w: f32, h: f32, tint: f32, lava: Option<(&lava::Prims, Color, f32)>) {
+pub(super) fn glass(b: &mut B, pal: &Pal, g: &Glass, x: f32, y: f32, w: f32, h: f32, tint: f32) {
     if w <= 0.0 || h <= 0.0 {
         return;
     }
@@ -1267,23 +1272,8 @@ pub(super) fn glass(b: &mut B, pal: &Pal, g: &Glass, x: f32, y: f32, w: f32, h: 
         }
         _ => b.rect(x, y, w, h, with_a(pal.ground, 0.9)),
     }
-    if let Some((prims, col, dx)) = lava {
-        b.clip(Some([x, y, w, h]));
-        b.push(Xf::translate(dx - b.xf().e, 0.0));
-        b.lava(prims, col, pal.ink, 10.0);
-        b.pop();
-        b.clip(None);
-    }
     b.rect(x, y, w, h, with_a(pal.ground, tint));
     b.rect(x, y, w, 1.0, Color(255, 255, 255, if pal.night { 60 } else { 190 }));
-}
-
-/// The lava's wax: the category's accent mixed 35% toward the ground, so
-/// the lamp stays a quiet background element.
-pub(super) fn lava_fill(pal: &Pal, cat: Cat) -> Color {
-    let (a, g) = (cat.accent(pal), pal.ground);
-    let mix = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * 0.35).round() as u8;
-    Color(mix(a.0, g.0), mix(a.1, g.1), mix(a.2, g.2), 255)
 }
 
 /// A box border without its left side (the label's segments).
@@ -1294,9 +1284,9 @@ fn open_box(b: &mut B, x: f32, y: f32, w: f32, h: f32, bw: f32, c: Color) {
 }
 
 /// The hint bar: frosted glass, right-aligned (cap, label) pairs.
-pub(super) fn glass_hints(b: &mut B, pal: &Pal, g: &Glass, items: &[(&str, &str)], lava: Option<(&lava::Prims, Color, f32)>) {
+pub(super) fn glass_hints(b: &mut B, pal: &Pal, g: &Glass, items: &[(&str, &str)]) {
     let y = H - HINT_H;
-    glass(b, pal, g, 0.0, y, W, HINT_H, 0.42, lava);
+    glass(b, pal, g, 0.0, y, W, HINT_H, 0.42);
     let cap_st = ts(Face::Mono600, 17.0, DAY.ground);
     let lab = ts(Face::Body400, 22.0, pal.soft);
     let mut right = W - 28.0;
@@ -1366,7 +1356,7 @@ fn draw_ctx(b: &mut B, pal: &Pal, c: &Ctx, g: &Glass) {
     b.push_alpha(a);
     let h = rh * c.items.len() as f32;
     b.rect(x + 8.0, y + 8.0, w, h, pal.dark);
-    glass(b, pal, g, x, y, w, h, 0.7, None);
+    glass(b, pal, g, x, y, w, h, 0.7);
     for (i, it) in c.items.iter().enumerate() {
         let ry = y + i as f32 * rh;
         let on = i == c.sel;
@@ -1571,4 +1561,45 @@ pub(super) fn draw_icon(b: &mut B, ic: Ic, cx: f32, cy: f32, size: f32, pal: &Pa
         Ic::Claude => {}
     }
     b.pop();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// What an unselected row draws (its tile and two text lines, with a
+    /// little room), as (x0, y0, x1, y1).
+    fn row_content(y: f32) -> [f32; 4] {
+        [LISTX, y + ROWH / 2.0 - 32.0, LISTX + ITEM_W, y + ROWH / 2.0 + 32.0]
+    }
+
+    /// The selected category's icon, lifted (up 10, left 7, full size),
+    /// with its hard shadow (9 px down and right).
+    fn icon_with_shadow() -> [f32; 4] {
+        let (x, y) = (COLX + 16.0 - 7.0, CATS_TOP + 10.0 - 10.0);
+        [x, y, x + ICON + 9.0, y + ICON + 9.0]
+    }
+
+    #[test]
+    fn row_above_clears_the_category_icon() {
+        let icon = icon_with_shadow();
+        for n in [2usize, 6, 10] {
+            for s in [1, n / 2, n - 1] {
+                // the row above the selection, the only one shown up there
+                let above = row_content(slot_y(s - 1, s));
+                assert!(above[3] + 16.0 <= icon[1], "row above (n {n}, s {s}) ends at {}, icon starts at {}", above[3], icon[1]);
+                assert!(above[1] >= BAR_H, "under the status bar");
+                assert_eq!(row_op(s - 1, s), 0.62);
+                if s >= 2 {
+                    assert_eq!(row_op(s - 2, s), 0.0, "only one row above");
+                }
+                // the selected band starts below the icon, its shadow and
+                // the category names
+                let names_bottom = CATS_TOP + 10.0 + ICON + 12.0 + 34.0;
+                assert!(slot_y(s, s) + 4.0 >= icon[3].max(names_bottom), "band at {}", slot_y(s, s));
+                // the third row below still ends above the hint bar
+                assert!(slot_y(s + 3, s) + ROWH <= H - HINT_H, "row 3 below at {}", slot_y(s + 3, s));
+            }
+        }
+    }
 }
