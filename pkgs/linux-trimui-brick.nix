@@ -230,6 +230,30 @@ buildLinux (
       # Lets `console=ttyGS0` be used as a kernel console later; only active
       # when it is on the command line.
       U_SERIAL_CONSOLE = yes;
+
+      # --- zram swap (zramSwap in modules/mortar-base.nix; without the
+      #     module the dev-zram0 job never finishes and blocks reboot) ---
+      ZSMALLOC = module;
+      ZRAM = module;
+      CRYPTO_ZSTD = yes;
+      CRYPTO_LZ4 = yes;
+      ZRAM_BACKEND_ZSTD = yes;
+      ZRAM_BACKEND_LZ4 = yes;
+
+      # --- Suspend to RAM (SCP-backed "deep") ---
+      # jkingston's native-deep.fragment (trimui-brick-firmware
+      # board/trimui/brick/native-deep.fragment): wake votes through the
+      # TF-A/SCP wake service (needs the native-deep DTB's wakeupgen node),
+      # and CCU context save/restore for the clocks the SCP powers off.
+      # TF-A must be built with SUNXI_A133_SYSTEM_SUSPEND (firmware/mainline/
+      # tf-a.nix is); then /sys/power/mem_sleep offers "deep".
+      SUSPEND = yes;
+      PM_SLEEP = yes;
+      SUN50I_A133_WAKEUPGEN = yes;
+      SUN50I_A133_CCU_SLEEP = yes;
+      # /sys/power/pm_test, pm_print_times, suspend_stats in debugfs
+      PM_DEBUG = yes;
+      PM_SLEEP_DEBUG = yes;
     };
 
     extraMeta = {

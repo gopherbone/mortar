@@ -195,7 +195,7 @@ let
         // lib.optionalAttrs (category != null) { inherit category; }
       ) sorted;
       ui = {
-        inherit (cfg.ui) renderer motion reduceMotion sounds soundVolume haptics bootAnimation screenshotDir cardFps msaa audioDevice suspend;
+        inherit (cfg.ui) renderer motion reduceMotion sounds soundVolume haptics bootAnimation screenshotDir cardFps msaa audioDevice suspend suspendGraceMs idleMinutes;
         hapticMs = cfg.ui.hapticMs;
         palette = if cfg.ui.palette != null then cfg.ui.palette else (if cfg.theme == "dark" then "night" else "day");
         # the stock PowerVR libs for the GPU UI renderer (modules/brick-gpu.nix)
@@ -387,13 +387,27 @@ in
       };
       suspend = mkOption {
         type = types.bool;
-        default = false;
+        default = config.hardware.trimui-brick.suspend.enable or false;
+        defaultText = lib.literalExpression "config.hardware.trimui-brick.suspend.enable";
         description = ''
-          Sleep (power key tap, MENU > Quick or Power > Sleep, the power menu) blanks the
-          screen and backlight and occludes the front app. With this on it
-          also runs `systemctl suspend` once the screen is dark. Off: real
-          suspend-to-RAM is untested on the Brick (see DESIGN.md).
+          Default for Settings > Sleep (Suspend / Screen off). Sleep (power
+          key tap, MENU > Quick or Power > Sleep, the power menu) blanks the
+          screen and backlight and occludes the front app; with Suspend it
+          also runs `actions.sleep` (`systemctl suspend`) once the screen
+          has been dark for `suspendGraceMs`. Wake sources: see
+          hardware.trimui-brick.suspend (s2idle: any button; deep: power
+          key). Apps are frozen meanwhile (audio stops).
         '';
+      };
+      suspendGraceMs = mkOption {
+        type = types.ints.unsigned;
+        default = 3000;
+        description = "How long the screen stays dark before suspending (a power tap within it just wakes the screen).";
+      };
+      idleMinutes = mkOption {
+        type = types.ints.unsigned;
+        default = 0;
+        description = "Default for Settings > Sleep when idle: minutes without button input before sleeping (0: never).";
       };
       bootAnimation = mkOption {
         type = types.bool;

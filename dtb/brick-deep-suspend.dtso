@@ -1,0 +1,61 @@
+// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
+/*
+ * TrimUI Brick: SCP-backed deep suspend on top of the plain
+ * sun50i-a133-trimui-brick.dtb.
+ *
+ * The same changes as the kernel tree's sun50i-a133-trimui-brick-native-deep.dts
+ * (= -native-wake.dts + stock-psci-idle.dtsi + the stock-suspend context
+ * flags), minus the PSCI CPU idle states (modules/trimui-brick.nix adds
+ * those separately, off by default). Applied as an overlay so the DTB keeps
+ * its file name: generic-extlinux writes the current hardware.deviceTree.name
+ * into every boot-menu entry, and older generations only have the plain DTB.
+ */
+/dts-v1/;
+/plugin/;
+
+/ {
+	compatible = "trimui,brick";
+};
+
+/* Wake votes for SPIs go through the TF-A/SCP wake service. */
+&{/} {
+	interrupt-parent = <&wakeupgen>;
+
+	wakeupgen: interrupt-controller {
+		compatible = "allwinner,sun50i-a133-native-wakeupgen";
+		interrupt-controller;
+		interrupt-parent = <&gic>;
+		#interrupt-cells = <3>;
+	};
+};
+
+/* PPIs and the GIC's own maintenance interrupt bypass the SPI wake domain. */
+&gic {
+	interrupt-parent = <&gic>;
+};
+
+&{/timer} {
+	interrupt-parent = <&gic>;
+};
+
+/* The PMIC NMI (power key) cascade: its parent SPI votes wake via the SCP. */
+&r_intc {
+	interrupt-parent = <&wakeupgen>;
+};
+
+/* Reconstruct the context that the SCP-powered deep state does not retain. */
+&ccu {
+	allwinner,stock-suspend;
+};
+
+&r_ccu {
+	allwinner,stock-suspend;
+};
+
+&pio {
+	allwinner,stock-suspend;
+};
+
+&r_pio {
+	allwinner,stock-suspend;
+};

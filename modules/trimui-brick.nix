@@ -47,6 +47,57 @@ in {
       description = "Kernel package set used when variant = \"mainline\".";
     };
 
+    suspend = {
+      enable = mkOption {
+        type = types.bool;
+        default = isMainline;
+        defaultText = literalExpression ''config.hardware.trimui-brick.variant == "mainline"'';
+        description = ''
+          (mainline only) `systemctl suspend` works: sleep.conf, the
+          brick-sleep.service hooks and the wake sources for `mode`.
+        '';
+      };
+      mode = mkOption {
+        type = types.enum [ "s2idle" "deep" ];
+        default = "s2idle";
+        description = ''
+          `s2idle` (suspend-to-idle): devices suspend, CPUs idle, DRAM stays
+          up. Any gamepad button or the power key wakes it.
+
+          `deep`: the SCP powers the SoC down and brings DRAM back on resume
+          (dtb/brick-deep-suspend.dtso = the kernel tree's -native-deep.dts
+          wake routing and CCU/PIO context restore; needs the mainline TF-A
+          with SUNXI_A133_SYSTEM_SUSPEND). Only the power key wakes. Not the
+          default: after every deep resume the panel looked fuzzy (shifting
+          lines) until reboot. The only register difference found was
+          PLL_DDR0 bit 24 (sigma-delta enable: set at boot, clear after the
+          SCP's DRAM resume); writing it back on the live system hung the
+          Brick. See notes in modules/trimui-brick.nix.
+        '';
+      };
+      cpuIdle = mkOption {
+        type = types.bool;
+        default = false;
+        description = ''
+          Add the PSCI CPU/cluster idle states that -native-deep.dts
+          includes (dtb/brick-cpu-idle.dtso). Suspend does not need them.
+          Untested on their own: the first deep-suspend boot had them and
+          the panel was fuzzy, but that was the deep resume (see `mode`).
+        '';
+      };
+      padWake = mkOption {
+        type = types.bool;
+        default = cfg.suspend.mode == "s2idle";
+        defaultText = literalExpression ''config.hardware.trimui-brick.suspend.mode == "s2idle"'';
+        description = ''
+          Mark the gamepad buttons (gpio-keys) as wake sources. The power
+          key (AXP2202 NMI) always wakes. In deep mode this is experimental:
+          the main PIO loses power there, the SCP may refuse the wake vote,
+          and gpio-keys then aborts the suspend.
+        '';
+      };
+    };
+
     extraDtOverlays = mkOption {
       type = types.listOf types.raw;
       default = [ ];
@@ -293,9 +344,24 @@ in {
       enable = true;
       filter = "sun50i-a133-trimui-brick.dtb";
       # Also used by image/build-image.nix for the extlinux FDT line, and by
-      # generic-extlinux-compatible for on-device rebuilds.
+      # generic-extlinux-compatible for on-device rebuilds. Keep this name:
+      # generic-extlinux writes it into every boot-menu entry (older
+      # generations only have this file), so deep suspend comes as overlays
+      # rather than as the kernel tree's -native-deep DTB.
       name = "allwinner/sun50i-a133-trimui-brick.dtb";
-      overlays = cfg.extraDtOverlays;
+      overlays = cfg.extraDtOverlays
+        ++ optional (cfg.suspend.enable && cfg.suspend.mode == "deep") { name = "brick-deep-suspend"; dtsFile = ../dtb/brick-deep-suspend.dtso; }
+        ++ optional (cfg.suspend.enable && cfg.suspend.cpuIdle) { name = "brick-cpu-idle"; dtsFile = ../dtb/brick-cpu-idle.dtso; }
+        ++ optional (cfg.suspend.enable && cfg.suspend.padWake) {
+          name = "brick-pad-wake";
+          dtsText = ''
+            /dts-v1/;
+            /plugin/;
+            / { compatible = "trimui,brick"; };
+            ${concatMapStrings (b: "&{/gamepad/button-${b}} { wakeup-source; };\n")
+              [ "a" "b" "x" "y" "up" "down" "left" "right" "start" "select" "menu" ]}
+          '';
+        };
     };
 
     # The device kernel has nf_tables but no legacy iptables/x_tables.
@@ -310,6 +376,97 @@ in {
     systemd.services."getty@tty1" = {
       enable = true;
       wantedBy = [ "multi-user.target" ];
+    };
+  })
+
+  # ===================================================================
+  # Suspend (mainline). jkingston's brick-suspend (trimui-brick-firmware
+  # package/brick-power) is the reference sequence: mute the codec, power
+  # Bluetooth off (hci_xradio refuses to suspend an open HCI), then
+  # mem/deep. Wi-Fi (xradio) drops its link and comes back on resume; iwd
+  # reconnects.
+  #
+  # Deep suspend (mode = "deep") works mechanically (wake by power key or
+  # RTC, every driver resumes), but after each deep resume the panel looks
+  # fuzzy until reboot. Follow-ups:
+  #  - Compare the whole DRAM controller/PHY (0x04002000.., 0x04003000..,
+  #    0x04005000..) after boot vs after resume: the SCP re-initialises
+  #    DRAM from the parameters U-Boot hands it (U-Boot patch 0004, stock
+  #    ABI, MR1/2/3 hard-coded), not from the mainline SPL's trained state.
+  #    So far only PLL_DDR0 bit 24 (SDM enable) differs; a live write of it
+  #    hung the Brick. A fix probably belongs in the handoff (U-Boot) or
+  #    TF-A, before DRAM leaves self-refresh.
+  #  - Ask jkingston whether he sees the same after deep resume (his image
+  #    has no KMS scanout, so he may not have noticed).
+  #  - Sometimes sun6i-dma refuses suspend_noirq with -EBUSY (a DMA client
+  #    other than the paused codec still active); the attempt just fails.
+  # ===================================================================
+  (mkIf (isMainline && cfg.suspend.enable) {
+    boot.kernelParams = [ "mem_sleep_default=${cfg.suspend.mode}" ];
+
+    systemd.sleep.settings.Sleep = {
+      AllowSuspend = mkDefault "yes";
+      AllowHibernation = mkDefault "no";
+      AllowHybridSleep = mkDefault "no";
+      AllowSuspendThenHibernate = mkDefault "no";
+      SuspendState = mkDefault (if cfg.suspend.mode == "deep" then "mem" else "freeze");
+      MemorySleepMode = mkDefault cfg.suspend.mode;
+    };
+
+    # Runs around every suspend (Before=sleep.target, stopped on resume).
+    systemd.services.brick-sleep = {
+      description = "TrimUI Brick: prepare for suspend / restore after resume";
+      wantedBy = [ "sleep.target" ];
+      before = [ "sleep.target" ];
+      unitConfig.StopWhenUnneeded = true;
+      path = [ pkgs.coreutils pkgs.alsa-utils pkgs.bluez pkgs.gnugrep config.systemd.package ];
+      serviceConfig = {
+        Type = "oneshot";
+        RemainAfterExit = true;
+        ExecStart = pkgs.writeShellScript "brick-sleep-pre" ''
+          set -u
+          S=/run/brick-sleep
+          mkdir -p $S
+          rm -f $S/*
+          echo "brick-sleep: suspending" > /dev/kmsg
+          # The USB watchdog would see a long RX gap (uptime counts the
+          # suspend) and kick the gadget while the host re-enumerates.
+          if systemctl -q is-active mortar-usb-watchdog.service; then
+            touch $S/usb-watchdog
+            systemctl stop mortar-usb-watchdog.service
+          fi
+          # hci_xradio only suspends a closed HCI.
+          if [ -d /sys/class/bluetooth/hci0 ] && systemctl -q is-active bluetooth.service; then
+            if timeout 5 bluetoothctl show 2>/dev/null | grep -q "Powered: yes"; then
+              touch $S/bluetooth
+              timeout 5 bluetoothctl power off >/dev/null 2>&1 || true
+            fi
+          fi
+          # Codec: no pop from the amplifier on the way down/up.
+          if amixer -c Codec sget Speaker >/dev/null 2>&1; then
+            amixer -c Codec sget Speaker | grep -q "\[on\]" && touch $S/speaker
+            amixer -q -c Codec sset Speaker off || true
+          fi
+          exit 0
+        '';
+        ExecStop = pkgs.writeShellScript "brick-sleep-post" ''
+          set -u
+          S=/run/brick-sleep
+          echo "brick-sleep: resumed" > /dev/kmsg
+          if [ -e $S/speaker ]; then
+            sleep 0.1
+            amixer -q -c Codec sset Speaker on || true
+          fi
+          if [ -e $S/bluetooth ]; then
+            timeout 5 bluetoothctl power on >/dev/null 2>&1 || true
+          fi
+          if [ -e $S/usb-watchdog ]; then
+            systemctl start --no-block mortar-usb-watchdog.service
+          fi
+          rm -f $S/*
+          exit 0
+        '';
+      };
     };
   })
   ]);

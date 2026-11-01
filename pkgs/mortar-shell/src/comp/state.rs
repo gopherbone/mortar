@@ -139,6 +139,24 @@ pub struct Shell {
     power_long: bool,
     /// Asleep and dark: the backlight is off.
     pub dark: bool,
+    /// Dark with Settings > Sleep = Suspend: suspend to RAM at this time
+    /// (the grace lets a second power tap just wake the screen).
+    suspend_at: Option<Instant>,
+    /// The running `actions.sleep` (reaped in `tick`).
+    suspend_child: Option<std::process::Child>,
+    /// CLOCK_BOOTTIME - CLOCK_MONOTONIC at the last check: it grows by the
+    /// time spent suspended, which is how a resume is noticed.
+    boot_offset: f64,
+    /// /sys/power/suspend_stats/success, sampled while dark.
+    suspend_count: Option<u64>,
+    /// Resumes from suspend seen since start (ctl status).
+    pub resumes: u32,
+    /// Right after a resume: the press that woke the Brick (the power key)
+    /// is swallowed, so its release does not put it back to sleep.
+    resume_grace: Option<Instant>,
+    power_swallow: bool,
+    /// Last button/key input, for Settings > Sleep when idle.
+    last_input: Instant,
     /// The UI is drawn on the GPU (else on the CPU).
     pub gpu_ui: bool,
     pub osk: Osk,
@@ -274,6 +292,14 @@ impl Shell {
             power_down: None,
             power_long: false,
             dark: false,
+            suspend_at: None,
+            suspend_child: None,
+            boot_offset: boot_offset(),
+            suspend_count: None,
+            resumes: 0,
+            resume_grace: None,
+            power_swallow: false,
+            last_input: Instant::now(),
             gpu_ui,
             osk: Osk::default(),
             router: Router::default(),
@@ -498,6 +524,12 @@ impl Shell {
         if self.power_down.is_some() {
             t = t.min(Duration::from_millis(16));
         }
+        if let Some(at) = self.suspend_at {
+            t = t.min(at.saturating_duration_since(now));
+        }
+        if let Some(d) = self.idle_deadline() {
+            t = t.min(d.saturating_duration_since(now));
+        }
         if let Some(p) = self.pending_toast.as_ref() {
             t = t.min(p.0.saturating_duration_since(now));
         }
@@ -517,6 +549,7 @@ impl Shell {
     }
 
     pub fn tick(&mut self) {
+        self.check_resume();
         // input hot-unplug
         for p in std::mem::take(&mut self.inputs_removed) {
             super::input::close_device(self, &p);
@@ -567,6 +600,8 @@ impl Shell {
             crate::shellui::SleepPhase::Awake | crate::shellui::SleepPhase::Waking => self.set_dark(false),
             crate::shellui::SleepPhase::Fading => {}
         }
+        self.suspend_tick();
+        self.idle_tick();
         self.page_poll();
         // status while a shell screen shows
         if self.shell_screen() && self.sys_at.elapsed() > Duration::from_secs(2) {
@@ -643,6 +678,9 @@ impl Shell {
 
     /// A key event from a classified device.
     pub fn on_key(&mut self, kind: Kind, code: u16, value: i32) {
+        // a key may be the first thing seen after a resume
+        self.check_resume();
+        self.last_input = Instant::now();
         // the power key belongs to the shell (logind ignores it, see
         // modules/mortar-shell.nix): tap = sleep/wake, hold = power menu
         if code == codes::KEY_POWER {
@@ -703,6 +741,7 @@ impl Shell {
     /// Hats (USB pads): forwarded to the visible app, or D-pad presses for
     /// the overlay.
     pub fn on_abs(&mut self, kind: Kind, code: u16, value: i32) {
+        self.last_input = Instant::now();
         let Kind::Pad(pad) = kind else { return };
         match self.receiver() {
             Receiver::App(uid, GamepadMode::Forward) => {
@@ -783,10 +822,16 @@ impl Shell {
     fn power_key(&mut self, value: i32) {
         use crate::shellui::SleepPhase;
         match value {
+            1 if self.resume_grace.is_some_and(|t| Instant::now() < t) => {
+                // the press that woke the Brick (it is already waking)
+                self.power_swallow = true;
+                self.power_down = None;
+            }
             1 => {
                 self.power_down = Some(Instant::now());
                 self.power_long = false;
             }
+            0 if std::mem::take(&mut self.power_swallow) => {}
             0 => {
                 let held = self.power_down.take();
                 self.sui.set_power_hold(None);
@@ -854,9 +899,103 @@ impl Shell {
             tracing::warn!("backlight power: {e}");
         }
         tracing::info!(dark, "sleep");
-        if dark && self.cfg.ui.suspend {
-            // the hook for real suspend-to-RAM (untested on the Brick)
-            run_detached(&self.cfg.actions.sleep.clone());
+        self.suspend_at = if dark && self.sui.prefs.suspend {
+            Some(Instant::now() + Duration::from_millis(self.cfg.ui.suspend_grace_ms))
+        } else {
+            None
+        };
+    }
+
+    /// Dark long enough: suspend to RAM (`actions.sleep`). Also reaps it.
+    fn suspend_tick(&mut self) {
+        if let Some(c) = &mut self.suspend_child
+            && let Ok(Some(st)) = c.try_wait()
+        {
+            if !st.success() {
+                tracing::warn!(%st, "suspend command failed");
+            }
+            self.suspend_child = None;
+        }
+        let Some(at) = self.suspend_at else { return };
+        if !self.dark || !self.sui.prefs.suspend {
+            self.suspend_at = None;
+            return;
+        }
+        if Instant::now() < at || self.suspend_child.is_some() {
+            return;
+        }
+        self.suspend_at = None;
+        tracing::info!("suspending");
+        if let Some((cmd, args)) = self.cfg.actions.sleep.split_first() {
+            match std::process::Command::new(cmd).args(args).spawn() {
+                Ok(c) => self.suspend_child = Some(c),
+                Err(e) => tracing::warn!("{cmd}: {e}"),
+            }
+        }
+    }
+
+    /// A resume shows up as a jump between CLOCK_BOOTTIME and
+    /// CLOCK_MONOTONIC (deep suspend; UI time, `Instant`, does not move
+    /// meanwhile) or, while dark, as a new count in
+    /// /sys/power/suspend_stats/success (s2idle on the Brick keeps
+    /// CLOCK_MONOTONIC running). On resume: wake the screen, swallow the
+    /// waking press, redraw and give every app a frame callback (they
+    /// stopped while dark).
+    fn check_resume(&mut self) {
+        let off = boot_offset();
+        let slept = off - self.boot_offset;
+        self.boot_offset = off;
+        let mut resumed = slept >= 0.5;
+        if self.dark {
+            let n = std::fs::read_to_string("/sys/power/suspend_stats/success")
+                .ok()
+                .and_then(|s| s.trim().parse::<u64>().ok());
+            if n.is_some() && self.suspend_count.is_some() && n != self.suspend_count {
+                resumed = true;
+            }
+            self.suspend_count = n;
+        } else {
+            self.suspend_count = None;
+        }
+        if !resumed {
+            return;
+        }
+        self.resumes += 1;
+        tracing::info!(slept_s = format!("{slept:.1}"), resumes = self.resumes, "resumed");
+        self.suspend_at = None;
+        self.last_input = Instant::now();
+        self.resume_grace = Some(Instant::now() + Duration::from_millis(1500));
+        // a press held across the suspend never got its release
+        self.power_down = None;
+        self.power_long = false;
+        if self.sui.sleep_phase() != crate::shellui::SleepPhase::Awake {
+            self.ui_wake();
+        }
+        self.ui_dirty = true;
+        self.needs_redraw = true;
+        let t = self.start.elapsed();
+        for a in &self.apps.list {
+            for w in &a.windows {
+                w.send_frame(&self.output, t, Some(Duration::ZERO), |_, _| None);
+            }
+        }
+    }
+
+    /// Settings > Sleep when idle: when the screen goes to sleep by itself.
+    fn idle_deadline(&self) -> Option<Instant> {
+        let m = self.sui.prefs.idle_minutes;
+        if m == 0 || self.sui.sleep_phase() != crate::shellui::SleepPhase::Awake || self.power_down.is_some() {
+            return None;
+        }
+        Some(self.last_input + Duration::from_secs(m as u64 * 60))
+    }
+
+    fn idle_tick(&mut self) {
+        if self.idle_deadline().is_some_and(|d| Instant::now() >= d) {
+            tracing::info!(minutes = self.sui.prefs.idle_minutes, "idle: sleeping");
+            self.sui.sleep();
+            self.sync_cover();
+            self.needs_redraw = true;
         }
     }
 
@@ -1031,6 +1170,17 @@ pub fn button_code(b: Button) -> Option<u16> {
         Button::VolDown => KEY_VOLUMEDOWN,
         Button::Power => return None,
     })
+}
+
+/// CLOCK_BOOTTIME - CLOCK_MONOTONIC, seconds: the total time suspended.
+fn boot_offset() -> f64 {
+    let now = |clk| {
+        let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+        // SAFETY: a valid timespec out-pointer
+        unsafe { libc::clock_gettime(clk, &mut ts) };
+        ts.tv_sec as f64 + ts.tv_nsec as f64 * 1e-9
+    };
+    now(libc::CLOCK_BOOTTIME) - now(libc::CLOCK_MONOTONIC)
 }
 
 pub fn run_quiet(argv: &[String]) {
