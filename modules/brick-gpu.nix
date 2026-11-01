@@ -3,15 +3,16 @@
 # class (DC) driver so EGL window surfaces scan out to the panel.
 #
 #   pvrsrvkm        GPU kernel driver (in jkingston's kernel)
-#   brick_dc_fbdev  DC driver: flips GPU-rendered buffers on the DRM fbdev
-#                   emulation (fb0, 3 pages via DRM_FBDEV_OVERALLOC=300).
-#                   The stock libs refuse to initialise EGL without a DC.
+#   brick_dc_drm    DC driver: an in-kernel DRM client of sun4i-drm that owns
+#                   three scanout buffers and flips them with blocking atomic
+#                   commits (vsync-paced). The stock libs refuse to
+#                   initialise EGL without a DC.
 #   pvr-ddk         stock userspace (EGL/GLES), autopatchelf'd; NULL WSEGL
 #                   only, so apps pass a `struct fbdev_window` (SDL "mali"
 #                   backend, RetroArch mali_fbdev) or render into dma-bufs.
 #
-# Notes: a GPU fault can latch the GPU until reboot. Unbind fbcon while a
-# fullscreen GL app runs, or the console draws into the scanout pages.
+# Notes: a GPU fault can latch the GPU until reboot. A GL window app replaces
+# the console on screen while it runs; the console comes back when it exits.
 { config, lib, pkgs, ... }:
 
 let
@@ -23,8 +24,8 @@ in
     enable = lib.mkEnableOption "PowerVR GPU support (stock userspace + DC driver)" // { default = true; };
     trace = lib.mkOption {
       type = lib.types.bool;
-      default = true;
-      description = "Log every DC call from brick_dc_fbdev (bring-up aid).";
+      default = false;
+      description = "Log every DC call from brick_dc_drm (bring-up aid).";
     };
     package = lib.mkOption {
       type = lib.types.package;
@@ -39,11 +40,11 @@ in
   config = lib.mkIf cfg.enable {
     boot.extraModulePackages = [
       # must match the kernel's compiler (GCC 15, see trimui-brick.nix)
-      (kp.callPackage ../pkgs/brick-dc-fbdev { stdenv = pkgs.gcc15Stdenv; })
+      (kp.callPackage ../pkgs/brick-dc-drm { stdenv = pkgs.gcc15Stdenv; })
     ];
-    boot.kernelModules = [ "pvrsrvkm" "brick_dc_fbdev" ];
+    boot.kernelModules = [ "pvrsrvkm" "brick_dc_drm" ];
     boot.extraModprobeConfig = ''
-      options brick_dc_fbdev trace=${if cfg.trace then "1" else "0"}
+      options brick_dc_drm trace=${if cfg.trace then "1" else "0"}
     '';
 
     environment.systemPackages = [

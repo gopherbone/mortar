@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // EGL *window* surface on the stock NULL_WSEGL: needs a DC device that can
-// scan out (proposal/brick_dc_fbdev.ko). Renders a spinning triangle, swaps,
+// scan out (brick_dc_drm.ko). Renders a spinning triangle, swaps,
 // reports fps. argv: [frames] [swap_interval] [native window handle as int]
 #include <EGL/egl.h>
 #include <GLES2/gl2.h>
