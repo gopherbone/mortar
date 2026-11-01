@@ -55,6 +55,8 @@
           { mortar.shell.enable = true; }
           ./modules/mortar-ai.nix
           { mortar.ai.enable = true; }
+          ./modules/mortar-setup.nix
+          { mortar.setup.enable = true; }
           ({ config, pkgs, ... }: {
             mortar.greeter.enable = true;
             mortar.greeter.sessions = {
