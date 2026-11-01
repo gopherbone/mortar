@@ -41,6 +41,15 @@ in
         description = "PuzzleScript package (from the puzzlescript flake input).";
       };
     };
+    pico8 = {
+      enable = lib.mkEnableOption "PICO-8 (needs your licensed zip in the Nix store, see pkgs/pico8)";
+      package = lib.mkOption {
+        type = lib.types.package;
+        default = pkgs.callPackage ../pkgs/pico8 { };
+        defaultText = lib.literalExpression "pkgs.callPackage ../pkgs/pico8 { }";
+        description = "PICO-8 built from the user-supplied Raspberry Pi zip.";
+      };
+    };
     m8c = {
       enable = lib.mkEnableOption "m8c, the M8 tracker client" // { default = true; };
       package = lib.mkOption {
@@ -56,6 +65,7 @@ in
     environment.systemPackages =
       lib.optional (cfg.puzzlescript.enable && cfg.puzzlescript.package != null) cfg.puzzlescript.package
       ++ lib.optional cfg.m8c.enable cfg.m8c.package
+      ++ lib.optional cfg.pico8.enable cfg.pico8.package
       ++ [ pkgs.alsa-utils ];
 
     # Mesa: GBM + EGL + llvmpipe for SDL's KMSDRM backend (see above).

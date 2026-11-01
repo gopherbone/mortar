@@ -83,6 +83,7 @@ modules/
   mortar-apps.nix         built-in apps
   mortar-ai.nix           Claude Code: tmux session, controller UI, Remote Control (off by default)
   mortar-setup.nix        first-boot setup: mortar.toml, pairing, setup screens (opt-in)
+  mortar-play.nix         emulators: curated libretro cores + mortar-play (off by default)
 pkgs/
   linux-trimui-brick.nix  jkingston's Linux 7.3 Brick tree, pinned, + patches/kernel/
   brick-dc-drm/           display-class driver: GPU frames → DRM atomic flips
@@ -93,6 +94,7 @@ pkgs/
   mortar-setup/           setup file, pairing service, setup screens (Rust)
   mortar-pair/            the pairing protocol, shared with mortar-cli
   trimui-brick-firmware.nix, m8c/, mortar-cli/ (Rust), mortar-gpu-tests/
+  mortar-play/            minimal preconfigured libretro frontend (Rust, see DESIGN.md)
 firmware/mainline/        U-Boot SPL + TF-A + U-Boot, with jkingston's patches
 image/build-image-mainline.nix   SD image (bootloader at 128 KiB, FAT /boot, ext4 /)
 docs/                     mortar.md, firmware.md, setup-file.md, pairing.md
