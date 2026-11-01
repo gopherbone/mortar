@@ -11,6 +11,7 @@ pub mod input;
 pub mod pads;
 pub mod scanout;
 pub mod state;
+pub mod suggest;
 pub mod ui;
 
 use backend::{Backend, Headless};
@@ -83,6 +84,10 @@ pub fn run(opts: Opts) -> Result<(), String> {
 
     let ctl = opts.ctl.clone().unwrap_or_else(ctl::default_path);
     ctl::listen(&handle, &ctl)?;
+    let osk_sock = suggest::default_path();
+    if let Err(e) = suggest::listen(&handle, &osk_sock) {
+        tracing::warn!("osk suggestions: {e}");
+    }
     input::scan(&mut shell);
     handle
         .insert_source(smithay::reexports::calloop::timer::Timer::from_duration(Duration::from_secs(2)), |_, _, shell: &mut Shell| {
@@ -114,5 +119,6 @@ pub fn run(opts: Opts) -> Result<(), String> {
     }
     shell.apps.terminate_all();
     let _ = std::fs::remove_file(&ctl);
+    let _ = std::fs::remove_file(&osk_sock);
     Ok(())
 }

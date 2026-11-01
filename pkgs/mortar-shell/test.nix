@@ -19,6 +19,8 @@
   makeFontsConf,
   dejavu_fonts,
   tzdata,
+  zsh,
+  zsh-autosuggestions,
 }:
 
 let
@@ -29,6 +31,16 @@ let
     background=1d1d1d
     foreground=e1ebf7
   '';
+  # zsh with the OSK suggestion plugin (the Brick's /etc/zshrc loads it the
+  # same way, modules/mortar-zsh.nix)
+  zshrc = writeText "zshrc" ''
+    HISTFILE=$HOME/.zsh_history SAVEHIST=100 HISTSIZE=100
+    autoload -U compinit && compinit -C -d $HOME/.zcompdump
+    source ${zsh-autosuggestions}/share/zsh-autosuggestions/zsh-autosuggestions.zsh
+    source ${mortar-shell}/share/mortar-shell/mortar-osk.zsh
+    PS1='%~ > '
+  '';
+  zdotdir = runCommand "mortar-test-zdotdir" { } "mkdir $out; cp ${zshrc} $out/.zshrc";
   config = writeText "mortar-shell-test.json" (
     builtins.toJSON {
       apps = [
@@ -46,6 +58,15 @@ let
           icon = "term";
           gamepad = "keyboard";
           command = [ "${lib.getExe foot}" "--config" "${footIni}" "${bashInteractive}/bin/bash" "--norc" ];
+        }
+        {
+          id = "zsh";
+          name = "zsh";
+          description = "foot with zsh and OSK suggestions";
+          icon = "term";
+          gamepad = "keyboard";
+          env.ZDOTDIR = "${zdotdir}";
+          command = [ "${lib.getExe foot}" "--config" "${footIni}" "${zsh}/bin/zsh" ];
         }
         {
           id = "claude";
@@ -351,6 +372,36 @@ runCommand "mortar-shell-headless-test"
     tshot 1200 boot-2300
     tshot 600 boot-done
     ctl time real
+
+    echo "== zsh: suggestion chips above the OSK (history first), R1 types one"
+    ctl launch zsh
+    wait_for "$(visible zsh)"
+    wait_for '.ui.layer == false'
+    sleep 1
+    keys() { for k in "$@"; do ctl key $k >/dev/null; done; }
+    keys 18 46 35 24 57 50 24 19 20 30 19 28   # echo mortar, Enter
+    sleep 0.3
+    keys 18 46                                 # ec
+    sleep 0.3
+    ctl press start
+    wait_for '.osk == true and (.chips | length) > 1'
+    ctl state | jq -c .chips > $out/chips.json
+    jq -e '.[0] == "echo mortar" and index("echo") != null' $out/chips.json >/dev/null \
+      || echo "FAIL: chips (history, then echo): $(cat $out/chips.json)" >> $out/result
+    sleep 0.3
+    shot 11-osk-chips
+    ctl press up; ctl press up; ctl press up    # from the a row to the top row, then into the strip
+    ctl press right
+    sleep 0.3
+    shot 12-osk-chips-focus
+    jq -e '.chips | length > 1' <(ctl state) >/dev/null || echo "FAIL: chips kept while choosing" >> $out/result
+    ctl press r1                                # types the focused chip ("echo ")
+    keys 50 24 19 20 30 19                      # mortar
+    ctl press y                                 # Enter
+    sleep 0.8
+    shot 13-osk-chip-typed
+    ctl press start
+    wait_for '.osk == false and (.chips | length) == 0'
 
     ctl quit
     wait $shell || true

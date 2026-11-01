@@ -160,6 +160,8 @@ pub struct Shell {
     /// The UI is drawn on the GPU (else on the CPU).
     pub gpu_ui: bool,
     pub osk: Osk,
+    /// Suggestion chips above the OSK (suggest.rs).
+    pub suggest: super::suggest::Suggest,
     pub router: Router,
     pub pads: Pads,
     pub inputs: Inputs,
@@ -321,6 +323,7 @@ impl Shell {
             last_input: Instant::now(),
             gpu_ui,
             osk: Osk::default(),
+            suggest: Default::default(),
             router: Router::default(),
             pads: Pads::default(),
             inputs,
@@ -458,6 +461,7 @@ impl Shell {
         self.release_held_keys();
         if !self.keyboard_app_visible() && self.osk.visible {
             self.osk.visible = false;
+            self.suggest_closed();
         }
         let target = if self.shell_screen() {
             None
@@ -507,7 +511,9 @@ impl Shell {
         {
             self.pads.add_slot(s);
         }
-        let extra: Vec<(String, String)> = self.cfg.env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+        let mut extra: Vec<(String, String)> = self.cfg.env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+        // Settings > Palette, for apps that start in it (the terminal)
+        extra.push(("MORTAR_PALETTE".into(), if self.sui.prefs.night { "night" } else { "day" }.into()));
         let env = LaunchEnv { wayland_display: &self.socket_name, extra };
         let pads = &self.pads;
         let uid = self.apps.launch(&e, &env, |slot| {
@@ -1072,6 +1078,7 @@ impl Shell {
             Some(PadKey::CtrlKey(code)) if down => self.tap(Tap { code, shift: false, ctrl: true, alt: false }),
             Some(PadKey::ShowOsk) if down => {
                 self.osk.show();
+                self.suggest_opened();
                 self.osk_dirty = true;
                 self.release_held_keys();
                 self.configure_all();
@@ -1082,9 +1089,17 @@ impl Shell {
     }
 
     fn osk_key(&mut self, b: Button) {
+        if self.suggest_button(b) {
+            self.osk_dirty = true;
+            return;
+        }
         match self.osk.button(b) {
-            Some(OskOut::Tap(t)) => self.tap(t),
+            Some(OskOut::Tap(t)) => {
+                self.tap(t);
+                self.suggest_typed(&t);
+            }
             Some(OskOut::Hide) => {
+                self.suggest_closed();
                 self.configure_all();
                 self.needs_redraw = true;
             }
@@ -1099,7 +1114,7 @@ impl Shell {
         }
     }
 
-    fn tap(&mut self, t: Tap) {
+    pub(super) fn tap(&mut self, t: Tap) {
         let mods: Vec<u16> = [(t.ctrl, osk::k::LEFTCTRL), (t.alt, osk::k::LEFTALT), (t.shift, osk::k::LEFTSHIFT)]
             .iter()
             .filter(|m| m.0)

@@ -406,6 +406,7 @@ impl Shell {
                 }
                 Out::ShowKeyboard => {
                     self.osk.show();
+                    self.suggest_opened();
                     self.osk_dirty = true;
                     self.refocus();
                 }
@@ -505,6 +506,16 @@ impl Shell {
         mortar_ui::theme::set(t);
         self.osk_dirty = true;
         self.page_dirty = true;
+        // terminals that follow the palette (entry env MORTAR_FOLLOW_PALETTE:
+        // foot switches to [colors-dark] on SIGUSR1, [colors-light] on SIGUSR2)
+        let sig = if self.sui.prefs.night { libc::SIGUSR1 } else { libc::SIGUSR2 };
+        for a in self.apps.list.iter().filter(|a| a.child.is_some()) {
+            let follows = a.entry_id.as_ref().and_then(|id| self.cfg.apps.iter().find(|e| &e.id == id)).is_some_and(|e| e.env.contains_key("MORTAR_FOLLOW_PALETTE"));
+            if let (true, Some(pid)) = (follows, a.pid) {
+                // SAFETY: plain syscall on our own child
+                unsafe { libc::kill(pid as i32, sig) };
+            }
+        }
     }
 
     /// The MENU pages' backends: keep polling while they show, take the
@@ -705,7 +716,10 @@ impl Shell {
             self.osk_dirty = false;
             let h = self.osk_height() as f32;
             let area = mortar_ui::gfx::Rect::new(0.0, self.ui.height() - h, self.ui.width(), h);
+            self.osk.in_strip = self.suggest.strip.focus.is_some();
             self.osk.draw(&mut self.ui, area);
+            let strip = crate::osk::strip_rect(&self.ui, area);
+            crate::osk_suggest::draw(&mut self.ui, strip, &self.suggest.strip);
             super::state::upload(&mut self.osk_buf, &self.ui, area);
             let (w, hh) = (self.ui.pm.width() as usize, h as usize);
             if let Some(mut strip) = Pixmap::new(w as u32, hh as u32) {

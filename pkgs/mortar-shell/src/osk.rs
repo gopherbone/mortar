@@ -10,7 +10,9 @@
 //! OSK shown: a US layout drawn along the bottom of the screen while the app
 //! is resized to the space above it. D-pad moves, A types, B = Backspace,
 //! X = Space, Y = Enter, L1 = Shift (twice: caps lock), R2 = Ctrl (one
-//! shot), L2 = Esc, START or B on "hide" closes it.
+//! shot), L2 = Esc, START or B on "hide" closes it. A strip above the keys
+//! holds suggestion chips (osk_suggest.rs): Up from the top row enters it,
+//! R1 types the first chip.
 //!
 //! Keys are evdev codes; the shell sends them through its wl_keyboard with
 //! an xkb "us" keymap, wrapping shifted characters in Shift.
@@ -166,14 +168,54 @@ pub struct Osk {
     shift: Latch,
     ctrl: bool,
     alt: bool,
+    /// The cursor is up in the suggestion strip: no key is highlighted.
+    pub in_strip: bool,
 }
 
-/// Height of the keyboard (5 rows) on this screen.
+/// Height of the keyboard (the suggestion strip, then 5 rows) on this
+/// screen.
 pub fn height(ui: &Ui) -> f32 {
-    (ui.cq(2.0) + 5.0 * ui.cq(6.2) + 4.0 * ui.cq(0.8)).round()
+    (crate::osk_suggest::strip_h(ui) + ui.cq(2.0) + 5.0 * ui.cq(6.2) + 4.0 * ui.cq(0.8)).round()
+}
+
+/// The suggestion strip along the top of the keyboard's `area`
+/// (osk_suggest.rs draws it).
+pub fn strip_rect(ui: &Ui, area: Rect) -> Rect {
+    area.take_top(crate::osk_suggest::strip_h(ui)).0
+}
+
+/// The key that types `c` on the "us" layout (with Shift if needed), for
+/// typing a suggestion.
+pub fn char_tap(c: char) -> Option<Tap> {
+    let tap = |code, shift| Some(Tap { code, shift, ctrl: false, alt: false });
+    match c {
+        ' ' => return tap(k::SPACE, false),
+        '\t' => return tap(k::TAB, false),
+        _ => {}
+    }
+    let mut buf = [0u8; 4];
+    let s: &str = c.encode_utf8(&mut buf);
+    for row in ROWS {
+        for key in row.iter() {
+            if let Act::Char(code, l, sh) = key.act {
+                if l == s {
+                    return tap(code, false);
+                }
+                if sh == s {
+                    return tap(code, true);
+                }
+            }
+        }
+    }
+    None
 }
 
 impl Osk {
+    /// The cursor is on the top row (Up from here goes to the suggestions).
+    pub fn at_top(&self) -> bool {
+        self.row == 0
+    }
+
     pub fn show(&mut self) {
         self.visible = true;
         self.row = 2;
@@ -287,6 +329,7 @@ impl Osk {
     pub fn draw(&self, ui: &mut Ui, area: Rect) {
         let t = mortar_ui::theme::get();
         toolkit::block(ui, area, t.ground_2);
+        let area = area.take_top(crate::osk_suggest::strip_h(ui)).1;
         let pad = ui.cq(1.0);
         let gap = ui.cq(0.8);
         let kh = ui.cq(6.2);
@@ -299,7 +342,7 @@ impl Osk {
             for (c, key) in row.iter().enumerate() {
                 let w = key.w * unit - gap;
                 let rect = Rect::new(x, y, w, kh);
-                let sel = r == self.row && c == self.col;
+                let sel = !self.in_strip && r == self.row && c == self.col;
                 let (label, small): (String, bool) = match key.act {
                     Act::Char(_, l, s) => ((if shifted { s } else { l }).to_string(), false),
                     Act::Named(_, l) => (l.to_string(), l.chars().count() > 1),
@@ -374,6 +417,20 @@ mod tests {
         assert_eq!(o.button(Button::A), Some(OskOut::Tap(Tap { code: k::C, shift: false, ctrl: true, alt: false })));
         assert_eq!(o.button(Button::Start), Some(OskOut::Hide));
         assert!(!o.visible);
+    }
+
+    #[test]
+    fn char_taps() {
+        assert_eq!(char_tap('a'), Some(Tap { code: 30, shift: false, ctrl: false, alt: false }));
+        assert_eq!(char_tap('A'), Some(Tap { code: 30, shift: true, ctrl: false, alt: false }));
+        assert_eq!(char_tap('/'), Some(Tap { code: k::SLASH, shift: false, ctrl: false, alt: false }));
+        assert_eq!(char_tap('~'), Some(Tap { code: k::GRAVE, shift: true, ctrl: false, alt: false }));
+        assert_eq!(char_tap(' ').map(|t| t.code), Some(k::SPACE));
+        assert_eq!(char_tap('é'), None);
+        // every printable ASCII character can be typed
+        for c in ' '..='~' {
+            assert!(char_tap(c).is_some(), "{c:?}");
+        }
     }
 
     #[test]

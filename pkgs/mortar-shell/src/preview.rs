@@ -116,12 +116,67 @@ fn stand_ins(fonts_dir: &Path) -> Result<HashMap<Src, Pixmap>, String> {
     let h = osk::height(&ui);
     let area = mortar_ui::gfx::Rect::new(0.0, ui.height() - h, ui.width(), h);
     k.draw(&mut ui, area);
+    let sr = osk::strip_rect(&ui, area);
+    crate::osk_suggest::draw(&mut ui, sr, &crate::osk_suggest::Strip::default());
     let mut strip = Pixmap::new(W as u32, h as u32).ok_or("osk size")?;
     let stride = W as usize * 4;
     let y0 = (ui.height() - h) as usize;
     strip.data_mut().copy_from_slice(&ui.pm.data()[y0 * stride..(y0 + h as usize) * stride]);
     m.insert(Src::Layer(Layer::Osk), strip);
     Ok(m)
+}
+
+/// `osk-chips`: the terminal (foot with the Mortar zsh prompt, in the
+/// palette's colours) above the keyboard, with suggestion chips for `git ch`.
+fn terminal_with_chips(fonts_dir: &Path, pix: &mut HashMap<Src, Pixmap>, strip: &crate::osk_suggest::Strip, night: bool) -> Result<(), String> {
+    mortar_ui::theme::set(if night { mortar_ui::theme::DARK } else { mortar_ui::theme::LIGHT });
+    let mut ui = Ui::new(W as u32, H as u32, Fonts::load(fonts_dir)?);
+    let h = osk::height(&ui);
+    // the terminal: ground, ink text, the prompt's lime key cap
+    let (bg, fg, soft, lav) =
+        if night { (0x1d1d1d, 0xe1ebf7, 0x9ba7b5, 0xcba6f7) } else { (0xe1ebf7, 0x1d1d1d, 0x4c5164, 0x6b3fb3) };
+    ui.clear(Color::hex(bg));
+    let st = |c: u32| TextStyle::new(Face::Mono400, 21.0, Color::hex(c));
+    let bold = |c: u32| TextStyle::new(Face::Mono600, 21.0, Color::hex(c));
+    let lh = 30.0;
+    let prompt = |ui: &mut Ui, y: f32, cmd: &str| {
+        let mut x = 16.0;
+        x += ui.text(x, y, "~/mortar ", &bold(fg));
+        x += ui.text(x, y, "main ", &st(lav));
+        let w = ui.measure(" › ", &bold(0x1d1d1d));
+        ui.fill_rect(mortar_ui::gfx::Rect::new(x, y + 2.0, w, lh - 4.0), Color::hex(0xcef058));
+        ui.text(x, y, " › ", &bold(0x1d1d1d));
+        x += w + ui.measure(" ", &st(fg));
+        ui.text(x, y, cmd, &st(fg)) + x
+    };
+    let mut y = 14.0;
+    ui.text(16.0, y, "mortar · 84% · up 2h 13m", &st(soft));
+    y += lh * 1.5;
+    prompt(&mut ui, y, "git status --short");
+    y += lh;
+    ui.text(16.0, y, " M pkgs/mortar-shell/src/osk.rs", &st(if night { 0xff9f67 } else { 0xc4452a }));
+    y += lh;
+    ui.text(16.0, y, "?? pkgs/mortar-shell/src/osk_suggest.rs", &st(soft));
+    y += lh * 1.3;
+    let x = prompt(&mut ui, y, "git ch");
+    // autosuggestion ghost text, then the cursor
+    ui.text(x, y, "eckout -b osk-chips", &st(soft));
+    ui.fill_rect(mortar_ui::gfx::Rect::new(x, y + 2.0, 12.0, lh - 4.0), Color::hex(0xcef058));
+    pix.insert(Src::App(2), ui.pm.clone());
+    // the keyboard with the strip
+    let mut k = Osk::default();
+    k.show();
+    k.in_strip = strip.focus.is_some();
+    let area = mortar_ui::gfx::Rect::new(0.0, ui.height() - h, ui.width(), h);
+    k.draw(&mut ui, area);
+    let sr = osk::strip_rect(&ui, area);
+    crate::osk_suggest::draw(&mut ui, sr, strip);
+    let mut layer = Pixmap::new(W as u32, h as u32).ok_or("osk size")?;
+    let stride = W as usize * 4;
+    let y0 = (ui.height() - h) as usize;
+    layer.data_mut().copy_from_slice(&ui.pm.data()[y0 * stride..(y0 + h as usize) * stride]);
+    pix.insert(Src::Layer(Layer::Osk), layer);
+    Ok(())
 }
 
 pub struct Opts {
@@ -149,7 +204,7 @@ pub fn run(o: &Opts) -> Result<(), String> {
     let prefs = Prefs { night: o.night, ..Prefs::default() };
     let s = o.screen.as_str();
     let mut ui = ShellUi::new(prefs, s == "boot");
-    let over_app = s.starts_with("menu") || s.starts_with("cross") || matches!(s, "running" | "lava" | "mixer" | "bluetooth" | "setup-wifi" | "setup-bluetooth" | "settings" | "app" | "osd" | "osd-mute" | "osd-bri" | "osd-home" | "toast" | "achievement" | "flash" | "osk" | "close" | "swap" | "remote" | "wifi");
+    let over_app = s.starts_with("menu") || s.starts_with("cross") || matches!(s, "running" | "lava" | "mixer" | "bluetooth" | "setup-wifi" | "setup-bluetooth" | "settings" | "app" | "osd" | "osd-mute" | "osd-bri" | "osd-home" | "toast" | "achievement" | "flash" | "osk" | "osk-chips" | "osk-chips-focus" | "close" | "swap" | "remote" | "wifi");
     let mut current = if over_app { Some(2) } else { None };
     let run_ref: &[RunningInfo] = if s == "home-empty" { &none } else { &running };
     let host = "brick";
@@ -292,6 +347,10 @@ pub fn run(o: &Opts) -> Result<(), String> {
         "achievement" => ui.show_toast(Toast::achievement("First jump", "Games · Game Boy")),
         "flash" => ui.screenshot(),
         "osk" => {}
+        "osk-chips" | "osk-chips-focus" => {
+            let strip = crate::osk_suggest::demo(if s == "osk-chips-focus" { Some(1) } else { None });
+            terminal_with_chips(&dir, &mut demo.pix, &strip, o.night)?;
+        }
         "power" => ui.open_power_menu(),
         "timezone" | "timezone-zones" => {
             ui.menu_key(&v0);
@@ -307,11 +366,11 @@ pub fn run(o: &Opts) -> Result<(), String> {
         }
         other => {
             return Err(format!(
-                "unknown preview screen '{other}' (boot, home, home-empty, app, running, cross-apps, menu-games, menu-music, cross-settings, menu-adjust, menu-confirm, menu-options, wifi, bluetooth, mixer, lava, settings, remote, setup-wifi, setup-bluetooth, timezone, timezone-zones, launch, close, swap, osd, osd-mute, osd-bri, osd-home, toast, achievement, flash, osk, power)"
+                "unknown preview screen '{other}' (boot, home, home-empty, app, running, cross-apps, menu-games, menu-music, cross-settings, menu-adjust, menu-confirm, menu-options, wifi, bluetooth, mixer, lava, settings, remote, setup-wifi, setup-bluetooth, timezone, timezone-zones, launch, close, swap, osd, osd-mute, osd-bri, osd-home, toast, achievement, flash, osk, osk-chips, osk-chips-focus, power)"
             ))
         }
     }
-    let osk_h = if s == "osk" { demo.pix[&Src::Layer(Layer::Osk)].height() as f32 } else { 0.0 };
+    let osk_h = if s.starts_with("osk") { demo.pix[&Src::Layer(Layer::Osk)].height() as f32 } else { 0.0 };
     let v = mk(current, osk_h);
     for b in &o.keys {
         ui.button(*b, false, &v);

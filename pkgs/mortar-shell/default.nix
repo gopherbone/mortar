@@ -48,6 +48,11 @@ let
 
     env.MORTAR_UI_FONT_DIR = "${fonts}/share/fonts/mortar-ui";
 
+    # zsh's half of the OSK suggestion strip (src/osk_suggest.rs)
+    postInstall = ''
+      install -Dm644 ${./zsh/mortar-osk.zsh} $out/share/mortar-shell/mortar-osk.zsh
+    '';
+
     passthru = {
       inherit fonts;
       tests.headless-run = callPackage ./test.nix { mortar-shell = shell; };

@@ -30,6 +30,8 @@ pkgs/mortar-shell/
   src/sfx.rs         UI sound synth + ALSA player thread
   src/haptics.rs     rumble ticks (gpio-vibrator FF device), thread
   src/osk.rs         on-screen keyboard + pad-as-keyboard mapping
+  src/osk_suggest.rs suggestion chips above the OSK (zsh completions)
+  zsh/mortar-osk.zsh zsh's side of the chips
   src/preview.rs     render shell screens / transition frames to PNG
   src/comp/          Linux only
     state.rs         Smithay state + handlers, focus, input dispatch
@@ -39,6 +41,7 @@ pkgs/mortar-shell/
     pads.rs          per-app uinput gamepads
     ctl.rs           control socket
     bg.rs            MENU page backends off the loop (mortar-setupd, pw-dump/wpctl)
+    suggest.rs       OSK suggestion socket (zsh)
     scanout.rs       direct scanout of client dmabufs (PRIME import)
     ui.rs            the compositor side of the UI: view, actions, CPU
                      images, screenshots, toasts
@@ -416,8 +419,53 @@ with any client that takes keyboard input.
 - D-pad moves (vertical moves keep the column), A types, B Backspace,
   X Space, Y Enter, L1 Shift (twice: caps lock), R2 Ctrl (one shot),
   L2 Esc, START or "hide" closes it.
+- A strip along its top shows the pad legend, or, in a terminal running
+  zsh, suggestion chips (below).
 - Later: a text-input-v3 aware mode that pops up only when a field is
-  focused, word suggestions, and a symbols layer.
+  focused, and a symbols layer.
+
+### Suggestion chips (zsh)
+
+`src/osk_suggest.rs` (model, protocol, drawing), `src/comp/suggest.rs`
+(socket), `zsh/mortar-osk.zsh` (installed in
+`share/mortar-shell/`, sourced by /etc/zshrc from
+modules/mortar-zsh.nix).
+
+- zsh in a terminal the shell started (MORTAR_APP set) connects once to
+  `$XDG_RUNTIME_DIR/mortar-osk.sock` (0600; peers of another uid are
+  refused) and watches it with `zle -F`. The connection belongs to the
+  app whose launched process is an ancestor of the peer pid (SO_PEERCRED),
+  like windows do.
+- While the OSK is up over that app, the shell sends `q SEQ` 140 ms
+  after the last key the OSK typed (at once when it opens). The handler
+  runs zsh's own completion for the word at the cursor with `compadd`
+  captured (the fzf-tab technique; nothing is inserted or listed) and
+  answers `{"seq":SEQ,"chips":[{"k","d","t","l"}]}`: kind, backspaces,
+  text to type, label. The first chip is the zsh-autosuggestions
+  suggestion (history) when there is one. Command names come shortest
+  first, everything else in the completion's own order; at most 12.
+- Only answers to the newest question from the app on screen are shown,
+  so another terminal cannot put chips over this one. Closing the OSK
+  sends nothing more: zsh does no work per keystroke while it is closed.
+  Enter and Ctrl/Alt chords clear the chips at once.
+- Pad: Up from the top row of keys enters the strip (the key cursor
+  hides), ◀▶ move along it, A types the chip, ▼ goes back to the keys;
+  R1 types the highlighted chip, or the first one (the history line,
+  like → in fish) from the keys. B, X, Y, L1, R2, L2, START keep their
+  keyboard meaning. Chips are typed as key taps through the same
+  wl_keyboard path as the keys (printable ASCII only; others are
+  dropped).
+- Chips: square blocks with a kind tag on the left (history ↑ yellow,
+  command › lavender, directory / orange, option - pink, file · ground);
+  the history chip dims what is already typed. The highlighted chip is
+  lime.
+- Cost per answer, measured in the aarch64 build VM (an Apple core,
+  roughly 6-8x an A53): paths 4-5 ms, options 6-8 ms, command names
+  11-16 ms, git subcommands 15 ms, `git commit --am` 22 ms (it runs git);
+  so about 30-180 ms on the Brick, once per pause, never per key. `MORTAR_OSK_SKIP` lists commands
+  whose completion is too slow (nix ...): they get the history chip
+  only. Inside tmux (Claude Code's session) zsh's parent is the tmux
+  server, not the terminal, so there are no chips there.
 
 ## Rendering
 
@@ -726,7 +774,8 @@ shell through it; over SSH it gives remote screenshots and app control
 - `passthru.tests.headless`: the compositor on the headless backend in
   the build sandbox; weston-fullscreen (wl_shm) and foot started from the
   MENU with injected buttons; typing through keys and the OSK;
-  switching back; closing from Running; a screenshot after every step;
+  switching back; closing from Running; zsh's suggestion chips (history
+  first, choosing one, R1 typing it); a screenshot after every step;
   MENU > Settings and its Mixer, Wi-Fi and Bluetooth pages;
   then UI time frozen and stepped for transition frames (`t-*.png`:
   MENU, the cross sliding in, the lava flowing, launch, close, OSD,

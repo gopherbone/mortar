@@ -12,6 +12,7 @@ mod lava;
 mod mixer;
 mod motion;
 mod osk;
+mod osk_suggest;
 mod preview;
 mod radio;
 mod raster;
@@ -87,7 +88,7 @@ commands:
   sfx NAME   play a UI sound [--wav FILE: write it instead]
   preview    render shell screens / transition frames to PNG without a compositor
                --screen boot|home|app|menu|menu-launch|menu-settings|launch|close|
-                        swap|osd|toast|achievement|flash|osk|remote|wifi|bluetooth
+                        swap|osd|toast|achievement|flash|osk|osk-chips|osk-chips-focus|remote|wifi|bluetooth
                --out FILE [--keys a,down,...] [--theme light|dark]
                [--at MS] [--frames N --every MS]   (FILE-000.png ...)
 
