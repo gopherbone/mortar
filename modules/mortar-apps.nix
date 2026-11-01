@@ -116,8 +116,10 @@ in
     # Mesa would probe zink (GL on Vulkan) first and log an error each time.
     environment.variables.GALLIUM_DRIVER = "llvmpipe";
 
-    # Codec levels at boot: speaker amp on (it defaults off), DAC about
-    # -15 dB, headphones mid. Set with amixer; nothing is persisted.
+    # Codec levels at boot: speaker amp on (it defaults off), DAC at 0 dB,
+    # DAC Digital 160 = 0 dB (0.75 dB steps, more is digital gain that
+    # clips), analog out 7/7 (it also drives the speaker). Volume keys
+    # adjust from here. Set with amixer; nothing is persisted.
     systemd.services.mortar-audio-defaults = {
       description = "Brick codec mixer defaults";
       wantedBy = [ "multi-user.target" ];
@@ -132,9 +134,9 @@ in
         # the codec probes early, but don't race it
         for _ in $(seq 50); do [ -e /proc/asound/Codec ] && break; sleep 0.2; done
         amixer -q -c Codec sset Speaker on || true
-        amixer -q -c Codec sset DAC 50 || true
+        amixer -q -c Codec sset DAC 63 || true
         amixer -q -c Codec sset 'DAC Digital' 160 || true
-        amixer -q -c Codec sset Headphone 4 on || true
+        amixer -q -c Codec sset Headphone 7 on || true
       '';
     };
   };
