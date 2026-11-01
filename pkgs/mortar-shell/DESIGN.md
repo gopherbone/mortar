@@ -318,11 +318,30 @@ rendering at the background frame rate (SDL's 50 ms swap timeout) or
 idles if it honours `suspended` (m8c does); the shell holds only its
 latest buffer. Switching back puts that buffer on the plane at once.
 
+Measured on the Brick (2026-11-01):
+
+| Case | App CPU | Shell CPU | Path |
+|---|---|---|---|
+| mortar-wlegl-demo, topdown | 5% | 4% | scanout, 60 fps |
+| mortar-wlegl-demo, blit | 8% | 5% | scanout, 60 fps |
+| mortar-wlegl-demo, transform | - | 99% | composited, 3.5 fps (fallback only) |
+| m8c (M8 attached), front | 12% | 3% | scanout (was ~180% on llvmpipe) |
+| m8c under MENU | 5% | 0% | overlay only |
+| m8c, volume OSD up | 9% | 38% | composited at 5 fps (87%/16 fps before throttling) |
+| m8c front, PuzzleScript + PICO-8 behind (all GPU) | 7% | 14% | scanout; background commits cost the shell |
+
+PICO-8 (SDL2 through sdl2-compat on sdl3-pvr) takes the same path.
+Composited frames of a dmabuf app are held to 5/s while the OSD or OSK
+covers it: pixman reads the app's write-combined buffer at ~50 MB/s.
+
 Costs and limits:
 
-- CMA: each GPU app holds 1-4 dumb buffers of 3 MB (allocated as the
-  compositor holds them: on screen, queued, rendering), on top of the
-  shell's swapchain, brick_dc_drm's 3 buffers and the fbdev emulation.
+- CMA: each GPU app holds 2-4 dumb buffers of 3 MB (allocated as the
+  compositor holds them: on screen, queued, rendering; buffers idle for
+  60 swaps are freed), on top of the shell's swapchain, brick_dc_drm's 3
+  buffers and the fbdev emulation (9 MB each). The kernel default of 64 MB
+  ran out with three GPU apps; modules/brick-gpu.nix sets `cma=128M`
+  (`mortar.gpu.cmaMegabytes`).
 - The GPU latches until reboot after a fault; apps then fail at
   eglInitialize/surface creation and mortar-sdl-run falls back to
   software GL. The shell itself never touches the GPU.

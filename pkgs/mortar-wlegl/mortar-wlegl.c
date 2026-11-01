@@ -107,6 +107,8 @@ static struct {
 	PFNEGLGETCURRENTSURFACEPROC GetCurrentSurface;
 	PFNEGLGETCURRENTCONTEXTPROC GetCurrentContext;
 	PFNEGLGETCONFIGATTRIBPROC GetConfigAttrib;
+	PFNEGLCHOOSECONFIGPROC ChooseConfig;
+	PFNEGLCREATECONTEXTPROC CreateContext;
 	PFNEGLDESTROYCONTEXTPROC DestroyContext;
 	PFNEGLRELEASETHREADPROC ReleaseThread;
 	PFNEGLCOPYBUFFERSPROC CopyBuffers;
@@ -174,7 +176,7 @@ static void load_real(void)
 	E(GetDisplay); E(Initialize); E(QueryString); E(GetError); E(GetProcAddress);
 	E(CreateWindowSurface); E(DestroySurface); E(MakeCurrent); E(SwapBuffers);
 	E(SwapInterval); E(QuerySurface); E(SurfaceAttrib); E(GetCurrentSurface);
-	E(GetCurrentContext); E(GetConfigAttrib); E(DestroyContext); E(ReleaseThread);
+	E(GetCurrentContext); E(GetConfigAttrib); E(ChooseConfig); E(CreateContext); E(DestroyContext); E(ReleaseThread);
 	E(CopyBuffers); E(BindTexImage); E(ReleaseTexImage);
 	G(glBindFramebuffer); G(glGetIntegerv); G(glGetString); G(glDrawBuffers);
 	G(glReadBuffer); G(glInvalidateFramebuffer); G(glBlitFramebuffer);
@@ -600,8 +602,19 @@ static struct wbuf *get_back(struct wsurf *s)
 			if (!b->busy && (!best || b->frame > best->frame))
 				best = b;
 		}
-		if (best)
+		if (best) {
+			/* CMA is scarce (64 MB for everything): give back buffers
+			   that sat unused for a while (e.g. the app went to the
+			   background, where the compositor holds only one) */
+			for (int i = 0; i < NBUF_MAX; i++) {
+				struct wbuf *b = &s->buf[i];
+				if (b != best && b->wl && !b->busy && b->frame && b->frame + 60 < s->frames) {
+					dbg("buffer %d idle, freed", i);
+					buf_free(s, b);
+				}
+			}
 			return best;
+		}
 		if (!polled) {
 			/* a release may be waiting in the socket: don't allocate for nothing */
 			polled = true;
@@ -853,12 +866,42 @@ EGLint eglGetError(void)
 {
 	init_once();
 	EGLint real = R.GetError();
-	if (err_pending) {
-		EGLint e = err_pending;
-		err_pending = 0;
-		return e;
+	EGLint e = err_pending;
+	err_pending = 0;
+	/* our own failure wins; our successes don't hide a stock failure */
+	return e && e != EGL_SUCCESS ? e : real;
+}
+
+EGLBoolean eglChooseConfig(EGLDisplay dpy, const EGLint *attrs, EGLConfig *configs, EGLint size, EGLint *n)
+{
+	init_once();
+	EGLBoolean r = R.ChooseConfig(dpy, attrs, configs, size, n);
+	if (debug) {
+		char buf[512];
+		size_t o = 0;
+		for (const EGLint *a = attrs; a && *a != EGL_NONE && o < sizeof(buf) - 32; a += 2)
+			o += (size_t)snprintf(buf + o, sizeof(buf) - o, " 0x%x=%d", a[0], a[1]);
+		buf[o] = 0;
+		dbg("eglChooseConfig(%s): %s, %d configs", buf, r ? "ok" : "failed", n ? *n : -1);
 	}
-	return real;
+	return r;
+}
+
+EGLContext eglCreateContext(EGLDisplay dpy, EGLConfig cfg, EGLContext share, const EGLint *attrs)
+{
+	init_once();
+	EGLContext c = R.CreateContext(dpy, cfg, share, attrs);
+	if (debug) {
+		char buf[256];
+		size_t o = 0;
+		for (const EGLint *a = attrs; a && *a != EGL_NONE && o < sizeof(buf) - 32; a += 2)
+			o += (size_t)snprintf(buf + o, sizeof(buf) - o, " 0x%x=%d", a[0], a[1]);
+		buf[o] = 0;
+		EGLint e = c ? EGL_SUCCESS : R.GetError();
+		err_pending = c ? 0 : e; /* keep it for the app's eglGetError */
+		dbg("eglCreateContext(%s): %p (0x%x)", buf, c, e);
+	}
+	return c;
 }
 
 /* -------------------------------------------------------- EGL: surfaces */
@@ -1428,7 +1471,7 @@ static const struct {
 } procs[] = {
 #define P(n) { #n, (void (*)(void))n }
 #define W(n) { #n, (void (*)(void))wrap_##n }
-	P(eglGetDisplay), P(eglInitialize), P(eglQueryString), P(eglGetError),
+	P(eglGetDisplay), P(eglInitialize), P(eglChooseConfig), P(eglCreateContext), P(eglQueryString), P(eglGetError),
 	P(eglCreateWindowSurface), P(eglDestroySurface), P(eglMakeCurrent),
 	P(eglReleaseThread), P(eglDestroyContext), P(eglGetCurrentSurface),
 	P(eglSwapInterval), P(eglSwapBuffers), P(eglQuerySurface), P(eglSurfaceAttrib),
