@@ -17,10 +17,12 @@
 #     through mortar-setupd too, the backlight through a udev rule
 #     (mortar-shell.nix).
 #
-# Moving from the root-session Brick: the first boot with this module moves
+# Moving from the root-session Brick: the first boot with this module copies
 # the session data root collected (`migrateFromRoot`: Claude Code's sign-in
 # and history, app data, PICO-8 carts, screenshots, ...) into the new home,
-# fixes Claude Code's project paths, and leaves everything else in /root.
+# fixes Claude Code's project paths, and parks each original under
+# /root/.pre-brick-<date>/ (nothing is deleted; remove that folder once the
+# new home is known good). Everything else stays in /root.
 { config, lib, pkgs, ... }:
 
 let
@@ -42,6 +44,7 @@ let
       from=''${MORTAR_MIGRATE_FROM:-/root}
       stamp=''${MORTAR_MIGRATE_STAMP:-${stamp}}
       play=''${MORTAR_MIGRATE_PLAY:-${lib.escapeShellArg (if config.mortar.play.enable or false then config.mortar.play.dataDir else "")}}
+      keep=$from/.pre-brick-$(date +%Y%m%d-%H%M%S)
       moved=0
 
       # parents below $home are created as the user
@@ -61,9 +64,13 @@ let
           continue
         fi
         mkparents "$(dirname "$dst")"
-        mv -T "$src" "$dst"
+        # copy, then park the original (never deleted) until the new home
+        # is known good: $from/.pre-brick-<date>/<path>
+        cp -a --no-target-directory "$src" "$dst"
         chown -R --no-dereference "$user:$group" "$dst"
-        echo "moved $src"
+        mkdir -p "$(dirname "$keep/$rel")"
+        mv -T "$src" "$keep/$rel"
+        echo "copied $src (original kept in $keep)"
         moved=$((moved + 1))
       done
 
@@ -104,7 +111,7 @@ let
 
       mkdir -p "$(dirname "$stamp")"
       echo "$moved" > "$stamp"
-      echo "migration done ($moved moved)"
+      echo "migration done ($moved copied)"
     '';
   };
 
@@ -157,9 +164,10 @@ in
         ".bash_history"
       ];
       description = ''
-        Paths under /root (the old session home) moved into the user's home
-        on the first boot with this module. A path whose destination already
-        holds something stays where it is. Remove
+        Paths under /root (the old session home) copied into the user's home
+        on the first boot with this module; the originals are kept in
+        /root/.pre-brick-<date>/. A path whose destination already holds
+        something stays where it is. Remove
         /var/lib/mortar-user/migrated-from-root to run it again.
       '';
     };
@@ -206,7 +214,7 @@ in
     system.build.mortarUserMigrate = migrate;
 
     systemd.services.mortar-user-migrate = {
-      description = "Mortar: move the root session's data to ${cfg.name}";
+      description = "Mortar: copy the root session's data to ${cfg.name}";
       wantedBy = [ "multi-user.target" ];
       before = [ "greetd.service" "display-manager.service" "systemd-user-sessions.service" "mortar-claude-remote.service" ];
       after = [ "local-fs.target" "systemd-tmpfiles-setup.service" ];
