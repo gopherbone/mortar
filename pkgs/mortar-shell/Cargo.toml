@@ -1,0 +1,26 @@
+[package]
+name = "mortar-shell"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-2.0-or-later"
+description = "Controller-driven Wayland compositor for Mortar on the TrimUI Brick"
+publish = false
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+
+[dependencies]
+mortar-ui = { path = "../mortar-ui", default-features = false }
+libc = "0.2.191"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# The compositor is Linux-only; the UI, routing and app logic also build
+# (and unit-test) on macOS.
+[target.'cfg(target_os = "linux")'.dependencies]
+smithay = { version = "0.7.0", default-features = false, features = ["wayland_frontend", "desktop", "renderer_pixman", "backend_drm", "backend_gbm", "backend_session_libseat"] }
+evdev = "0.13.2"
+png = "0.17"
