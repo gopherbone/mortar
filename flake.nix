@@ -207,6 +207,9 @@
           u-boot-mainline = mainlineConfig.system.build.mortarBootloader;
           sd-image-mainline = mainlineConfig.system.build.sdImage;
 
+          # tools/showcase: frames of the real shell for the showcase video
+          showcase-capture = pkgs.callPackage ./tools/showcase/capture.nix { };
+
           default = self.packages.${system}.sd-image;
         }
       );
@@ -218,6 +221,8 @@
           mortar = pkgs.callPackage ./pkgs/mortar-cli { };
         in {
           mortar = { type = "app"; program = "${mortar}/bin/mortar"; };
+          # tools/showcase: compose the showcase video from showcase-capture
+          showcase = { type = "app"; program = "${pkgs.callPackage ./tools/showcase/compose.nix { }}/bin/mortar-showcase"; };
           default = self.apps.${system}.mortar;
         });
 

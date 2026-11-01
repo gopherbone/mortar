@@ -267,12 +267,15 @@ impl Shell {
 
     pub fn play_sfx(&self, s: Sfx) {
         if self.sui.prefs.sounds && !self.dark {
+            // tools/showcase lines these up with captured frames
+            tracing::debug!("sfx {s:?}");
             self.sfx.play(s, self.sui.prefs.sound_volume);
         }
     }
 
     pub fn play_haptic(&self, h: Haptic) {
         if self.sui.prefs.haptics && !self.dark {
+            tracing::debug!("haptic {h:?}");
             self.haptics.play(h);
         }
     }

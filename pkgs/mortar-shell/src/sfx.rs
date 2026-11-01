@@ -58,7 +58,8 @@ impl Sfx {
             "deny" => Sfx::Deny,
             "vol" => Sfx::Vol(70),
             "none" => return None,
-            _ => return None,
+            // vol0 ... vol100: the volume blip at that level
+            v => return v.strip_prefix("vol").and_then(|n| n.parse::<u8>().ok()).map(|n| Sfx::Vol(n.min(100))),
         })
     }
     pub const NAMES: &'static [&'static str] = &["tick", "move", "tab", "open", "close", "drawer", "drawerup", "chime", "shutter", "unlock", "deny", "vol"];
