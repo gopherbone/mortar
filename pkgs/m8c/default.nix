@@ -65,10 +65,10 @@
 # routing. Alternative without m8c in the loop: `alsaloop -C plughw:M8
 # -P default -t 20000` (alsa-utils) as a service, with audio_enabled=false.
 #
-# m8c also creates its window with
-# SDL_WINDOW_OPENGL, so it needs a working GL/GLES path (EGL on KMSDRM or
-# a compositor); with no GL it exits "Failed to initialize renderer"
-# (SDL_RENDER_DRIVER=software does not avoid that flag).
+# m8c also creates its window with SDL_WINDOW_OPENGL, so it needs a working
+# GL/GLES path (EGL on KMSDRM or a compositor); with no GL it exits "Failed
+# to initialize renderer" (SDL_RENDER_DRIVER=software does not avoid that
+# flag). On Mortar that is Mesa's llvmpipe (modules/mortar-apps.nix).
 {
   lib,
   m8c,
@@ -80,6 +80,19 @@
 let
   config = ./config.ini;
 
+  # The M8 screen texture is opaque, but SDL gives ARGB textures alpha
+  # blending by default. Blending makes the final full-screen draw read the
+  # scanout buffer back, and with Mesa's software rasteriser (llvmpipe on
+  # kms_swrast) that buffer is uncached write-combined CMA: reads from it
+  # cost several times the whole frame. Draw it opaque instead.
+  m8c' = m8c.overrideAttrs (old: {
+    postPatch = (old.postPatch or "") + ''
+      substituteInPlace src/render.c --replace-fail \
+        'SDL_SetTextureScaleMode(main_texture, texture_scaling_mode);' \
+        'SDL_SetTextureScaleMode(main_texture, texture_scaling_mode); SDL_SetTextureBlendMode(main_texture, SDL_BLENDMODE_NONE);'
+    '';
+  });
+
   launcher = writeShellApplication {
     name = "m8c-brick";
     runtimeInputs = [ coreutils ];
@@ -90,18 +103,19 @@ let
       if [ ! -e "$dir/config.ini" ]; then
         install -m 0644 ${config} "$dir/config.ini"
       fi
-      exec ${lib.getExe m8c} "$@"
+      exec ${lib.getExe m8c'} "$@"
     '';
   };
 in
 symlinkJoin {
   name = "m8c-brick-${m8c.version}";
-  paths = [ launcher m8c ];
+  paths = [ launcher m8c' ];
   postBuild = ''
     install -Dm0644 ${config} $out/share/m8c/config.ini
   '';
   passthru = {
-    inherit m8c config;
+    inherit config;
+    m8c = m8c';
   };
   meta = {
     description = "m8c with TrimUI Brick defaults (gamepad mapping, fullscreen, audio)";
