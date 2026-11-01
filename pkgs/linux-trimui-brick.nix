@@ -39,9 +39,10 @@
 #   hand-maintained `config` attrset that nothing verifies.
 #
 # VERIFY once Nix is available:
-#   - `enableCommonConfig`, `autoModules`, `ignoreConfigErrors` are still
-#     accepted by pkgs/os-specific/linux/kernel/generic.nix on the pinned
-#     nixpkgs (they were as of 2025).
+#   - (checked against the pinned nixpkgs 2026-02-04: generic.nix accepts
+#     pname, defconfig, enableCommonConfig, autoModules, preferBuiltin,
+#     ignoreConfigErrors, and nixos kernel.nix skips requiredKernelConfig
+#     assertions for kernels with passthru.features. The flake evaluates.)
 #   - modDirVersion matches what the build produces (CONFIG_LOCALVERSION in
 #     the defconfig is "-brick-dev"; the build fails loudly if it differs).
 #   - generate-config.pl does not complain about any option below.
@@ -64,6 +65,7 @@ in
 buildLinux (
   args
   // {
+    pname = "linux-trimui-brick";
     version = "7.3.0";
     # Makefile at this rev is 7.3.0; the defconfig sets CONFIG_LOCALVERSION="-brick-dev"
     # and disables LOCALVERSION_AUTO. The fetched source has no .git, so
@@ -84,8 +86,8 @@ buildLinux (
     autoModules = false;
     preferBuiltin = false;
     ignoreConfigErrors = false;
-    # Keep the toolchain simple; the defconfig does not use Rust drivers.
-    withRust = false;
+    # (Rust support is derived from structuredExtraConfig's RUST, which we
+    # don't set, so no Rust toolchain is pulled in.)
 
     structuredExtraConfig = with lib.kernel; {
       # --- What NixOS/systemd require (mirrors system.requiredKernelConfig

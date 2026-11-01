@@ -246,7 +246,7 @@ in {
   #     disabled again, as in trimui-brick.dtso.)
   #   - Watchdog disable: dropped. U-Boot arms the hardware watchdog and the
   #     defconfig has WATCHDOG_HANDLE_BOOT_ENABLED + WATCHDOG_OPEN_TIMEOUT=30,
-  #     so systemd must take it over (runtimeTime below), or the board
+  #     so systemd must take it over (RuntimeWatchdogSec below), or the board
   #     resets ~30 s after the driver probes. watchdog.open_timeout=0 also
   #     covers a slow initrd (e.g. rootwait on a slow card) before systemd
   #     opens /dev/watchdog0. The watchdog is also the restart handler.
@@ -267,10 +267,7 @@ in {
   (mkIf isMainline {
     boot.kernelPackages = cfg.mainlineKernelPackages;
 
-    systemd.watchdog.runtimeTime = mkDefault "15s";
-    # VERIFY: newer nixpkgs renames this to
-    # systemd.settings.Manager.RuntimeWatchdogSec (old name should still
-    # work via mkRenamedOptionModule, with a warning).
+    systemd.settings.Manager.RuntimeWatchdogSec = mkDefault "15s";
 
     # Serial stays the primary console (/dev/console = last console=), the
     # panel gets kernel messages too. mkBefore puts tty0 ahead of the
@@ -286,11 +283,7 @@ in {
     # Other NixOS modules may still request modules that are built in or
     # absent (e.g. ext2 via EXT4_USE_FOR_EXT2). Tolerate that instead of
     # failing the initrd build.
-    nixpkgs.overlays = [
-      (final: prev: {
-        makeModulesClosure = args: prev.makeModulesClosure (args // { allowMissing = true; });
-      })
-    ];
+    boot.initrd.allowMissingModules = true;
 
     hardware.deviceTree = {
       enable = true;

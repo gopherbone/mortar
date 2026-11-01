@@ -278,8 +278,12 @@ in
         linkConfig.Name = "usb0";
       };
 
-      # networkd only for usb0; the rest of the system may keep dhcpcd.
+      # networkd manages usb0. Hand the rest (wlan0's DHCP from
+      # networking.useDHCP) to networkd too, so dhcpcd and networkd don't
+      # fight over interfaces; usb0's 10-* network sorts before NixOS'
+      # 99-ethernet-default-dhcp catch-all.
       systemd.network.enable = true;
+      networking.useNetworkd = lib.mkDefault true;
       systemd.network.networks."10-mortar-usb0" = {
         matchConfig.Name = "usb0";
         address = [ cfg.address ];
@@ -300,6 +304,7 @@ in
         linkConfig.RequiredForOnline = "no";
       };
 
+      # In case dhcpcd is turned back on (useNetworkd = false).
       networking.dhcpcd.denyInterfaces = [ "usb0" ];
 
       # The cable is physical access anyway; allow DHCP, mDNS, SSH, ...
