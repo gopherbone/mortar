@@ -23,10 +23,34 @@
         ];
       };
 
+      # Mortar: jkingston's mainline kernel (Linux 7.3) + native Brick DTB,
+      # USB gadget console/network, black-box logs. Meant for the fully
+      # mainline SPL + TF-A + U-Boot chain (packaged separately).
+      nixosConfigurations.brick-mainline = nixpkgs.lib.nixosSystem {
+        system = targetSystem;
+        modules = [
+          ./modules/trimui-brick.nix
+          ./modules/mortar-usb.nix
+          ./configuration.nix
+          ({ lib, ... }: {
+            nixpkgs.hostPlatform = lib.mkDefault "aarch64-linux";
+            hardware.trimui-brick.variant = "mainline";
+            # configuration.nix sets "trimui-brick"
+            networking.hostName = lib.mkForce "mortar";
+            # TODO(bootloader): add the TF-A /reserved-memory overlay
+            # (0x40000000, size 0x40000) here once it exists:
+            #   hardware.trimui-brick.extraDtOverlays = [
+            #     { name = "tfa-reserved-memory"; dtsFile = ./firmware/mainline/<...>.dtso; }
+            #   ];
+          })
+        ];
+      };
+
       packages = forAllSystems (system:
         let
           pkgs = import nixpkgs { inherit system; };
           nixosConfig = self.nixosConfigurations.trimui-brick.config;
+          mainlineConfig = self.nixosConfigurations.brick-mainline.config;
 
           u-boot = pkgs.callPackage ./firmware/u-boot.nix {};
           bootPackage = pkgs.callPackage ./firmware/boot-package.nix {
@@ -77,6 +101,28 @@
             sync
             echo "Done! Insert SD card into TrimUI Brick and power on."
           '';
+
+          # Mortar kernel (always aarch64-linux, from the NixOS config)
+          linux-trimui-brick = mainlineConfig.boot.kernelPackages.kernel;
+          mortar-toplevel = mainlineConfig.system.build.toplevel;
+
+          # TODO(bootloader): wire up the mainline SD image. It is built by
+          # image/build-image-mainline.nix (MBR, FAT p1 = /boot with
+          # extlinux.conf for U-Boot sysboot, ext4 p2 = root) from the
+          # firmware/mainline/ bootloader, both owned by the bootloader work.
+          # Expected shape:
+          #
+          #   sd-image-mainline = import ./image/build-image-mainline.nix {
+          #     inherit pkgs;
+          #     lib = nixpkgs.lib;
+          #     config = mainlineConfig;
+          #     # bootloader = pkgs.callPackage ./firmware/mainline/... { };
+          #   };
+          #
+          # mainlineConfig provides boot.kernelPackages.kernel,
+          # system.build.{initialRamdisk,toplevel}, boot.kernelParams,
+          # hardware.deviceTree.package and hardware.deviceTree.name
+          # (= "allwinner/sun50i-a133-trimui-brick.dtb", overlays applied).
 
           default = self.packages.${system}.sd-image;
         }
