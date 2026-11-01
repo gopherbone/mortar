@@ -11,7 +11,7 @@
 # display paths as Mortar's SDL3 apps (mortar-sdl-run: GPU or software GL;
 # Wayland client inside mortar-shell). Unfree: never push the closure to a
 # public cache.
-{ lib, stdenv, requireFile, unzip, autoPatchelfHook, makeWrapper, SDL2 }:
+{ lib, stdenv, requireFile, unzip, autoPatchelfHook, makeWrapper, SDL2, wget }:
 
 stdenv.mkDerivation {
   pname = "pico-8";
@@ -47,7 +47,9 @@ stdenv.mkDerivation {
     install -Dm0644 pico-8/lexaloffle-pico8.png $out/share/pico-8/icon.png
     install -Dm0644 pico-8/pico-8_manual.txt $out/share/doc/pico-8/manual.txt
     install -Dm0644 pico-8/license.txt $out/share/doc/pico-8/license.txt
-    makeWrapper $out/lib/pico-8/pico8_64 $out/bin/pico8
+    # Splore/BBS downloads shell out to `wget` (codo_wget runs it via sh).
+    makeWrapper $out/lib/pico-8/pico8_64 $out/bin/pico8 \
+      --prefix PATH : ${lib.makeBinPath [ wget ]}
     runHook postInstall
   '';
 
