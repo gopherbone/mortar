@@ -122,6 +122,7 @@
               publicKey = "mortar-1:REPLACE_WITH_PUBLIC_KEY";
             };
           }
+          ./modules/mortar-user.nix
           # SD image: mainline SPL + TF-A + U-Boot at 128 KiB, FAT /boot
           # with extlinux generations, ext4 root.
           (import ./image/build-image-mainline.nix { })

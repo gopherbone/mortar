@@ -16,8 +16,8 @@
 #   bin/choochootracker   launcher: seeds the data directory, cds there,
 #                         execs the tracker
 #
-# Data: $XDG_DATA_HOME/ChooChooTracker (root's sessions:
-# /root/.local/share/ChooChooTracker): settings.txt, autosave.cct,
+# Data: $XDG_DATA_HOME/ChooChooTracker (the session user's
+# ~/.local/share/ChooChooTracker): settings.txt, autosave.cct,
 # projects/, samples/, instruments/ (incl. USER/soundfont), themes/,
 # fonts/, wavetables, pitch tables, exports. The bundled content
 # (share/choochootracker/common) is copied in once per top-level folder,
@@ -48,9 +48,11 @@
 # Screen: 40x20 text cells; at 1024x768 the 24x36 font gives a 960x720 grid
 # centred with a 32/24 px border, integer pixels, no scaling.
 #
-# Audio: SDL's ALSA backend on ALSA `default` (dmix on the codec); 44.1 kHz,
-# 512 frames (11.6 ms) by default, both changeable in Settings > Audio. USB
-# audio interfaces appear as output/input devices there too.
+# Audio: SDL picks PipeWire (the session's sound server, mortar-apps.nix);
+# 44.1 kHz, 512 frames (11.6 ms) by default, both changeable in Settings >
+# Audio. USB audio interfaces and Bluetooth headphones appear as output
+# devices there too. SDL_AUDIO_DRIVER=alsa still works (through
+# pipewire-alsa, or the codec's dmix when PipeWire is off).
 #
 # MIDI: RtMidi on the ALSA sequencer only (in/out, clock in/out). The
 # Brick kernel has SND_USB_AUDIO and SND_RAWMIDI but not SND_SEQUENCER, so
@@ -153,9 +155,6 @@ let
       done
       # The title screen and relative paths in settings.txt resolve from here.
       cd "$dir"
-      # SDL3 (under sdl2-compat) would try PipeWire and PulseAudio first;
-      # Mortar has neither (sessions are root, see mortar-apps.nix).
-      export SDL_AUDIO_DRIVER="''${SDL_AUDIO_DRIVER:-alsa}"
       exec ${tracker}/libexec/choochootracker/choochootracker "$@"
     '';
   };

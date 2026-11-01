@@ -157,7 +157,8 @@ pub enum Out {
     /// Switch a radio on or off.
     Radio(Radio, bool),
     ShowKeyboard,
-    OpenSetup { wifi: bool },
+    /// A mortar-setup page (Wi-Fi networks, Remote access, Bluetooth devices).
+    OpenSetup(SetupPage),
     /// Open the time zone picker (the compositor loads the zones).
     OpenTimeZone,
     SetTimeZone(String),
@@ -178,6 +179,13 @@ pub enum Out {
 /// Rows of the settings screen (MENU > Quick > Settings…). Volume,
 /// brightness, sleep and power live in the MENU itself.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SetupPage {
+    Wifi,
+    Remote,
+    Bluetooth,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Setting {
     Sounds,
     Haptics,
@@ -186,6 +194,7 @@ enum Setting {
     Palette,
     TimeZone,
     Wifi,
+    Bluetooth,
     Remote,
     Updates,
     AutoUpdate,
@@ -197,7 +206,7 @@ enum Setting {
 /// The rows; Updates and Auto-check daily only with mortar.update.
 fn settings(v: &View) -> Vec<Setting> {
     use Setting::*;
-    let mut s = vec![Sounds, Haptics, Motion, ReduceMotion, Palette, TimeZone, Wifi, Remote];
+    let mut s = vec![Sounds, Haptics, Motion, ReduceMotion, Palette, TimeZone, Wifi, Bluetooth, Remote];
     if v.update.is_some() {
         s.extend([Updates, AutoUpdate]);
     }
@@ -1327,9 +1336,13 @@ impl ShellUi {
                 changed = false;
                 self.out.push(Out::OpenTimeZone);
             }
-            (Setting::Wifi | Setting::Remote, Button::A | Button::Right) if !repeat => {
+            (Setting::Wifi | Setting::Bluetooth | Setting::Remote, Button::A | Button::Right) if !repeat => {
                 changed = false;
-                self.out.push(Out::OpenSetup { wifi: it == Setting::Wifi });
+                self.out.push(Out::OpenSetup(match it {
+                    Setting::Wifi => SetupPage::Wifi,
+                    Setting::Bluetooth => SetupPage::Bluetooth,
+                    _ => SetupPage::Remote,
+                }));
             }
             (Setting::AutoUpdate, _) if (horiz || b == Button::A) && !repeat => {
                 changed = false;
@@ -1818,6 +1831,7 @@ impl ShellUi {
                 ),
                 Setting::TimeZone => ("Time zone", Err(format!("{} · {} ›", crate::tz::pretty(v.timezone).0, v.sys.time))),
                 Setting::Wifi => ("Wi-Fi networks", Err(if v.sys.wifi { "Connected ›".into() } else { "Not connected ›".into() })),
+                Setting::Bluetooth => ("Bluetooth devices", Err("Pair headphones, controllers ›".into())),
                 Setting::Remote => (
                     "Remote access",
                     Err(if v.sys.sshd_listening {
@@ -1884,7 +1898,7 @@ impl ShellUi {
         let title = ts(Face::SerifItalic, 54.0, pal.ink).line_height(1.0);
         b.text(40.0, 50.0, "Settings", &title);
         let last = match items[sel] {
-            Setting::TimeZone | Setting::Wifi | Setting::Remote => ("A", "Open"),
+            Setting::TimeZone | Setting::Wifi | Setting::Bluetooth | Setting::Remote => ("A", "Open"),
             Setting::Updates if v.update.is_some_and(|u| u.ready) => ("A", "Restart"),
             Setting::Updates => ("A", "Check now"),
             Setting::Logout => ("A", "Log out"),

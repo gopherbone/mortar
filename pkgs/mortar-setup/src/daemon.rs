@@ -5,12 +5,14 @@
 //!   (SO_BINDTODEVICE) and accepting peers from the USB subnet only.
 //! - Control socket for the screens (`control.rs`).
 //! - The pairing code (`pairing.rs`), root's keys (`keys.rs`), Wi-Fi
-//!   (`iwd.rs`), and the switches in Settings > Remote access.
+//!   (`iwd.rs`), Bluetooth (`bluez.rs`), and the switches in Settings >
+//!   Remote access.
 //! - sshd: while "password login" is on and a code is showing, a Match
 //!   block in /run/mortar-setup/sshd/ lets root log in over USB with the
 //!   code as password (checked by `mortar-setup check-password` from PAM).
 
 use crate::apply;
+use crate::bluez::Bluetooth;
 use crate::control::{KeyView, Request, Response, Status};
 use crate::iwd::Wifi;
 use crate::keys;
@@ -47,6 +49,7 @@ pub struct Config {
     /// Touch the running system (systemctl, networkctl).
     pub system: bool,
     pub iwd: bool,
+    pub bluez: bool,
 }
 
 impl Config {
@@ -64,6 +67,7 @@ impl Config {
             ssh_password: true,
             system: false,
             iwd: false,
+            bluez: false,
         }
     }
 }
@@ -80,6 +84,7 @@ pub struct Daemon {
     pub cfg: Config,
     inner: Mutex<Inner>,
     wifi: Option<Wifi>,
+    bt: Option<Bluetooth>,
     conns: AtomicUsize,
 }
 
@@ -90,9 +95,11 @@ impl Daemon {
         let state = State::load(&cfg.paths.state_file());
         let key_fps = keys::list(&cfg.paths).into_iter().map(|k| k.fingerprint).collect();
         let wifi = cfg.iwd.then(Wifi::start);
+        let bt = cfg.bluez.then(Bluetooth::start);
         let d = Arc::new(Daemon {
             inner: Mutex::new(Inner { state, pairing: Pairing::default(), last_added: None, key_fps, sshd_conf: None }),
             wifi,
+            bt,
             conns: AtomicUsize::new(0),
             cfg,
         });
@@ -134,6 +141,7 @@ impl Daemon {
             usb_connected: sys::carrier(&self.cfg.usb_iface),
             usb_address: self.cfg.usb_address.clone(),
             wifi: self.wifi.as_ref().map(|w| w.view()).unwrap_or_default(),
+            bluetooth: self.bt.as_ref().map(|b| b.view()).unwrap_or_default(),
         }
     }
 
@@ -267,6 +275,25 @@ impl Daemon {
                 Some(w) => w.wps(),
                 None => return Response::Error { message: "Wi-Fi is not available".into() },
             },
+            Request::BtPower { .. }
+            | Request::BtScan { .. }
+            | Request::BtPair { .. }
+            | Request::BtConnect { .. }
+            | Request::BtDisconnect { .. }
+            | Request::BtForget { .. } => {
+                let Some(b) = &self.bt else {
+                    return Response::Error { message: "Bluetooth is not available".into() };
+                };
+                match req {
+                    Request::BtPower { on } => b.power(on),
+                    Request::BtScan { on } => b.scan(on),
+                    Request::BtPair { address } => b.pair(address),
+                    Request::BtConnect { address } => b.connect(address),
+                    Request::BtDisconnect { address } => b.disconnect(address),
+                    Request::BtForget { address } => b.forget(address),
+                    _ => unreachable!(),
+                }
+            }
             Request::Finish => {
                 let mut i = self.inner.lock().unwrap();
                 i.state.done = true;

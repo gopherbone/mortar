@@ -212,11 +212,15 @@ pub fn run(o: &Opts) -> Result<(), String> {
             }
             ui.button(Button::A, false, &v0);
         }
-        "remote" | "wifi" => {
+        "remote" | "wifi" | "bluetooth" => {
             use mortar_setup::ui::{demo::DemoDevice, SetupUi};
             ui.menu_key(&v0);
             let dev = Box::new(DemoDevice::settings());
-            ui.open_page(if s == "wifi" { SetupUi::wifi(dev, sys.clone()) } else { SetupUi::remote_access(dev, sys.clone()) });
+            ui.open_page(match s {
+                "wifi" => SetupUi::wifi(dev, sys.clone()),
+                "bluetooth" => SetupUi::bluetooth(dev, sys.clone()),
+                _ => SetupUi::remote_access(dev, sys.clone()),
+            });
         }
         "launch" => {
             settle(&mut ui, &v0, 1.0);
@@ -281,7 +285,7 @@ pub fn run(o: &Opts) -> Result<(), String> {
         }
         other => {
             return Err(format!(
-                "unknown preview screen '{other}' (boot, home, home-empty, app, menu, menu-apps, menu-games, menu-music, menu-quick, menu-adjust, menu-power, menu-confirm, menu-options, settings, remote, wifi, timezone, timezone-zones, launch, close, swap, osd, toast, achievement, flash, osk, power)"
+                "unknown preview screen '{other}' (boot, home, home-empty, app, menu, menu-apps, menu-games, menu-music, menu-quick, menu-adjust, menu-power, menu-confirm, menu-options, settings, remote, wifi, bluetooth, timezone, timezone-zones, launch, close, swap, osd, toast, achievement, flash, osk, power)"
             ))
         }
     }

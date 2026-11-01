@@ -102,10 +102,11 @@ pub struct Actions {
     pub poweroff: Vec<String>,
     #[serde(default = "d_reboot")]
     pub reboot: Vec<String>,
-    /// Change the volume; "{step}" is replaced by e.g. "5%+" or "5%-".
+    /// Change the volume; "{step}" is replaced by e.g. "5%+" or "5%-"
+    /// (amixer and wpctl both take that form).
     #[serde(default = "d_volume_set")]
     pub volume_set: Vec<String>,
-    /// Print the mixer state; the first "[NN%]" in the output is the volume.
+    /// Print the volume: amixer's "[NN%]" or wpctl's "Volume: 0.NN".
     #[serde(default = "d_volume_get")]
     pub volume_get: Vec<String>,
     /// Set the time zone; "{zone}" is replaced by e.g. "Europe/Lisbon".
@@ -421,8 +422,18 @@ pub fn expand_home(p: &str) -> std::path::PathBuf {
     }
 }
 
-/// The first "[NN%]" in amixer's output.
+/// The volume in percent from `wpctl get-volume` ("Volume: 0.40", maybe
+/// " [MUTED]": a muted sink reads 0) or amixer (the first "[NN%]").
 pub fn parse_volume(out: &str) -> Option<u8> {
+    if let Some(i) = out.find("Volume:") {
+        let rest = out[i + 7..].trim_start();
+        let num: String = rest.chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect();
+        let v: f32 = num.parse().ok()?;
+        if rest.contains("[MUTED]") {
+            return Some(0);
+        }
+        return Some((v * 100.0).round().clamp(0.0, 100.0) as u8);
+    }
     let i = out.find('[')?;
     let rest = &out[i + 1..];
     let j = rest.find("%]")?;
@@ -510,5 +521,8 @@ mod tests {
         let out = "Simple mixer control 'DAC',0\n  Front Left: Playback 50 [79%] [-15.00dB]\n";
         assert_eq!(parse_volume(out), Some(79));
         assert_eq!(parse_volume("nothing"), None);
+        assert_eq!(parse_volume("Volume: 0.40\n"), Some(40));
+        assert_eq!(parse_volume("Volume: 1.00"), Some(100));
+        assert_eq!(parse_volume("Volume: 0.35 [MUTED]\n"), Some(0));
     }
 }

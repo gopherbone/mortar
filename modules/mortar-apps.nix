@@ -30,11 +30,21 @@
 #   Opaque full-screen blits matter: blending reads the write-combined
 #   scanout buffer back (see pkgs/m8c and pkgs/puzzlescript).
 #
-# Audio: sessions run as root, and PipeWire refuses to run for root, so
-# apps use ALSA directly. Its default device is the Brick codec through
-# dmix (shared, resampled by plug), not whichever card enumerated first;
-# USB cards such as the M8 stay reachable by name (hw:M8). The codec's
-# mixer gets usable levels at boot (the speaker amp switch defaults off).
+# Audio (`mortar.apps.audio.pipewire`, on by default): PipeWire with
+# WirePlumber in the session user's systemd manager (mortar-user.nix), with
+# its ALSA plugin (ALSA `default`) and PulseAudio server, so SDL, ALSA and
+# Pulse apps share the codec, USB audio (the M8) and Bluetooth headphones
+# (A2DP through BlueZ). Low latency for the trackers: 256-frame quantum
+# (5.8 ms at 44.1 kHz, the M8's rate; the codec runs 44.1 or 48 kHz S16
+# only), apps may ask for less down to 128 or more up to 2048.
+# WirePlumber does not drive the codec's mixer (no ALSA card profile for
+# it): its levels are the boot defaults below, the volume is PipeWire's
+# (the shell's volume keys use wpctl on the default sink, so they follow
+# Bluetooth headphones too). MIDI stays on the ALSA sequencer.
+#
+# With `pipewire = false` apps use ALSA directly: its default is the codec
+# through dmix (shared, resampled by plug), USB cards such as the M8 stay
+# reachable by name (hw:M8), and the volume keys move the codec's DAC.
 { config, lib, pkgs, ... }:
 
 let
@@ -74,6 +84,16 @@ in
         description = "PICO-8 inside the profile (for launcher entries; use it with `requires`).";
       };
     };
+    audio.pipewire = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+      description = "PipeWire (+ WirePlumber, ALSA and Pulse compatibility) for the session; off: plain ALSA with dmix on the codec.";
+    };
+    audio.quantum = lib.mkOption {
+      type = lib.types.ints.positive;
+      default = 256;
+      description = "PipeWire's default quantum (frames per cycle) at 44.1 kHz.";
+    };
     choochootracker = {
       enable = lib.mkEnableOption "ChooChooTracker, a multi-engine music tracker" // { default = true; };
       package = lib.mkOption {
@@ -111,57 +131,139 @@ in
     # Mesa: GBM + EGL + llvmpipe for SDL's KMSDRM backend (see above).
     hardware.graphics.enable = true;
 
-    # services.graphical-desktop (pulled in by greetd) turns PipeWire on,
-    # whose ALSA plugin then becomes the default device and fails with
-    # "Host is down" for root.
-    services.pipewire.enable = false;
+    # services.graphical-desktop (pulled in by greetd) turns PipeWire on
+    # by default; this decides.
+    services.pipewire = lib.mkMerge [
+      { enable = lib.mkForce cfg.audio.pipewire; }
+      (lib.mkIf cfg.audio.pipewire {
+        audio.enable = true;
+        alsa.enable = true;
+        pulse.enable = true;
+        wireplumber.enable = true;
+        extraConfig.pipewire."90-mortar" = {
+          "context.properties" = {
+            "default.clock.rate" = 44100;
+            "default.clock.allowed-rates" = [ 44100 48000 ];
+            "default.clock.quantum" = cfg.audio.quantum;
+            "default.clock.min-quantum" = 128;
+            "default.clock.max-quantum" = 2048;
+          };
+        };
+        extraConfig.pipewire-pulse."90-mortar" = {
+          "pulse.properties" = {
+            "pulse.min.req" = "128/44100";
+            "pulse.default.req" = "${toString cfg.audio.quantum}/44100";
+            "pulse.min.quantum" = "128/44100";
+          };
+        };
+        wireplumber.extraConfig."90-mortar-codec" = {
+          # The Brick codec (the only platform sound card; USB cards are
+          # alsa_card.usb-*): plain PCM nodes, no ALSA card profile. ACP's
+          # speaker/headphone paths would switch "Headphone" off for the
+          # speaker, which is fed from HPOUT, and fight the boot levels.
+          "monitor.alsa.rules" = [
+            {
+              matches = [ { "device.name" = "~alsa_card.platform-*"; } ];
+              actions.update-props = {
+                "api.alsa.use-acp" = false;
+                "device.description" = "Brick";
+              };
+            }
+            {
+              matches = [ { "node.name" = "~alsa_output.platform-*"; } ];
+              actions.update-props = {
+                "node.description" = "Brick speaker / headphones";
+                "priority.session" = 1500;
+                "priority.driver" = 1500;
+                "api.alsa.headroom" = 0;
+                "api.alsa.period-size" = 256;
+                "audio.format" = "S16LE";
+              };
+            }
+            {
+              # USB audio (the M8's interface) never becomes the default
+              # output by itself: m8c plays the M8 to the default sink.
+              matches = [ { "node.name" = "~alsa_output.usb-*"; } ];
+              actions.update-props = {
+                "priority.session" = 1000;
+                "priority.driver" = 1000;
+              };
+            }
+          ];
+          # Bluetooth headphones take over while connected.
+          "monitor.bluez.rules" = [
+            {
+              matches = [ { "node.name" = "~bluez_output.*"; } ];
+              actions.update-props."priority.session" = 2000;
+            }
+          ];
+        };
+      })
+    ];
 
-    environment.etc."asound.conf".text = ''
-      # Default: the Brick codec, shared through dmix. 44.1 kHz is the M8's
-      # rate; plug converts anything else.
-      pcm.!default {
-        type plug
-        slave.pcm "codec"
-      }
-      pcm.codec {
-        type dmix
-        ipc_key 2026
-        ipc_perm 0666
-        slave {
-          pcm "hw:Codec,0"
-          rate 44100
-          format S16_LE
-          channels 2
-          period_size 512
-          buffer_size 2048
+    # PipeWire only for people: the greeter (a system user) never starts it,
+    # so it never holds the codec when the session starts; for the session
+    # user it starts with the login (not on the first sound).
+    systemd.user = lib.mkIf cfg.audio.pipewire {
+      services.pipewire = {
+        wantedBy = [ "default.target" ];
+        unitConfig.ConditionUser = "!@system";
+      };
+      services.wireplumber.unitConfig.ConditionUser = "!@system";
+      services.pipewire-pulse.unitConfig.ConditionUser = "!@system";
+      sockets.pipewire.unitConfig.ConditionUser = "!@system";
+      sockets.pipewire-pulse.unitConfig.ConditionUser = "!@system";
+    };
+
+    environment.etc."asound.conf".text =
+      lib.optionalString (!cfg.audio.pipewire) ''
+        # Default: the Brick codec, shared through dmix. 44.1 kHz is the M8's
+        # rate; plug converts anything else.
+        pcm.!default {
+          type plug
+          slave.pcm "codec"
         }
-      }
-      ctl.!default {
-        type hw
-        card Codec
-      }
-      # SDL 3.4 names ALSA devices "<prefix>CARD=<id>,DEV=<n>", taking the
-      # prefix from the first hint that starts with hw:, sysdefault: or
-      # default:. That is sysdefault:, whose stock definition takes no DEV
-      # argument, so every named device (the M8's input) failed with
-      # "Unknown PCM sysdefault:CARD=M8,DEV=0". Accept DEV, and convert
-      # formats (the M8 is 24-bit).
-      pcm.!sysdefault {
-        @args [ CARD DEV ]
-        @args.CARD { type string default "Codec" }
-        @args.DEV { type integer default 0 }
-        type plug
-        slave.pcm {
+        pcm.codec {
+          type dmix
+          ipc_key 2026
+          ipc_perm 0666
+          slave {
+            pcm "hw:Codec,0"
+            rate 44100
+            format S16_LE
+            channels 2
+            period_size 512
+            buffer_size 2048
+          }
+        }
+        ctl.!default {
           type hw
-          card $CARD
-          device $DEV
+          card Codec
         }
-        hint {
-          show on
-          description "Card default, converted"
+      ''
+      + ''
+        # SDL 3.4 names ALSA devices "<prefix>CARD=<id>,DEV=<n>", taking the
+        # prefix from the first hint that starts with hw:, sysdefault: or
+        # default:. That is sysdefault:, whose stock definition takes no DEV
+        # argument, so every named device (the M8's input) failed with
+        # "Unknown PCM sysdefault:CARD=M8,DEV=0". Accept DEV, and convert
+        # formats (the M8 is 24-bit).
+        pcm.!sysdefault {
+          @args [ CARD DEV ]
+          @args.CARD { type string default "Codec" }
+          @args.DEV { type integer default 0 }
+          type plug
+          slave.pcm {
+            type hw
+            card $CARD
+            device $DEV
+          }
+          hint {
+            show on
+            description "Card default, converted"
+          }
         }
-      }
-    '';
+      '';
 
     # Mesa would probe zink (GL on Vulkan) first and log an error each time.
     environment.variables.GALLIUM_DRIVER = "llvmpipe";
@@ -171,8 +273,10 @@ in
     # clips), Headphone 7/7 = 0 dB (the HPOUT attenuator; the speaker amp
     # is fed from HPOUT, so this sets the speaker level too, as stock
     # does; patches/kernel/0004 makes 7 the loud end). The codec's LINEOUT
-    # is not wired to the speaker on the Brick, so it stays off. Volume
-    # keys adjust DAC from here. Set with amixer; nothing is persisted.
+    # is not wired to the speaker on the Brick, so it stays off. With
+    # PipeWire nothing else touches these (the volume is PipeWire's);
+    # without it the volume keys adjust DAC from here. Set with amixer;
+    # nothing is persisted.
     systemd.services.mortar-audio-defaults = {
       description = "Brick codec mixer defaults";
       wantedBy = [ "multi-user.target" ];

@@ -6,7 +6,8 @@
 #                        password in the file. Format: docs/setup-file.md.
 #   mortar-setupd        pairing service for `mortar pair` (TCP 7330, usb0
 #                        only, peers from 10.55.0.0/24 only), the pairing
-#                        code, Wi-Fi through iwd, and the control socket the
+#                        code, Wi-Fi through iwd, Bluetooth through BlueZ
+#                        (it is BlueZ's pairing agent), and the control socket the
 #                        screens use (/run/mortar-setup/control.sock, group
 #                        mortar-setup: membership is root-equivalent).
 #   mortar-setup-ui      first boot only: the setup screens on the panel,
@@ -15,7 +16,7 @@
 #                        showing, the code is root's SSH password over USB
 #                        (Match LocalAddress 10.55.0.1 + pam_exec).
 #
-# mortar-shell's Settings > Wi-Fi and Remote access open the same screens
+# mortar-shell's Settings > Wi-Fi, Bluetooth and Remote access open the same screens
 # (modules/mortar-shell.nix passes the socket when this is enabled).
 #
 # Off by default: importing this module changes nothing until

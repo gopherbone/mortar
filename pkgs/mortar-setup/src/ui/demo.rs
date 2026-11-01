@@ -4,7 +4,7 @@
 //! would (roughly).
 
 use super::Device;
-use crate::control::{KeyView, NetView, PairingView, Request, SetupSummary, Status, WifiView};
+use crate::control::{BtDeviceView, BtView, KeyView, NetView, PairingView, Request, SetupSummary, Status, WifiView};
 
 pub struct DemoDevice {
     pub status: Status,
@@ -39,6 +39,32 @@ fn nets() -> Vec<NetView> {
     ]
 }
 
+/// Headphones and a controller paired, more in range (Settings > Bluetooth).
+pub fn bluetooth() -> BtView {
+    let d = |name: &str, address: &str, kind: &str, paired: bool, connected: bool, rssi: Option<i16>, battery: Option<u8>| BtDeviceView {
+        name: name.into(),
+        address: address.into(),
+        kind: kind.into(),
+        paired,
+        connected,
+        rssi,
+        battery,
+    };
+    BtView {
+        available: true,
+        powered: true,
+        discovering: true,
+        devices: vec![
+            d("Studio headphones", "38:18:4C:12:34:56", "headphones", true, true, Some(-48), Some(80)),
+            d("Retro Pad Pro", "E4:17:D8:AB:CD:EF", "gamepad", true, false, None, None),
+            d("Kitchen speaker", "00:1A:7D:DA:71:13", "speaker", false, false, Some(-71), None),
+            d("Travel keyboard", "DC:2C:26:44:55:66", "keyboard", false, false, Some(-80), None),
+            d("Wireless Controller", "A4:53:85:01:02:03", "gamepad", false, false, Some(-55), None),
+        ],
+        ..Default::default()
+    }
+}
+
 impl DemoDevice {
     /// A Brick on its first boot, plugged in, no keys yet.
     pub fn first_boot() -> DemoDevice {
@@ -59,6 +85,7 @@ impl DemoDevice {
                 usb_connected: true,
                 usb_address: "10.55.0.1".into(),
                 wifi: WifiView { available: true, state: "disconnected".into(), networks: nets(), ..Default::default() },
+                bluetooth: BtView { available: true, powered: true, ..Default::default() },
             },
         }
     }
@@ -110,6 +137,7 @@ impl DemoDevice {
         d.status.keys = vec![laptop_key(), desktop_key()];
         d.status.last_added = None;
         d.status.usb_connected = false;
+        d.status.bluetooth = bluetooth();
         d
     }
 }
@@ -141,6 +169,29 @@ impl Device for DemoDevice {
             Request::WifiScan | Request::Status => {}
             Request::WifiWps => s.wifi.wps = true,
             Request::CheckPassword { .. } => return Err("not here".into()),
+            Request::BtPower { on } => {
+                s.bluetooth.powered = on;
+                if !on {
+                    s.bluetooth.discovering = false;
+                }
+            }
+            Request::BtScan { on } => s.bluetooth.discovering = on && s.bluetooth.powered,
+            Request::BtPair { address } => {
+                s.bluetooth.discovering = false;
+                s.bluetooth.busy = Some(address);
+            }
+            Request::BtConnect { address } => {
+                if let Some(d) = s.bluetooth.devices.iter_mut().find(|d| d.address == address) {
+                    d.connected = true;
+                    s.bluetooth.last_connected = Some(d.name.clone());
+                }
+            }
+            Request::BtDisconnect { address } => {
+                if let Some(d) = s.bluetooth.devices.iter_mut().find(|d| d.address == address) {
+                    d.connected = false;
+                }
+            }
+            Request::BtForget { address } => s.bluetooth.devices.retain(|d| d.address != address),
         }
         Ok(())
     }

@@ -152,8 +152,8 @@ blocks with 1 px ink outlines, isometric illustrations.
     (values); haptic tick on moves, double on go/kill/confirm.
 - Settings screen (MENU > Quick > Settings…): slides in from the right
   over the MENU. UI sounds, Haptic ticks, Motion (Bouncy/Calm/Snappy),
-  Reduce motion, Palette (Day/Night), Time zone, Wi-Fi networks and
-  Remote access (mortar-setup pages), Log out (second A). B goes back
+  Reduce motion, Palette (Day/Night), Time zone, Wi-Fi networks,
+  Bluetooth devices and Remote access (mortar-setup pages), Log out (second A). B goes back
   to the MENU, MENU closes both. Changes are saved in
   $XDG_STATE_HOME/mortar-shell/prefs.json over the module's defaults
   (`mortar.shell.ui.*`).
@@ -229,7 +229,7 @@ no UI layer the app is shown exactly as before (direct scanout).
 triangle, sine with exponential pitch sweeps; white noise through a
 swept RBJ band-pass; WebAudio-style attack + exponential decay) at 44.1
 kHz and mixes voices in a thread that writes 256-frame periods to ALSA
-"default" (the codec dmix). The PCM is opened on the first sound and
+"default" (PipeWire's ALSA plugin; the codec's dmix without PipeWire). The PCM is opened on the first sound and
 closed after 4 s of silence. `mortar-shell sfx NAME [--wav FILE]` plays
 or renders one.
 
@@ -286,7 +286,9 @@ How it works:
 - Real keyboards (USB/Bluetooth) go to the visible app over wl_keyboard
   (xkb layout from the config). A tap of the Logo key toggles the overlay;
   with the overlay up, arrows/Enter/Esc navigate it.
-- Volume keys are handled by the shell (amixer, configurable); the power
+- Volume keys are handled by the shell (`wpctl` on PipeWire's default
+  sink, so they follow Bluetooth headphones; amixer on the codec's DAC
+  without PipeWire; `actions.volumeSet/volumeGet`); the power
   key is left to logind.
 
 Limits and notes:
@@ -564,7 +566,8 @@ shows), `press|down|up BUTTON`, `key CODE`, `launch ID`,
 combo), `toast JSON`, `boot` (replay), `time manual|real|+MS`, `prefs`,
 `quit`. Tests drive the
 shell through it; over SSH it gives remote screenshots and app control
-(`XDG_RUNTIME_DIR=/run/user/0 mortar-shell ctl state`).
+(`mortar-shell ctl state` as root finds the session's socket in
+/run/user/*/).
 
 ## Session and NixOS integration
 

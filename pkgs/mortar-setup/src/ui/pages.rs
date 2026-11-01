@@ -13,14 +13,14 @@ use mortar_ui::theme;
 use mortar_ui::toolkit::{self, hint, Glyph, ListState, MenuItem, PillKind, Row, RowValue};
 use std::time::{Duration, Instant};
 
-fn t() -> &'static theme::Theme {
+pub(super) fn t() -> &'static theme::Theme {
     theme::get()
 }
 
 // ------------------------------------------------------------ helpers ----
 
 /// Body text in the theme's secondary ink.
-fn sub(ui: &Ui, cq: f32) -> TextStyle {
+pub(super) fn sub(ui: &Ui, cq: f32) -> TextStyle {
     toolkit::st_body(ui, cq, t().line_soft)
 }
 
@@ -47,7 +47,7 @@ fn step(ui: &mut Ui, x: f32, y: f32, w: f32, n: u32, text: &str) -> f32 {
 }
 
 /// Signal strength: four rising bars, filled up to `n`.
-fn signal(ui: &mut Ui, right: f32, cy: f32, n: u8, ink: Color, faint: Color) -> f32 {
+pub(super) fn signal(ui: &mut Ui, right: f32, cy: f32, n: u8, ink: Color, faint: Color) -> f32 {
     let (bw, gap) = (ui.cq(0.8), ui.cq(0.45));
     let full = ui.cq(2.6);
     let w = 4.0 * bw + 3.0 * gap;
@@ -84,10 +84,10 @@ fn host_local(cx: &Cx) -> String {
 
 /// A two-press confirmation (destructive switches).
 #[derive(Default)]
-struct Confirm(Option<(String, Instant)>);
+pub(super) struct Confirm(Option<(String, Instant)>);
 
 impl Confirm {
-    fn ok(&mut self, key: &str, cx: &mut Cx, what: &str) -> bool {
+    pub(super) fn ok(&mut self, key: &str, cx: &mut Cx, what: &str) -> bool {
         if self.0.as_ref().is_some_and(|(k, t)| k == key && Instant::now() < *t) {
             self.0 = None;
             return true;
@@ -228,7 +228,7 @@ fn crate_keys(cx: &Cx) -> usize {
 }
 
 /// A tag-like note: a small square accent block, then the text.
-fn note_line(ui: &mut Ui, x: f32, y: f32, w: f32, text: &str, kind: PillKind) -> f32 {
+pub(super) fn note_line(ui: &mut Ui, x: f32, y: f32, w: f32, text: &str, kind: PillKind) -> f32 {
     let (bg, _) = toolkit::kind_colors(kind);
     let s = ui.cq(2.2);
     toolkit::block(ui, Rect::new(x, y + ui.cq(0.35), s, s), bg);

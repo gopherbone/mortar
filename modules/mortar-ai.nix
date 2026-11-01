@@ -99,10 +99,11 @@ in
 
     user = mkOption {
       type = types.str;
-      default = "root";
+      default = config.mortar.user.name or "root";
+      defaultText = lib.literalExpression "config.mortar.user.name";
       description = ''
-        Who runs Claude Code and owns its sign-in (~/.claude). Mortar's shell
-        session is root today; set this to the session user once there is one.
+        Who runs Claude Code and owns its sign-in (~/.claude): the session
+        user (modules/mortar-user.nix), whose apps the shell starts.
       '';
     };
 

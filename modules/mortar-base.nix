@@ -5,9 +5,11 @@
 # Access model:
 #   - No account has a password. Nothing to leak, nothing to guess.
 #   - SSH is key-only; root's keys come from <card>/ssh-keys/root
-#     (see mortar-usb.nix).
-#   - Consoles that need physical access (the screen, the USB-C serial
-#     port, the internal UART pads) log in as root automatically.
+#     (see mortar-usb.nix), the session user's from ssh-keys/<user>.
+#   - Sessions on the panel (the greeter, the shell, apps) run as the
+#     session user (mortar-user.nix), not root.
+#   - Consoles that need physical access (the USB-C serial port, the
+#     internal UART pads, text VTs) log in as root automatically.
 { config, lib, pkgs, ... }:
 
 {
@@ -42,8 +44,8 @@
   # otherwise refuse to build a system where root has no password.
   users.allowNoPasswordLogin = true;
 
-  # Every getty (tty1 on the screen, ttyGS0 over USB-C, ttyS0 on the UART
-  # pads) logs straight in as root.
+  # Every getty (text VTs, ttyGS0 over USB-C, ttyS0 on the UART pads) logs
+  # straight in as root. (The panel's VT1 belongs to the greeter.)
   services.getty.autologinUser = "root";
 
   environment.systemPackages = with pkgs; [
@@ -92,4 +94,12 @@
   programs.command-not-found.enable = false;
   systemd.services.systemd-udev-settle.enable = false;
   systemd.network.wait-online.enable = false;
+
+  # Boot time and closure: nothing here reads man pages or the NixOS
+  # manual on the device, and journald keeps the logs (no logrotate run
+  # at every boot).
+  documentation.enable = false;
+  documentation.man.enable = false;
+  documentation.nixos.enable = false;
+  services.logrotate.enable = false;
 }

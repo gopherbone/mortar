@@ -24,12 +24,13 @@ over SSH.
 | Apps | M8 (m8c; plug the M8 into the top port), ChooChooTracker, PICO-8 (your own licensed copy), PuzzleScript, Games (emulators), Terminal, Claude Code. |
 | Emulators | `mortar-play`, a minimal libretro frontend with 16 curated, preconfigured systems (GB/GBC/GBA, NES, SNES, Genesis, PS1, arcade, …). Auto-saves and resume, save states, fast-forward. |
 | Claude Code | Runs in a persistent tmux session, a controller UI for approving tool calls (A/B/X), and Remote Control from your phone. Sign in with a QR code. |
-| Audio | Codec speaker and headphones (ALSA dmix, shared by all apps); USB audio and USB MIDI on the top port. |
+| Audio | PipeWire in the session: codec speaker and headphones, USB audio and USB MIDI on the top port, Bluetooth headphones. 5.8 ms quantum for the trackers. |
 | USB-C, bottom port | USB device: serial console + Ethernet over USB. The Brick is `10.55.0.1` / `mortar.local`. A watchdog recovers the link if it goes deaf. |
 | USB-C, top port | USB host: the M8, USB audio, keyboards and controllers. |
-| SSH | Keys only, from `ssh-keys/root` on the card's FAT boot partition, or added with `mortar pair`. No account has a password. |
+| Accounts | The panel's sessions (shell, apps, Claude Code) run as the user `brick`; root is for SSH (deploys) and the serial consoles. Time zone, power and backlight go through polkit/udev, Wi-Fi and Bluetooth through `mortar-setupd`. |
+| SSH | Keys only, from `ssh-keys/root` (and optionally `ssh-keys/brick`) on the card's FAT boot partition, or added with `mortar pair`. No account has a password. |
 | Setup | First-boot setup: a `mortar.toml` file on the card, setup screens on the panel (Wi-Fi list, on-screen keyboard, WPS), and `mortar pair` from your computer (docs/setup-file.md, docs/pairing.md). |
-| Wi-Fi, Bluetooth | XR829: 2.4 GHz station mode via iwd; BlueZ. |
+| Wi-Fi, Bluetooth | XR829: 2.4 GHz station mode via iwd; BlueZ with pairing in Settings > Bluetooth (headphones over A2DP, controllers forwarded to apps like the built-in pad). |
 | Display | JD9168 DSI panel, 1024×768. |
 | Updates | Over Wi-Fi: CI builds each push and publishes it to a private binary cache; the Brick downloads, stages and asks you to restart (docs/updates.md). Or `nix run .#mortar -- deploy` over USB. Every generation stays in the boot menu. |
 | Battery | Charger set up like stock (4.2 V, 960 mA, 128 mA termination, NTC/JEITA windows); the AXP2202 fuel gauge runs TrimUI's battery model. Charging/full shown in the status bars; warnings at 15 % and 5 %; clean power-off at 3 %. USB input: 500 mA from a computer, 2.5 A from a charger. `mortar-power status`. |
@@ -114,14 +115,15 @@ publish built images or push them to a public binary cache.
 flake.nix                 nixosConfigurations.brick-mainline, sd-image-mainline, apps.mortar
 modules/
   trimui-brick.nix        hardware: kernel, DTB, consoles, workarounds
-  mortar-base.nix         accounts (no passwords), consoles, base packages
+  mortar-base.nix         root (no password), consoles, base packages
+  mortar-user.nix         the session user, polkit rules, data moved over from root
   mortar-usb.nix          USB gadget (ACM + ECM), DHCP, mDNS, SSH, black-box logs
   mortar-usb-watchdog.nix recover a dead USB link
   brick-firmware.nix      XR829/GPU firmware, iwd, Bluetooth address, stable Wi-Fi MAC
   brick-gpu.nix           pvrsrvkm + brick_dc_drm, GPU userspace, mortar-sdl-run
   mortar-greeter.nix      greetd + the mortar-ui greeter, sessions
   mortar-shell.nix        the multitasking shell, its apps and UI options
-  mortar-apps.nix         M8, PICO-8, PuzzleScript; audio defaults
+  mortar-apps.nix         M8, PICO-8, PuzzleScript; PipeWire and codec defaults
   mortar-play.nix         emulators: curated libretro cores + mortar-play
   mortar-ai.nix           Claude Code: tmux session, controller UI, Remote Control
   mortar-setup.nix        first-boot setup: mortar.toml, pairing, setup screens
@@ -137,7 +139,7 @@ pkgs/
   mortar-ui/              UI toolkit, theme and the greeter (Rust)
   mortar-play/            libretro frontend (Rust), see DESIGN.md
   mortar-ai/              controller UI for Claude Code + sign-in helper (Rust), see DESIGN.md
-  mortar-setup/           setup file, pairing service, setup screens (Rust)
+  mortar-setup/           setup file, pairing service, Wi-Fi/Bluetooth, setup screens (Rust)
   mortar-pair/            the pairing protocol, shared with mortar-cli
   mortar-cli/             the `mortar` command: deploy, pair, publish, pico8, … (Rust)
   mortar-update/          over-the-air updates on the Brick + the manifest format (Rust)

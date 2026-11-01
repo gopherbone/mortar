@@ -450,6 +450,11 @@ impl ShellUi {
                     m.ctx = Some(Ctx { uid, sel: 0, items, op });
                     self.fx(Sfx::Drawer, Some(Haptic::Tick));
                 }
+                // the radio rows: their pages (networks, paired devices)
+                Some(Row::Wifi | Row::Bluetooth) => {
+                    self.out.push(Out::OpenSetup(if row == Some(Row::Wifi) { SetupPage::Wifi } else { SetupPage::Bluetooth }));
+                    self.fx(Sfx::Open, Some(Haptic::Tick));
+                }
                 _ => self.fx(Sfx::Deny, None),
             },
             Button::A | Button::Start if !repeat => {
@@ -851,7 +856,11 @@ fn row_info(row: &Row, v: &View) -> RowInfo {
             RowInfo { value: toggle(v.radios.wifi), ..ri("Wi-Fi", sub.into(), Ic::Wifi) }
         }
         Row::Bluetooth => {
-            let sub = if v.radios.bluetooth.is_some() { "Radio" } else { "No Bluetooth switch" };
+            let sub = match v.radios.bluetooth {
+                None => "No Bluetooth switch",
+                Some(false) => "Radio off",
+                Some(true) => "Y: devices, pairing",
+            };
             RowInfo { value: toggle(v.radios.bluetooth), ..ri("Bluetooth", sub.into(), Ic::Bt) }
         }
         Row::Sleep => ri("Sleep", "Screen off, apps keep their place".into(), Ic::Moon),
@@ -873,6 +882,7 @@ fn menu_hints(row: Option<&Row>, v: &View, adjusting: bool) -> Vec<(&'static str
         Some(r) if r.level() => h.push(("A", "Adjust")),
         Some(r) if r.toggle() => {
             let on = if *r == Row::Wifi { v.radios.wifi } else { v.radios.bluetooth };
+            h.push(("Y", if *r == Row::Wifi { "Networks" } else { "Devices" }));
             h.push(("A", if on == Some(true) { "Turn off" } else { "Turn on" }));
         }
         Some(Row::Launch(id)) => {

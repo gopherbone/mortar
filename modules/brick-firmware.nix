@@ -246,6 +246,31 @@ in
 
     (lib.mkIf cfg.bluetooth.enable {
       hardware.bluetooth.enable = true;
+      # Controllers that lost their pairing (paired with another host
+      # meanwhile) may pair again without asking.
+      hardware.bluetooth.settings.General.JustWorksRepairing = "always";
+
+      # Bluetooth controllers: the Brick defconfig has only hid-generic.
+      # These give the common pads their proper button maps, rumble and
+      # battery (8BitDo and most others work with hid-generic). HIDRAW
+      # stays off on purpose: SDL's HIDAPI drivers would read the pads
+      # directly, past mortar-shell's per-app forwarding.
+      boot.kernelPatches = [
+        {
+          name = "mortar-bluetooth-gamepads";
+          patch = null;
+          structuredExtraConfig = with lib.kernel; {
+            HID_PLAYSTATION = module; # DualShock 4, DualSense
+            PLAYSTATION_FF = yes;
+            HID_SONY = module; # DualShock 3, older DS4 firmware
+            SONY_FF = yes;
+            HID_NINTENDO = module; # Switch Pro, Joy-Con, NSO pads
+            NINTENDO_FF = yes;
+            HID_MICROSOFT = module; # Xbox Wireless (Bluetooth)
+            HID_BATTERY_STRENGTH = yes;
+          };
+        }
+      ];
 
       environment.systemPackages = [ brick-bluetooth-identity ];
 

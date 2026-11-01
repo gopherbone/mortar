@@ -215,7 +215,14 @@ let
       # Wayland clients (mortar-wlegl dma-bufs, scanned out directly),
       # otherwise on software GL.
       env = { MORTAR_SDL = if cfg.gpuApps then "wayland-gpu" else "software"; } // cfg.environment;
-      # MENU > Quick > Settings… > Wi-Fi networks / Remote access (modules/mortar-setup.nix)
+      # Volume keys: PipeWire's default sink (codec, USB or Bluetooth), or
+      # the codec's DAC without PipeWire (the shell's built-in default).
+      actions = lib.optionalAttrs config.services.pipewire.enable {
+        volumeSet = [ "${pkgs.wireplumber}/bin/wpctl" "set-volume" "-l" "1.0" "@DEFAULT_AUDIO_SINK@" "{step}" ];
+        volumeGet = [ "${pkgs.wireplumber}/bin/wpctl" "get-volume" "@DEFAULT_AUDIO_SINK@" ];
+      };
+      # MENU > Quick > Settings… > Wi-Fi networks / Remote access /
+      # Bluetooth devices (modules/mortar-setup.nix)
       setupSocket = if config.mortar ? setup && config.mortar.setup.enable then "/run/mortar-setup/control.sock" else null;
       # Settings > Updates (modules/mortar-update.nix)
       update = if config.mortar ? update && config.mortar.update.enable then config.mortar.update.shell else null;
@@ -237,6 +244,10 @@ let
     order = 0;
     command = [ "${session}/bin/mortar-shell-session" ];
   };
+
+  backlightRule = ''
+    ACTION=="add", SUBSYSTEM=="backlight", RUN+="${pkgs.coreutils}/bin/chgrp video /sys/class/backlight/%k/brightness /sys/class/backlight/%k/bl_power", RUN+="${pkgs.coreutils}/bin/chmod g+w /sys/class/backlight/%k/brightness /sys/class/backlight/%k/bl_power"
+  '';
 
   profileUsers = if greeter.enable then map (p: p.user) (lib.attrValues greeter.profiles) else [ ];
 in
@@ -537,10 +548,9 @@ in
           IdleAction = lib.mkDefault "ignore";
         };
 
-        # Brightness from MENU > Quick (same rule as the greeter).
-        services.udev.extraRules = ''
-          ACTION=="add", SUBSYSTEM=="backlight", RUN+="${pkgs.coreutils}/bin/chgrp video /sys/class/backlight/%k/brightness", RUN+="${pkgs.coreutils}/bin/chmod g+w /sys/class/backlight/%k/brightness"
-        '';
+        # Brightness from MENU > Quick, and the backlight off while asleep
+        # (bl_power), for the video group (same rule as the greeter).
+        services.udev.extraRules = backlightRule;
       }
       (lib.mkIf (greeter.enable && !cfg.exclusive) {
         mortar.greeter.sessions.mortar = shellSession;

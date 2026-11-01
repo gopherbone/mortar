@@ -40,9 +40,9 @@ options:
   --port N         (daemon) pairing port (default 7330)
   --socket-group G (daemon) group for the control socket
   --sshd-reload CMD (daemon) command that reloads sshd (whitespace-split)
-  --no-iwd, --no-ssh-password, --no-system   (daemon)
+  --no-iwd, --no-bluetooth, --no-ssh-password, --no-system   (daemon)
   --screen NAME    (ui, screenshot) welcome setup-file usb wifi keyboard
-                   joining ready remote keys; (ui) also remote, wifi
+                   joining ready remote keys bluetooth; (ui) also remote, wifi
   --demo NAME      (screenshot) first-boot | setup-file | ready | settings
   --keys LIST      (screenshot) buttons to press first, e.g. down,a
   --out FILE       (screenshot) PNG to write
@@ -63,6 +63,7 @@ struct Args {
     group: Option<String>,
     sshd_reload: Option<String>,
     no_iwd: bool,
+    no_bluetooth: bool,
     no_ssh_password: bool,
     no_system: bool,
     screen: Option<String>,
@@ -89,6 +90,7 @@ fn parse() -> Result<Args, String> {
             "--socket-group" => a.group = Some(val(&mut it, &arg)?),
             "--sshd-reload" => a.sshd_reload = Some(val(&mut it, &arg)?),
             "--no-iwd" => a.no_iwd = true,
+            "--no-bluetooth" => a.no_bluetooth = true,
             "--no-ssh-password" => a.no_ssh_password = true,
             "--no-system" => a.no_system = true,
             "--screen" => a.screen = Some(val(&mut it, &arg)?),
@@ -145,7 +147,7 @@ fn demo_for(screen: &str) -> &'static str {
     match screen {
         "setup-file" => "setup-file",
         "ready" => "ready",
-        "remote" | "keys" => "settings",
+        "remote" | "keys" | "bluetooth" => "settings",
         _ => "first-boot",
     }
 }
@@ -154,7 +156,7 @@ fn screenshot(a: &Args) -> Result<(), String> {
     let screen = a.screen.clone().unwrap_or_else(|| "welcome".into());
     let out = a.out.clone().ok_or("screenshot needs --out FILE")?;
     let dev = demo(a.demo.as_deref().unwrap_or(demo_for(&screen)))?;
-    let mode = if matches!(screen.as_str(), "remote" | "keys") { Mode::Settings } else { Mode::FirstBoot };
+    let mode = if matches!(screen.as_str(), "remote" | "keys" | "bluetooth") { Mode::Settings } else { Mode::FirstBoot };
     let fonts = gfx::Fonts::load(&gfx::font_dir())?;
     let mut ui = Ui::new(1024, 768, fonts);
     let mut sys = Sys::demo(Some("20:15".into()));
@@ -323,6 +325,7 @@ fn run() -> Result<i32, String> {
                 ssh_password: !a.no_ssh_password,
                 system: a.root.is_none() && !a.no_system,
                 iwd: !a.no_iwd,
+                bluez: !a.no_bluetooth,
             };
             let d = Daemon::new(cfg);
             d.run()?;

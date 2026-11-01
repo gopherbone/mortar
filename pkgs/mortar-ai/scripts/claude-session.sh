@@ -48,9 +48,9 @@ login_flow() {
 
   Phone not on this Wi-Fi? Press X on the QR screen for the plain sign-in
   link, then type the code here yourself (START opens the keyboard).
-  From a computer instead: ssh root@mortar.local, run `claude auth login`.
-
 EOF
+    printf '  From a computer instead: ssh root@mortar.local, then run\n'
+    printf "  \`su - %s -c 'claude auth login'\`.\n\n" "$(id -un)"
     printf '  %s continue    %s skip for now\n' "$(cap A)" "$(cap B)"
     case "$(read_button)" in
       a) ;;

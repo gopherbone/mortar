@@ -85,7 +85,7 @@ commands:
   sfx NAME   play a UI sound [--wav FILE: write it instead]
   preview    render shell screens / transition frames to PNG without a compositor
                --screen boot|home|app|menu|menu-launch|menu-settings|launch|close|
-                        swap|osd|toast|achievement|flash|osk|remote|wifi
+                        swap|osd|toast|achievement|flash|osk|remote|wifi|bluetooth
                --out FILE [--keys a,down,...] [--theme light|dark]
                [--at MS] [--frames N --every MS]   (FILE-000.png ...)
 
@@ -142,7 +142,7 @@ fn run_cmd(args: &[String]) -> Result<(), String> {
 fn ctl_cmd(args: &[String]) -> Result<(), String> {
     let (path, words) = match args {
         [flag, p, rest @ ..] if flag == "--ctl" => (PathBuf::from(p), rest),
-        rest => (comp::ctl::default_path(), rest),
+        rest => (comp::ctl::client_path(), rest),
     };
     if words.is_empty() {
         return Err(String::new());
@@ -159,7 +159,7 @@ fn toast_cmd(args: &[String]) -> Result<(), String> {
     let mut secs: Option<f32> = None;
     let mut haptic: Option<String> = None;
     let mut words = Vec::new();
-    let mut ctl = comp::ctl::default_path();
+    let mut ctl = comp::ctl::client_path();
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {

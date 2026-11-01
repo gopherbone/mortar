@@ -32,6 +32,13 @@ pub enum Request {
     WifiConnect { ssid: String, passphrase: Option<String> },
     /// WPS push button: press the router's WPS button within 2 minutes.
     WifiWps,
+    /// Bluetooth (BlueZ): adapter power, discovery, and a device by address.
+    BtPower { on: bool },
+    BtScan { on: bool },
+    BtPair { address: String },
+    BtConnect { address: String },
+    BtDisconnect { address: String },
+    BtForget { address: String },
     /// Mark first-boot setup as finished.
     Finish,
     /// sshd's PAM helper: may `user` log in from `rhost` with `password`?
@@ -109,6 +116,55 @@ pub struct WifiView {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct BtDeviceView {
+    pub address: String,
+    pub name: String,
+    /// What it is, from BlueZ's Icon/Class: "headphones", "speaker",
+    /// "gamepad", "keyboard", "mouse", "phone", "computer" or "".
+    pub kind: String,
+    pub paired: bool,
+    pub connected: bool,
+    /// Signal (dBm) while discovering.
+    pub rssi: Option<i16>,
+    /// Battery level (BlueZ Battery1), percent.
+    pub battery: Option<u8>,
+}
+
+impl BtDeviceView {
+    /// "Headphones", "Controller", ... for people.
+    pub fn kind_label(&self) -> &'static str {
+        match self.kind.as_str() {
+            "headphones" => "Headphones",
+            "speaker" => "Speaker",
+            "gamepad" => "Controller",
+            "keyboard" => "Keyboard",
+            "mouse" => "Mouse",
+            "phone" => "Phone",
+            "computer" => "Computer",
+            _ => "Device",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct BtView {
+    /// bluetoothd answers and has an adapter.
+    pub available: bool,
+    pub powered: bool,
+    pub discovering: bool,
+    /// Paired devices first (connected on top), then the ones in range.
+    pub devices: Vec<BtDeviceView>,
+    /// The device a pair/connect is running for.
+    pub busy: Option<String>,
+    /// A passkey to compare or type on the device being paired.
+    pub passkey: Option<String>,
+    /// Outcome of the last action, for people.
+    pub last_error: Option<String>,
+    /// The last device that paired or connected (the page says so once).
+    pub last_connected: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Status {
     pub hostname: String,
     pub setup_done: bool,
@@ -130,6 +186,8 @@ pub struct Status {
     pub usb_connected: bool,
     pub usb_address: String,
     pub wifi: WifiView,
+    #[serde(default)]
+    pub bluetooth: BtView,
 }
 
 impl Status {

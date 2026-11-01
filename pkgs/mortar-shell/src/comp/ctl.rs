@@ -14,7 +14,9 @@
 //! "secs"}; `mortar-shell toast` builds it), boot (replay the boot screen),
 //! time manual|real|+MS (freeze UI time / step it, for test frames),
 //! prefs (the current settings).
-//! The socket is $XDG_RUNTIME_DIR/mortar-shell.sock (mode 0600).
+//! The socket is $XDG_RUNTIME_DIR/mortar-shell.sock (mode 0600). Clients
+//! without one of their own (root over SSH) find the session's in
+//! /run/user/*/.
 
 use super::state::Shell;
 use mortar_ui::input::Button;
@@ -30,6 +32,25 @@ use std::time::Duration;
 pub fn default_path() -> PathBuf {
     let dir = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
     dir.join("mortar-shell.sock")
+}
+
+/// Where `mortar-shell ctl` / `toast` connect: our own socket, else the
+/// first session's under /run/user.
+pub fn client_path() -> PathBuf {
+    let own = default_path();
+    if own.exists() {
+        return own;
+    }
+    // Clients outside the session (root over SSH): the session user's shell.
+    let mut found: Vec<PathBuf> = std::fs::read_dir("/run/user")
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path().join("mortar-shell.sock"))
+        .filter(|p| p.exists())
+        .collect();
+    found.sort();
+    found.into_iter().next().unwrap_or(own)
 }
 
 pub fn listen(handle: &LoopHandle<'static, Shell>, path: &Path) -> Result<(), String> {

@@ -29,6 +29,7 @@
 let
   inherit (lib) mkOption mkEnableOption types;
   cfg = config.mortar.play;
+  owner = "${cfg.user} ${config.users.users.${cfg.user}.group}";
   lr = pkgs.libretro;
 
   coreFile = pkg: "${pkg}/lib/retroarch/cores/${lib.replaceStrings [ "-" ] [ "_" ] pkg.core}_libretro${pkgs.stdenv.hostPlatform.extensions.sharedLibrary}";
@@ -326,6 +327,17 @@ in
       description = "ROMs (roms/<folder>), BIOS (bios/), saves, states and recents.";
     };
 
+    user = mkOption {
+      type = types.str;
+      default = config.mortar.user.name or "root";
+      defaultText = lib.literalExpression "config.mortar.user.name";
+      description = ''
+        Owner of dataDir and its folders: the session user, who plays (and
+        writes saves, states, recents). ROMs and BIOS copied in as root over
+        SSH stay readable to it.
+      '';
+    };
+
     extraRomDirs = mkOption {
       type = types.listOf types.str;
       default = [ "~/Games" ];
@@ -399,8 +411,8 @@ in
           environment.systemPackages = [ cfg.package launcher ];
 
           systemd.tmpfiles.rules =
-            map (d: "d ${cfg.dataDir}/${d} 0755 root root - -") [ "" "roms" "bios" "saves" "states" ]
-            ++ map (f: "d ${cfg.dataDir}/roms/${f} 0755 root root - -") (lib.unique (lib.concatMap (s: lib.take 1 s.folders) (lib.attrValues (lib.filterAttrs (_: s: !s.noContent) enabled))));
+            map (d: "d ${cfg.dataDir}/${d} 0755 ${owner} - -") [ "" "roms" "bios" "saves" "states" ]
+            ++ map (f: "d ${cfg.dataDir}/roms/${f} 0755 ${owner} - -") (lib.unique (lib.concatMap (s: lib.take 1 s.folders) (lib.attrValues (lib.filterAttrs (_: s: !s.noContent) enabled))));
         }
         (lib.optionalAttrs hasShell (
           lib.mkIf cfg.shellApp {

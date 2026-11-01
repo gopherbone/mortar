@@ -329,7 +329,7 @@ impl Shell {
                     self.osk_dirty = true;
                     self.refocus();
                 }
-                Out::OpenSetup { wifi } => self.open_setup(wifi),
+                Out::OpenSetup(p) => self.open_setup(p),
                 Out::OpenTimeZone => {
                     let dir = std::path::PathBuf::from(&self.cfg.ui.zoneinfo);
                     let ids = crate::tz::list(&dir);
@@ -393,10 +393,15 @@ impl Shell {
         self.page_dirty = true;
     }
 
-    fn open_setup(&mut self, wifi: bool) {
+    fn open_setup(&mut self, which: crate::shellui::SetupPage) {
+        use crate::shellui::SetupPage;
         use mortar_setup::ui::{SetupUi, SocketDevice};
         let Some(sock) = self.cfg.setup_socket.clone() else {
-            let m = if wifi { "Wi-Fi settings need mortar.setup.enable" } else { "Remote access needs mortar.setup.enable" };
+            let m = match which {
+                SetupPage::Wifi => "Wi-Fi settings need mortar.setup.enable",
+                SetupPage::Remote => "Remote access needs mortar.setup.enable",
+                SetupPage::Bluetooth => "Bluetooth settings need mortar.setup.enable",
+            };
             self.sui.show_toast(Toast::info(m));
             return;
         };
@@ -405,7 +410,11 @@ impl Shell {
             self.sui.show_toast(Toast::info(format!("Setup service: {e}")));
             return;
         }
-        let page = if wifi { SetupUi::wifi(dev, self.sys.clone()) } else { SetupUi::remote_access(dev, self.sys.clone()) };
+        let page = match which {
+            SetupPage::Wifi => SetupUi::wifi(dev, self.sys.clone()),
+            SetupPage::Remote => SetupUi::remote_access(dev, self.sys.clone()),
+            SetupPage::Bluetooth => SetupUi::bluetooth(dev, self.sys.clone()),
+        };
         self.sui.open_page(page);
         self.page_tick = Some(Instant::now() + Duration::from_secs(1));
         self.page_dirty = true;

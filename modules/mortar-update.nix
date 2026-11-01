@@ -209,8 +209,8 @@ in
       };
     };
 
-    # Sessions normally run as root; for other greeter profiles, members of
-    # the mortar-update group may start these units.
+    # The session user (modules/mortar-user.nix) and other members of the
+    # mortar-update group may start these units.
     users.groups.mortar-update = { };
     security.polkit.extraConfig = lib.mkIf config.security.polkit.enable ''
       polkit.addRule(function(action, subject) {

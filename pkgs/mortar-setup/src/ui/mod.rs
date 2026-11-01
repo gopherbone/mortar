@@ -7,7 +7,7 @@
 //! a `Ui` canvas, takes buttons, and talks to a `Device` (the daemon over
 //! its control socket, or a demo stand-in for screenshots). The first-boot
 //! program (`mortar-setup ui`) drives it with a KMS backend; mortar-shell
-//! embeds it for Settings > Remote access and Settings > Wi-Fi.
+//! embeds it for Settings > Remote access, Wi-Fi and Bluetooth.
 
 use crate::control::{Client, Request, Status};
 use mortar_ui::gfx::Ui;
@@ -16,6 +16,7 @@ use mortar_ui::status::Sys;
 use mortar_ui::toolkit::{self, Hint, StatusInfo};
 use std::time::{Duration, Instant};
 
+pub mod bluetooth;
 pub mod demo;
 pub mod keyboard;
 pub mod pages;
@@ -190,6 +191,11 @@ impl SetupUi {
         SetupUi::with(|cx| Box::new(pages::WifiList::new(cx)), dev, sys, Mode::Settings)
     }
 
+    /// Settings > Bluetooth.
+    pub fn bluetooth(dev: Box<dyn Device>, sys: Sys) -> SetupUi {
+        SetupUi::with(|cx| Box::new(bluetooth::BtList::new(cx)), dev, sys, Mode::Settings)
+    }
+
     /// Any page by name, for screenshots and tests.
     pub fn named(name: &str, dev: Box<dyn Device>, sys: Sys, mode: Mode) -> Option<SetupUi> {
         let mut err = false;
@@ -205,6 +211,7 @@ impl SetupUi {
                     "ready" => Box::new(pages::Ready::default()),
                     "remote" => Box::new(pages::RemoteAccess::default()),
                     "keys" => Box::new(pages::KeysList::default()),
+                    "bluetooth" => Box::new(bluetooth::BtList::new(cx)),
                     _ => {
                         err = true;
                         Box::new(pages::Welcome::default())
