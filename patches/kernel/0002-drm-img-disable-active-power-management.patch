@@ -1,0 +1,14 @@
+Brick: turn off PowerVR Active Power Management by default.
+
+APM powers the GPU down after a few seconds idle. The A133 GPU power
+domain on this kernel cannot complete a non-forced power-off ("GPU power
+failure at non-forced OFF did not reach HOST; reboot required"), which
+latches the GPU until reboot after the first GL app exits. Keep it on.
+
+--- a/drivers/gpu/drm/img/img-rogue/config_kernel.h
++++ b/drivers/gpu/drm/img/img-rogue/config_kernel.h
+@@ -76,3 +76,3 @@
+ #define PVRSRV_APPHINT_KCCB_SIZE_LOG2 7
+-#define PVRSRV_APPHINT_ENABLEAPM RGX_ACTIVEPM_DEFAULT
++#define PVRSRV_APPHINT_ENABLEAPM RGX_ACTIVEPM_FORCE_OFF
+ #define PVRSRV_APPHINT_ENABLEHTBLOGGROUP 0

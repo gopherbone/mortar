@@ -77,6 +77,12 @@ buildLinux (
         name = "drm-img-dc-bridge-stock-1.19-command-order";
         patch = ../patches/kernel/0001-drm-img-dc-bridge-stock-1.19-command-order.patch;
       }
+      {
+        # GPU idle power-off can't complete on this power domain and latches
+        # the GPU until reboot; keep the GPU powered.
+        name = "drm-img-disable-active-power-management";
+        patch = ../patches/kernel/0002-drm-img-disable-active-power-management.patch;
+      }
     ];
     # Makefile at this rev is 7.3.0; the defconfig sets CONFIG_LOCALVERSION="-brick-dev"
     # and disables LOCALVERSION_AUTO. The fetched source has no .git, so
