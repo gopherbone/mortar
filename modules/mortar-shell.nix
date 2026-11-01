@@ -129,7 +129,9 @@ let
     description = "foot · START for keyboard";
     icon = "term";
     gamepad = "keyboard";
-    singleInstance = false;
+    # Opening Terminal switches to the one already running; "New terminal"
+    # (below) starts another.
+    singleInstance = true;
     order = 5;
     command = cfg.terminal.command;
     env = { };
@@ -148,7 +150,15 @@ let
 
   allApps =
     (lib.optionalAttrs (cfg.importGreeterSessions && greeter.enable) fromGreeter)
-    // (lib.optionalAttrs cfg.terminal.enable { terminal = terminalApp; })
+    // (lib.optionalAttrs cfg.terminal.enable {
+      terminal = terminalApp;
+      terminal-new = terminalApp // {
+        name = "New terminal";
+        description = "Another foot window";
+        singleInstance = false;
+        order = 6;
+      };
+    })
     // cfg.apps;
 
   sorted = lib.sort (a: b: if a.order == b.order then a.id < b.id else a.order < b.order) (
