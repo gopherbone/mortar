@@ -5,10 +5,10 @@
 //! even gaps (grout) between them: no hairlines, no fades, no
 //! translucency.
 //!
-//! - Apps: thick zig-zag bands that inch across, one grid step at a time
-//!   with a short eased hop (each tile a moment after the one ahead, like
-//!   a caterpillar), bands in alternating colours and directions, out of
-//!   phase.
+//! - Apps: fixed, regular zig-zag paths (two tiles thick, evenly spaced)
+//!   of which only a window of 12 columns shows; the window snakes along,
+//!   its head tile growing in and its tail tile shrinking out a step at a
+//!   time, each band out of phase, alternate bands the other way.
 //! - Games: Conway's Game of Life on 28 px tiles, stepped 4 times a
 //!   second, each tile growing in and shrinking out; newborn tiles yellow,
 //!   older ones lime; a glider drops in when it dies out or repeats.
@@ -20,7 +20,7 @@
 //!   wave travels down the diagonal and turns each tile 90 degrees with an
 //!   eased step, so the curves re-route.
 //!
-//! ▲▼ nudges it (`nudge`): the inchworms hurry, one Life generation, the
+//! ▲▼ nudges it (`nudge`): the zig-zag windows hurry, one Life generation, the
 //! scope's next ratio, the Truchet wave pushed along. Nothing runs while
 //! the cross is not on screen; Reduce motion keeps it still. All of it is
 //! a few hundred solid quads a frame.
@@ -50,9 +50,30 @@ const NCOL: i32 = 37;
 /// The first column in the strip ((STRIP_X - OX) / GRID).
 const STRIP_COL: usize = 28;
 
-/// The inchworm step: a hop every STEP s, taking HOP s of it.
-const STEP: f32 = 0.9;
-const HOP: f32 = 0.32;
+/// The zig-zags' drawing window: WIN columns of the path show; it moves
+/// a column every STEP s, the new head tile growing in (and the tail tile
+/// shrinking out) over the first HOP s of each step.
+const WIN: i32 = 12;
+const STEP: f32 = 0.2;
+const HOP: f32 = 0.12;
+/// The zig-zag: rows by column (period 4, amplitude 2), two tiles thick;
+/// bands every BAND_GAP rows.
+const ZIG: [f32; 4] = [0.0, 1.0, 2.0, 1.0];
+const BAND_GAP: f32 = 5.0;
+const BANDS: usize = 6;
+
+/// Where band `band`'s window is at clock `t`: the head's index along the
+/// path (0..path length) and how far its tile has grown (0..1). The path is
+/// the screen's columns plus the window, so a window draws in, crosses
+/// and leaves before it starts again.
+fn window(t: f32, band: usize) -> (i32, f32) {
+    let len = NCOL + WIN;
+    // evenly spread phases (and a little uneven, so they never line up)
+    let pos = t / STEP + band as f32 * (len as f32 / BANDS as f32 + 1.7);
+    let k = pos.floor();
+    let grow = ease((pos - k) * STEP / HOP);
+    ((k as i64).rem_euclid(len as i64) as i32, grow)
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
@@ -211,7 +232,7 @@ impl Default for Life {
 pub struct Patterns {
     /// Pattern time (seconds; still with Reduce motion).
     pub t: f32,
-    /// The inchworms' clock: runs faster for a moment after a nudge.
+    /// The zig-zags' clock: runs faster for a moment after a nudge.
     pub inch_t: f32,
     /// The scope's frequency ratio (shown, easing to `ratio_to`).
     ratio: f32,
@@ -287,35 +308,33 @@ impl Patterns {
         b.clip(None);
     }
 
-    /// Inchworms: zig-zag bands two tiles thick, each stepping one grid
-    /// unit at a time; a tile hops a moment after the one ahead of it.
+    /// Zig-zags: fixed, regular paths (the same shape for every band,
+    /// evenly spaced) of which only a window of WIN columns shows; the
+    /// window snakes along, drawing at its head and erasing at its tail, a
+    /// tile at a time.
     fn zigzag(&self, b: &mut B, pal: &Pal) {
         let cols = [pal.yellow, pal.lavender, pal.dark];
-        let tri = [0.0, 1.0, 2.0, 1.0];
-        let n = NCOL;
-        // how far a clock has inched (grid units): whole steps, then an
-        // eased hop at the start of each
-        let inched = |t: f32| (t / STEP).floor() + ease(((t / STEP).fract() * STEP) / HOP);
-        for band in 0..6 {
-            let base = band as f32 * 5.0 - 1.0;
-            let dir = if band % 2 == 0 { 1.0 } else { -1.0 };
+        for band in 0..BANDS {
+            let base = band as f32 * BAND_GAP - 1.0;
             let col = cols[band % 3];
-            let clock = self.inch_t - band as f32 * 0.37;
-            // the band repeats every 4 columns: count from a whole period
-            // behind it, so the numbers stay small
-            let period = (inched(clock) / 4.0).floor() * 4.0;
-            for q in -8..n + 8 {
-                // the front hops first, each tile behind it a moment later
-                let lag = if dir > 0.0 { (n + 8 - q) as f32 } else { (q + 8) as f32 } * 0.025;
-                let s = inched(clock - lag) - period;
-                let x = q as f32 + s * dir;
-                if x < -1.0 || x > n as f32 + 1.0 {
+            let (head, grow) = window(self.inch_t, band);
+            // from the tail being erased to the head being drawn
+            for i in (head - WIN)..=head {
+                if !(0..NCOL).contains(&i) {
                     continue;
                 }
-                let row = base + tri[q.rem_euclid(4) as usize];
-                for r in 0..2 {
-                    tile(b, x, row + r as f32, 1.0, 0.0, col);
-                }
+                let s = if i == head {
+                    grow
+                } else if i == head - WIN {
+                    1.0 - grow
+                } else {
+                    1.0
+                };
+                // alternate bands run the other way along the screen
+                let c = if band % 2 == 0 { i } else { NCOL - 1 - i };
+                let row = base + ZIG[c.rem_euclid(4) as usize];
+                tile(b, c as f32, row, s, 0.0, col);
+                tile(b, c as f32, row + 1.0, s, 0.0, col);
             }
         }
     }
@@ -459,18 +478,31 @@ mod tests {
     }
 
     #[test]
-    fn inchworms_step_and_rest_on_the_grid() {
-        // between hops the shift is a whole number of grid units
-        let t = 3.0 * STEP + HOP + 0.1;
-        let k = (t / STEP).floor();
-        let hop = ease(((t / STEP).fract() * STEP) / HOP);
-        assert_eq!(k + hop, 4.0);
-        // a nudge hurries them
+    fn zigzag_window_draws_and_erases_along_a_fixed_path() {
+        // the head moves one column a step; its tile grows over HOP
+        let (h0, g0) = window(0.0, 0);
+        let (h1, g1) = window(STEP + HOP + 0.01, 0);
+        assert_eq!(h1, (h0 + 1) % (NCOL + WIN));
+        assert!(g0 < 0.01 && g1 > 0.99, "{g0} {g1}");
+        // bands are out of phase: never all in the strip at once
+        let in_strip = |t: f32| (0..BANDS).filter(|b| {
+            let (h, _) = window(t, *b);
+            (h - WIN + 1..=h).any(|i| {
+                let c = if b % 2 == 0 { i } else { NCOL - 1 - i };
+                (0..NCOL).contains(&i) && c as usize >= STRIP_COL
+            })
+        }).count();
+        for k in 0..200 {
+            let n = in_strip(k as f32 * 0.37);
+            assert!(n < BANDS, "at {k}: {n} bands in the strip");
+        }
+        assert!((0..200).any(|k| in_strip(k as f32 * 0.37) >= 2));
+        // a nudge hurries the windows
         let mut p = Patterns::new();
-        p.step(0.1);
+        p.step(0.05);
         let a = p.inch_t;
         p.nudge(Kind::Zigzag, 1.0);
-        p.step(0.1);
+        p.step(0.05);
         assert!(p.inch_t - a > 0.12, "a 50 ms step went {}", p.inch_t - a);
     }
 

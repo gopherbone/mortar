@@ -20,7 +20,7 @@ pkgs/mortar-shell/
   src/cross.rs       the MENU: Running page, the cross, glass (a child
                      module of shellui)
   src/menupages.rs   the MENU's glass pages: Wi-Fi, Bluetooth, Mixer
-  src/patterns.rs    the cross's background patterns (mosaics: inchworms, Life, a scope, Truchet tiles)
+  src/patterns.rs    the cross's background patterns (mosaics: zig-zags, Life, a scope, Truchet tiles)
   src/mixer.rs       PipeWire output streams from pw-dump (the Mixer)
   src/radio.rs       Wi-Fi / Bluetooth on/off (rfkill)
   src/motion.rs      springs and the Bouncy/Calm/Snappy presets
@@ -230,10 +230,12 @@ blocks with 1 px ink outlines, isometric illustrations.
     edge, full height, clear of the selected band and of every
     category's icon and name): solid tiles in full palette colours on a
     28 px grid with 4 px of grout, no hairlines, fades or translucency.
-    Apps: inchworms, zig-zag bands two tiles thick in yellow, lavender
-    and ink, each inching one grid step at a time with a short eased hop
-    (the front tile first, the rest a moment after, like a caterpillar),
-    neighbouring bands going opposite ways, out of phase. Games: Conway's
+    Apps: zig-zags, fixed and perfectly regular paths two tiles thick
+    (the same shape for every band, evenly spaced) in yellow, lavender
+    and ink, of which only a window of 12 columns shows: it snakes along,
+    its head tile growing in and its tail tile shrinking out a column
+    every 0.2 s, each band out of phase so a few segments show at a time
+    (alternate bands run the other way). Games: Conway's
     Game of Life on the grid (37 x 27, see below) stepped 4 times a second,
     each tile growing in and shrinking out over ~120 ms, newborn tiles
     yellow and older ones lime; it starts from an R-pentomino and two
@@ -247,7 +249,7 @@ blocks with 1 px ink outlines, isometric illustrations.
     corners; a wave travels down the diagonal and turns each tile a
     quarter turn with an eased step, so the curves re-route. A category
     change pushes the old pattern out and the new one in, the way the
-    categories move, on a spring; ▲▼ nudge it (the inchworms hurry, one
+    categories move, on a spring; ▲▼ nudge it (the zig-zag windows hurry, one
     Life generation, the scope's next ratio, the Truchet wave pushed
     on). It runs only while the cross shows and nothing covers it;
     Reduce motion keeps it on a still frame. (A lava lamp came first, then
