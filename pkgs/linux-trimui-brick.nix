@@ -53,15 +53,19 @@
 }@args:
 
 let
-  # Head of `brick-hardware` at the time of packaging:
-  #   16c9256 "arm64: configs: retain Brick LED triggers" (2026-10-31)
-  rev = "16c9256695e6f12a9e70b3a427189a76127821f8";
+  # The kernel jkingston's trimui-brick-firmware (1161bc7) pins and
+  # qualifies: 91f15ef "Bluetooth: hci_xradio: require configured public
+  # address" (2026-10-30). `brick-hardware` HEAD (16c9256, 2026-10-31) is 13
+  # commits newer and its defconfig rewrite (25238f9) dropped AUTOFS_FS,
+  # BPF_SYSCALL, CGROUP_BPF, AUDIT and KEYS; we force those on below anyway,
+  # so moving to a newer rev only needs the hash updated.
+  rev = "91f15effb15f3752f50d46ac70c8d296c8a9c179";
 in
 buildLinux (
   args
   // {
     version = "7.3.0";
-    # Makefile is 7.3.0; the defconfig sets CONFIG_LOCALVERSION="-brick-dev"
+    # Makefile at this rev is 7.3.0; the defconfig sets CONFIG_LOCALVERSION="-brick-dev"
     # and disables LOCALVERSION_AUTO. The fetched source has no .git, so
     # setlocalversion appends nothing else.
     modDirVersion = "7.3.0-brick-dev";
@@ -104,12 +108,16 @@ buildLinux (
       TMPFS_POSIX_ACL = yes;
       TMPFS_XATTR = yes;
       SECCOMP = yes;
-      # DMIID is in the systemd list. On arm64 DMI depends on EFI, which the
-      # defconfig disables. Enabling EFI only adds the EFI stub/runtime code;
-      # U-Boot's `booti` still boots the Image directly.
-      EFI = yes;
-      DMI = yes;
-      DMIID = yes;
+      AUDIT = yes;
+      KEYS = yes;
+      # DMIID is also in systemd's requiredKernelConfig list, but on arm64
+      # DMI depends on EFI, which this defconfig (and the boot chain) does
+      # not use. It is deliberately left off: systemd only uses it for
+      # hardware identification (hostnamectl vendor/model), and the NixOS
+      # assertion is skipped for buildLinux kernels (they have
+      # passthru.features). VERIFY: if `nixos-rebuild`/eval ever reports a
+      # DMIID assertion on the pinned nixpkgs, either enable EFI+DMI+DMIID
+      # here or filter it out of system.requiredKernelConfig.
 
       # Other things a NixOS userspace expects
       UNIX = yes;
