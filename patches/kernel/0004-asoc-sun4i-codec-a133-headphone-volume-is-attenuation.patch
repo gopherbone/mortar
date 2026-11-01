@@ -1,0 +1,55 @@
+ASoC: sun4i-codec: A133 headphone/speaker analog gain is an attenuator.
+
+DAC_ANALOG (0x310) bits 30:28 attenuate HPOUT in 6 dB steps: 0 = 0 dB,
+7 = -42 dB. The control exposed the raw field, so "Headphone 7/7" was
+the quietest setting. On the Brick the external speaker amplifier takes
+its input from HPOUT, so the speaker was 42 dB down. Measured with the
+onboard mic during a 1 kHz tone: raw 0/3/7 = -33.1/-50.6/-72.7 dBFS.
+
+The vendor 4.9 driver has the same field with a TLV claiming 7 = 0 dB,
+but its device tree and every A133 userspace (Bloom etc.) set raw 0;
+ClockworkPi inverted the identical D1 control for the same reason.
+
+Invert the control and give it a dB scale (-42..0 dB) so max is
+loudest, and keep the probe-time state quiet (-42 dB) until userspace
+sets a level. DAC DRC on the speaker path already matches stock
+(dacdrc_cfg = 2, speaker only).
+
+--- a/sound/soc/sunxi/sun4i-codec.c
++++ b/sound/soc/sunxi/sun4i-codec.c
+@@ -2687,7 +2687,8 @@ static int a133_component_probe(struct snd_soc_component *c)
+ 		{ SUN50I_A133_DAC_ANALOG, GENMASK(15, 12), 0 },
+ 		/* Start muted; ASoC restores the requested gains after DAPM startup. */
+ 		{ SUN50I_A133_DAC_VOL, GENMASK(16, 0), 0 },
+-		{ SUN50I_A133_DAC_ANALOG, GENMASK(30, 28), 0 },
++		/* HPOUT attenuator at its lowest (-42 dB) until userspace sets it. */
++		{ SUN50I_A133_DAC_ANALOG, GENMASK(30, 28), GENMASK(30, 28) },
+ 		{ SUN50I_A133_DAC_ANALOG, GENMASK(4, 0) | BIT(13) | BIT(12), 0 },
+ 		{ SUN50I_A133_DAC_DEBUG, BIT(6), 0 }, /* Preserve PCM channel order. */
+ 		{ SUN50I_A133_HEADPHONE, GENMASK(7, 6), 3 << 6 },
+@@ -2768,6 +2769,14 @@ out:
+ }
+ 
+ static const DECLARE_TLV_DB_SCALE(a133_digital_tlv, -7308, 116, 0);
++/*
++ * DAC_ANALOG[30:28] is an attenuator: 0 = 0 dB, each step -6 dB, 7 = -42 dB.
++ * The vendor 4.9 driver exposed it uninverted with a TLV claiming 7 = 0 dB;
++ * measured on the Brick (speaker into the onboard mic), raw 0/3/7 give
++ * 0/-17.5/-39.6 dB. The external speaker amp is fed from HPOUT, so this is
++ * also the speaker level. Expose it inverted so 7 (max) is 0 dB.
++ */
++static const DECLARE_TLV_DB_SCALE(a133_headphone_tlv, -4200, 600, 0);
+ static const struct snd_kcontrol_new a133_controls[] = {
+ 	SOC_DOUBLE("ADC Capture Volume", SUN50I_A133_ADC_VOL, 8, 0, 255, 0),
+ 	SOC_SINGLE("MIC1 Capture Gain", SUN50I_A133_ADCL, 8, 31, 0),
+@@ -2776,8 +2785,8 @@ static const struct snd_kcontrol_new a133_controls[] = {
+ 	SOC_DOUBLE_EXT("DAC Digital Playback Volume", SUN50I_A133_DAC_VOL,
+ 		       8, 0, 255, 0, a133_dac_volume_get, a133_dac_volume_put),
+ 	SOC_SINGLE_TLV("DAC Playback Volume", SUN50I_A133_DAC_DPC, 12, 63, 1, a133_digital_tlv),
+-	/* Analog TLV deliberately omitted until vendor gain curves audited. */
+-	SOC_SINGLE("Headphone Playback Volume", SUN50I_A133_DAC_ANALOG, 28, 7, 0),
++	SOC_SINGLE_TLV("Headphone Playback Volume", SUN50I_A133_DAC_ANALOG, 28, 7, 1,
++		       a133_headphone_tlv),
+ };
+ static const struct snd_soc_dapm_widget a133_widgets[] = {
+ 	SND_SOC_DAPM_SUPPLY("ADC DAP", SUN50I_A133_ADC_DAP, 31, 0, NULL, 0),

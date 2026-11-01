@@ -90,6 +90,13 @@ buildLinux (
         name = "drm-sun4i-brick-display-engine-dram-priority";
         patch = ../patches/kernel/0003-drm-sun4i-brick-display-engine-dram-priority.patch;
       }
+      {
+        # The A133 HPOUT gain field is an attenuator (0 = 0 dB, 7 = -42 dB)
+        # but was exposed raw, so "Headphone 7/7" was the quietest setting,
+        # and the speaker amp is fed from HPOUT. Invert it, add a dB scale.
+        name = "asoc-sun4i-codec-a133-headphone-volume-is-attenuation";
+        patch = ../patches/kernel/0004-asoc-sun4i-codec-a133-headphone-volume-is-attenuation.patch;
+      }
     ];
     # Makefile at this rev is 7.3.0; the defconfig sets CONFIG_LOCALVERSION="-brick-dev"
     # and disables LOCALVERSION_AUTO. The fetched source has no .git, so
