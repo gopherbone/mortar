@@ -24,6 +24,8 @@ commands:
   daemon           pairing service (usb0), control socket, Wi-Fi
   ui               first-boot setup screens (exits when setup is done)
   status           print the daemon's state as JSON
+  finish           mark first-boot setup as done (skip the screens)
+  new-code         show a fresh pairing code (as if Y was pressed)
   screenshot       render one screen with demo data to a PNG
   check-password   PAM helper (pam_exec expose_authtok): is the password
                    the pairing code? Uses PAM_USER, PAM_RHOST.
@@ -329,6 +331,13 @@ fn run() -> Result<i32, String> {
         "status" => {
             let s = Client::new(socket(&a)).status()?;
             println!("{}", serde_json::to_string_pretty(&s).unwrap_or_default());
+            Ok(0)
+        }
+        "finish" => Client::new(socket(&a)).act(Request::Finish).map(|_| 0),
+        "new-code" => {
+            let c = Client::new(socket(&a));
+            c.act(Request::NewCode)?;
+            println!("{}", c.status()?.pairing.map(|p| p.code).unwrap_or_default());
             Ok(0)
         }
         "ui" => run_ui(&a),
