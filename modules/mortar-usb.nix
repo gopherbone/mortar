@@ -2,13 +2,13 @@
 #
 # Mortar: talk to the Brick over its USB-C port.
 #
-#   - configfs USB gadget: CDC-ACM serial (ttyGS0, with a getty) + CDC-NCM
-#     network (usb0), Linux Foundation multifunction composite IDs
+#   - configfs USB gadget: CDC-ACM serial (ttyGS0, with a getty) + CDC-ECM
+#     or CDC-NCM network (usb0), Linux Foundation multifunction composite IDs
 #   - usb0 = 10.55.0.1/24 with networkd's DHCP server, mDNS as mortar.local
 #   - "black box" boot logs copied to the FAT /boot partition
 #   - root SSH key
 #
-# Needs a kernel with USB_CONFIGFS{,_ACM,_NCM} and a UDC (MUSB on the Brick),
+# Needs a kernel with USB_CONFIGFS{,_ACM,_ECM,_NCM} and a UDC (MUSB on the Brick),
 # i.e. hardware.trimui-brick.variant = "mainline".
 { config, lib, pkgs, ... }:
 
@@ -55,7 +55,7 @@ let
       echo 0x0100 > bcdDevice
       echo 0x0200 > bcdUSB
       # Miscellaneous / Common / Interface Association: lets hosts (macOS in
-      # particular) bind ACM and NCM as separate functions.
+      # particular) bind ACM and ECM/NCM as separate functions.
       echo 0xEF > bDeviceClass
       echo 0x02 > bDeviceSubClass
       echo 0x01 > bDeviceProtocol
@@ -171,11 +171,20 @@ in
     };
 
     network = lib.mkOption {
-      type = lib.types.enum [ "ncm" "ecm" ];
-      default = "ncm";
+      type = lib.types.enum [ "ecm" "ncm" ];
+      # ECM first: it is what jkingston's firmware ships (ACM+ECM) and is
+      # known to work with macOS out of the box. NCM (faster, also native
+      # on recent macOS) is one option flip away; the kernel has both.
+      #
+      # Offering ACM+ECM+NCM at once is not possible: the Brick's MUSB
+      # config has 5 IN endpoints and that combination needs 6 (ACM
+      # notify+bulk, ECM notify+bulk, NCM notify+bulk). A second USB
+      # configuration would fit, but macOS and Linux hosts select
+      # configuration 1, so it would not act as a fallback.
+      default = "ecm";
       description = ''
-        USB network function. macOS supports CDC-NCM natively; switch to
-        "ecm" if a host refuses it.
+        USB network function paired with the ACM serial port: CDC-ECM or
+        CDC-NCM. Both appear as interface usb0 on the Brick.
       '';
     };
 
