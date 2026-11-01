@@ -67,6 +67,8 @@ impl Raster {
         pm.fill(scene.clear.sk());
         let mut mask: Option<tiny_skia::Mask> = None;
         let mut clip_rect: Option<[f32; 4]> = None;
+        // the lava field, computed once a frame
+        let mut field: Option<Vec<f32>> = None;
         for it in &scene.items {
             let m = mask.as_ref();
             match it {
@@ -110,6 +112,10 @@ impl Raster {
                     }
                 }
                 Item::Text(run) => self.text(pm, typo, run, clip_rect, m),
+                Item::Lava(l) => {
+                    let f = field.get_or_insert_with(|| l.prims.field());
+                    draw_lava(pm, f, l, clip_rect);
+                }
                 Item::Image { src, quad, uv, alpha } => {
                     if let Some(img) = images.get(*src) {
                         draw_image(pm, img, quad, uv, *alpha, m);
@@ -190,6 +196,65 @@ pub fn draw_image(pm: &mut Pixmap, img: &Pixmap, quad: &[(f32, f32); 4], uv: &[f
     p.anti_alias = true;
     if let Some(path) = path(quad, true) {
         pm.fill_path(&path, &p, FillRule::Winding, Transform::identity(), mask);
+    }
+}
+
+/// The lava lamp from its quarter-resolution field (as comp/gl.rs
+/// FS_LAVA): bilinear distance, fill inside, an ink edge EDGE px out, the
+/// ink shadow SHADOW px down and right.
+fn draw_lava(pm: &mut Pixmap, field: &[f32], l: &crate::scene::LavaDraw, clip: Option<[f32; 4]>) {
+    use crate::lava::{EDGE, FH, FW, LH, LW, LX0, SHADOW};
+    let (pw, ph) = (pm.width() as i32, pm.height() as i32);
+    let x0 = LX0 + l.dx;
+    let (mut cx0, mut cy0, mut cx1, mut cy1) = (x0.floor() as i32, 0, (x0 + LW).ceil() as i32, LH as i32);
+    if let Some(r) = clip {
+        cx0 = cx0.max(r[0].round() as i32);
+        cy0 = cy0.max(r[1].round() as i32);
+        cx1 = cx1.min((r[0] + r[2]).round() as i32);
+        cy1 = cy1.min((r[1] + r[3]).round() as i32);
+    }
+    let (cx0, cy0, cx1, cy1) = (cx0.max(0), cy0.max(0), cx1.min(pw), cy1.min(ph));
+    let sample = |x: f32, y: f32| -> f32 {
+        let fx = (x / 4.0 - 0.5).clamp(0.0, FW as f32 - 1.0);
+        let fy = (y / 4.0 - 0.5).clamp(0.0, FH as f32 - 1.0);
+        let (i, j) = (fx.floor() as usize, fy.floor() as usize);
+        let (i1, j1) = ((i + 1).min(FW - 1), (j + 1).min(FH - 1));
+        let (tx, ty) = (fx - i as f32, fy - j as f32);
+        let a = field[j * FW + i] * (1.0 - tx) + field[j * FW + i1] * tx;
+        let b = field[j1 * FW + i] * (1.0 - tx) + field[j1 * FW + i1] * tx;
+        a * (1.0 - ty) + b * ty
+    };
+    let ss = |e0: f32, e1: f32, x: f32| {
+        let t = ((x - e0) / (e1 - e0)).clamp(0.0, 1.0);
+        t * t * (3.0 - 2.0 * t)
+    };
+    let aa = l.soft.max(0.5);
+    let pmc = |c: Color| [c.0 as f32 * c.3 as f32 / 255.0, c.1 as f32 * c.3 as f32 / 255.0, c.2 as f32 * c.3 as f32 / 255.0, c.3 as f32];
+    let (fill, ink) = (pmc(l.fill), pmc(l.ink));
+    let data = pm.data_mut();
+    for y in cy0..cy1 {
+        for x in cx0..cx1 {
+            let (lx, ly) = (x as f32 + 0.5 - x0, y as f32 + 0.5);
+            let d = sample(lx, ly);
+            let ds = sample(lx - SHADOW, ly - SHADOW);
+            if d > EDGE + aa && ds > EDGE + aa {
+                continue;
+            }
+            let f = 1.0 - ss(-aa, aa, d);
+            let ia = (1.0 - ss(EDGE - aa, EDGE + aa, d)).max(1.0 - ss(EDGE - aa, EDGE + aa, ds));
+            let mut c = [0f32; 4];
+            for k in 0..4 {
+                c[k] = (fill[k] * f + ink[k] * ia * (1.0 - f)) * l.alpha;
+            }
+            if c[3] <= 0.0 {
+                continue;
+            }
+            let o = ((y * pw + x) * 4) as usize;
+            let inv = 1.0 - c[3] / 255.0;
+            for k in 0..4 {
+                data[o + k] = (c[k] + data[o + k] as f32 * inv).round().clamp(0.0, 255.0) as u8;
+            }
+        }
     }
 }
 

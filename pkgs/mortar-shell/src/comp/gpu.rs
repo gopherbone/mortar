@@ -77,7 +77,16 @@ pub struct GpuUi {
     pub render_avg_ms: f32,
     pub blur_ms: f32,
     pub blur_count: u64,
+    /// The lava lamp's field (quarter resolution), while it shows.
+    lava: Option<Fbo>,
+    /// The lava field pass's GPU time (ms), sampled every LAVA_SAMPLE
+    /// frames (it needs a glFinish of its own).
+    pub lava_ms: f32,
+    lava_frames: u64,
 }
+
+/// Every this many lava frames, the field pass is timed.
+const LAVA_SAMPLE: u64 = 30;
 
 impl GpuUi {
     pub fn new(drm: &DrmDeviceFd, size: (i32, i32), dir: &Path, msaa: u32) -> Result<GpuUi, String> {
@@ -98,6 +107,9 @@ impl GpuUi {
             render_avg_ms: 0.0,
             blur_ms: 0.0,
             blur_count: 0,
+            lava: None,
+            lava_ms: 0.0,
+            lava_frames: 0,
         };
         for _ in 0..2 {
             match me.alloc(size) {
@@ -198,6 +210,7 @@ impl GpuUi {
             })
             .collect();
         let blur = &self.blur;
+        let lava = &self.lava;
         let lookup = |src: Src| -> Option<(u32, bool, bool, i32, i32)> {
             let t = match src {
                 Src::App(u) => {
@@ -209,6 +222,10 @@ impl GpuUi {
                     return Some((b.a.tex, false, true, b.a.w, b.a.h));
                 }
                 Src::Layer(l) => &layers.get(&l)?.1,
+                Src::Lava => {
+                    let f = lava.as_ref()?;
+                    return Some((f.tex, false, false, f.w, f.h));
+                }
             };
             Some((t.tex, t.swizzle, t.opaque, t.w, t.h))
         };
@@ -288,6 +305,7 @@ impl GpuUi {
             }
         }
         self.prepare_blur(shell, scene);
+        self.prepare_lava(scene);
         // CPU layers
         for (l, pm) in [(Layer::Osk, shell.cpu_imgs.osk.as_ref()), (Layer::Page, shell.cpu_imgs.page.as_ref())] {
             let Some(pm) = pm else {
@@ -369,6 +387,44 @@ impl GpuUi {
         }
     }
 
+    /// The lava lamp's field for this frame (one pass into a 160x192 FBO);
+    /// freed when the lamp is not shown, so a closed MENU costs nothing.
+    fn prepare_lava(&mut self, scene: &Scene) {
+        let prims = match scene.lava() {
+            Some(p) if self.gl.has_lava() => *p,
+            _ => {
+                if let Some(f) = self.lava.take() {
+                    self.gl.drop_fbo(f);
+                }
+                return;
+            }
+        };
+        if self.lava.is_none() {
+            match self.gl.fbo(crate::lava::FW as i32, crate::lava::FH as i32) {
+                Ok(f) => self.lava = Some(f),
+                Err(e) => {
+                    tracing::warn!("lava: {e}");
+                    return;
+                }
+            }
+        }
+        let Some(f) = self.lava.take() else { return };
+        self.lava_frames += 1;
+        let timed = self.lava_frames % LAVA_SAMPLE == 1;
+        if timed {
+            self.gl.finish();
+        }
+        let t0 = Instant::now();
+        if let Err(e) = self.gl.lava_field(&f, &prims) {
+            tracing::warn!("lava: {e}");
+        }
+        if timed {
+            self.gl.finish();
+            self.lava_ms = t0.elapsed().as_secs_f32() * 1000.0;
+        }
+        self.lava = Some(f);
+    }
+
     /// A client buffer was destroyed: free its texture (every frame is
     /// finished before the next starts, so nothing on the GPU uses it).
     pub fn forget(&mut self, id: &ObjectId) {
@@ -411,6 +467,9 @@ impl GpuUi {
         if let Some(b) = self.blur.take() {
             self.gl.drop_fbo(b.a);
             self.gl.drop_fbo(b.b);
+        }
+        if let Some(f) = self.lava.take() {
+            self.gl.drop_fbo(f);
         }
         for b in &mut self.bufs {
             if let Some(t) = b.target.take() {

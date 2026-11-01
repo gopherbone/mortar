@@ -78,6 +78,8 @@ pub enum Src {
     Blur(u32),
     /// A CPU-drawn layer (mortar-ui toolkit screens).
     Layer(Layer),
+    /// The lava lamp's distance field (quarter resolution, see lava.rs).
+    Lava,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -129,6 +131,22 @@ pub enum Item {
     Image { src: Src, quad: [P; 4], uv: [f32; 4], alpha: f32 },
     /// Clip what follows to a screen rectangle (x, y, w, h), or stop clipping.
     Clip(Option<[f32; 4]>),
+    /// The lava lamp: its field thresholded into fill, ink edge and shadow.
+    Lava(Arc<LavaDraw>),
+}
+
+/// One draw of the lava lamp (lava.rs): the shapes in lamp space, moved
+/// `dx` across the screen (the cross page slides).
+#[derive(Clone, Debug, PartialEq)]
+pub struct LavaDraw {
+    pub prims: crate::lava::Prims,
+    pub dx: f32,
+    pub fill: Color,
+    pub ink: Color,
+    pub alpha: f32,
+    /// Half-width of the edge blend, px (1: crisp; more: soft, as seen
+    /// through frosted glass).
+    pub soft: f32,
 }
 
 #[derive(Clone, Debug)]
@@ -159,6 +177,14 @@ impl Scene {
         v.sort();
         v.dedup();
         v
+    }
+
+    /// The lava lamp's shapes this frame (renderers compute its field once).
+    pub fn lava(&self) -> Option<&crate::lava::Prims> {
+        self.items.iter().find_map(|i| match i {
+            Item::Lava(l) => Some(&l.prims),
+            _ => None,
+        })
     }
 
     /// The apps this frame shows blurred.
@@ -401,6 +427,19 @@ impl<'a> B<'a> {
             [x0.min(x1), y0.min(y1), (x1 - x0).abs(), (y1 - y0).abs()]
         });
         self.scene.items.push(Item::Clip(r));
+    }
+
+    // ------------------------------------------------------------- lava ----
+
+    /// The lava lamp, moved by the current translation (only that: the
+    /// cross page slides, nothing scales it).
+    pub fn lava(&mut self, prims: &crate::lava::Prims, fill: Color, ink: Color, soft: f32) {
+        let a = self.alpha();
+        if a <= 0.0 {
+            return;
+        }
+        let dx = self.xf().e;
+        self.scene.items.push(Item::Lava(Arc::new(LavaDraw { prims: *prims, dx, fill, ink, alpha: a, soft })));
     }
 
     // ----------------------------------------------------------- images ----

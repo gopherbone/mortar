@@ -253,7 +253,7 @@ fn state(shell: &Shell) -> String {
         "apps": apps,
         "frames": shell.backend.frames(),
         "gpu_frames": shell.backend.gpu_frames(),
-        "gpu_ms": shell.backend.gpu_stats().map(|(last, avg, blur, n)| json!({"last": last, "avg": avg, "blur": blur, "blurs": n})),
+        "gpu_ms": shell.backend.gpu_stats().map(|(last, avg, blur, n, lava)| json!({"last": last, "avg": avg, "blur": blur, "blurs": n, "lava": lava})),
         "scanout_frames": shell.backend.scanout_frames(),
         "rss_kib": rss_kib(),
         "inputs": shell.inputs.summary(),
