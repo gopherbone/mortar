@@ -1,0 +1,37 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+/*
+ * TrimUI Brick: reserve the TF-A BL31 region for Linux.
+ *
+ * Mainline TF-A runs from DRAM at 0x40000000 (BL31_LIMIT = base + 0x40000).
+ * jkingston's bootcmd added "fdt rsvmem add 0x40000000 0x40000" by hand
+ * before booti; with sysboot/extlinux the DTB comes straight from /boot, so
+ * describe the region in the tree itself, as no-map so Linux never maps (or
+ * speculatively touches) secure-world memory.
+ *
+ * U-Boot's ft_board_setup (CONFIG_SUNXI_A133_VENDOR_SCP, patch 0004) still
+ * adds /memreserve/ entries for BL31, the SCP SRAM image and the vendor
+ * region 0x48000000-0x48ffffff at boot; this node does not conflict with
+ * those (U-Boot only checks the memreserve block) and makes BL31 no-map.
+ *
+ * Applied through hardware.deviceTree.overlays (NixOS only applies it to
+ * DTBs whose root compatible matches).
+ */
+/dts-v1/;
+/plugin/;
+
+/ {
+	compatible = "trimui,brick";
+};
+
+&{/} {
+	reserved-memory {
+		#address-cells = <2>;
+		#size-cells = <2>;
+		ranges;
+
+		tf-a@40000000 {
+			reg = <0x0 0x40000000 0x0 0x40000>;
+			no-map;
+		};
+	};
+};
