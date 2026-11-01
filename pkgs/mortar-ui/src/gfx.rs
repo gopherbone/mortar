@@ -60,6 +60,11 @@ impl Rect {
     pub fn take_top(&self, h: f32) -> (Rect, Rect) {
         (Rect::new(self.x, self.y, self.w, h), Rect::new(self.x, self.y + h, self.w, (self.h - h).max(0.0)))
     }
+    /// Round to whole pixels (crisp square blocks and 1 px outlines).
+    pub fn snap(&self) -> Rect {
+        let (x0, y0) = (self.x.round(), self.y.round());
+        Rect::new(x0, y0, (self.right().round() - x0).max(0.0), (self.bottom().round() - y0).max(0.0))
+    }
     pub fn take_bottom(&self, h: f32) -> (Rect, Rect) {
         (Rect::new(self.x, self.y, self.w, (self.h - h).max(0.0)), Rect::new(self.x, self.bottom() - h, self.w, h))
     }
@@ -69,9 +74,10 @@ impl Rect {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Face {
-    Display800,
-    Display700,
-    Display800Small,
+    /// Instrument Serif: display, used sparingly (titles, names, clock).
+    Serif,
+    SerifItalic,
+    /// Onest: UI text.
     Body400,
     Body500,
     Body600,
@@ -79,15 +85,14 @@ pub enum Face {
     Mono600,
 }
 
-const FACE_FILES: [(Face, &str); 8] = [
-    (Face::Display800, "BricolageGrotesque-ExtraBold.ttf"),
-    (Face::Display700, "BricolageGrotesque-Bold.ttf"),
-    (Face::Display800Small, "BricolageGrotesque-ExtraBoldSmall.ttf"),
-    (Face::Body400, "IBMPlexSans-Regular.ttf"),
-    (Face::Body500, "IBMPlexSans-Medium.ttf"),
-    (Face::Body600, "IBMPlexSans-SemiBold.ttf"),
-    (Face::Mono400, "JetBrainsMono-Regular.ttf"),
-    (Face::Mono600, "JetBrainsMono-SemiBold.ttf"),
+const FACE_FILES: [(Face, &str); 7] = [
+    (Face::Serif, "InstrumentSerif-Regular.ttf"),
+    (Face::SerifItalic, "InstrumentSerif-Italic.ttf"),
+    (Face::Body400, "Onest-Regular.ttf"),
+    (Face::Body500, "Onest-Medium.ttf"),
+    (Face::Body600, "Onest-SemiBold.ttf"),
+    (Face::Mono400, "GeistMono-Regular.ttf"),
+    (Face::Mono600, "GeistMono-SemiBold.ttf"),
 ];
 
 /// A text style: face, pixel size, colour, CSS-like letter-spacing (em) and
@@ -196,6 +201,62 @@ impl Ui {
     pub fn fill_rect(&mut self, r: Rect, c: Color) {
         if let Some(sr) = SkRect::from_xywh(r.x, r.y, r.w, r.h) {
             self.pm.fill_rect(sr, &Self::paint(c), Transform::identity(), None);
+        }
+    }
+
+    /// A square block on whole pixels (no anti-aliased edges).
+    pub fn fill_block(&mut self, r: Rect, c: Color) {
+        let r = r.snap();
+        if let Some(sr) = SkRect::from_xywh(r.x, r.y, r.w, r.h) {
+            let mut p = Self::paint(c);
+            p.anti_alias = false;
+            self.pm.fill_rect(sr, &p, Transform::identity(), None);
+        }
+    }
+
+    /// A crisp outline `w` px wide inside `r` (CSS border, box-sizing:
+    /// border-box), drawn as four blocks so 1 px stays 1 px.
+    pub fn outline(&mut self, r: Rect, w: f32, c: Color) {
+        let r = r.snap();
+        let w = w.round().max(1.0);
+        self.fill_block(Rect::new(r.x, r.y, r.w, w), c);
+        self.fill_block(Rect::new(r.x, r.bottom() - w, r.w, w), c);
+        self.fill_block(Rect::new(r.x, r.y + w, w, r.h - 2.0 * w), c);
+        self.fill_block(Rect::new(r.right() - w, r.y + w, w, r.h - 2.0 * w), c);
+    }
+
+    /// A rounded (pill) shape filled and outlined, for toggles and pills.
+    pub fn pill_shape(&mut self, r: Rect, fill: Color, line: Color, w: f32) {
+        let rad = r.h / 2.0;
+        self.fill_rrect(r, rad, line);
+        self.fill_rrect(r.inset(w, w), rad - w, fill);
+    }
+
+    fn poly_path(pts: &[(f32, f32)], close: bool) -> Option<tiny_skia::Path> {
+        let (first, rest) = pts.split_first()?;
+        let mut pb = PathBuilder::new();
+        pb.move_to(first.0, first.1);
+        for p in rest {
+            pb.line_to(p.0, p.1);
+        }
+        if close {
+            pb.close();
+        }
+        pb.finish()
+    }
+
+    /// Fill a polygon (illustrations).
+    pub fn fill_poly(&mut self, pts: &[(f32, f32)], c: Color) {
+        if let Some(p) = Self::poly_path(pts, true) {
+            self.pm.fill_path(&p, &Self::paint(c), FillRule::Winding, Transform::identity(), None);
+        }
+    }
+
+    /// Stroke a polyline (illustrations: 1 px ink line art).
+    pub fn stroke_poly(&mut self, pts: &[(f32, f32)], close: bool, width: f32, c: Color) {
+        if let Some(p) = Self::poly_path(pts, close) {
+            let s = Stroke { width, line_join: tiny_skia::LineJoin::Round, line_cap: tiny_skia::LineCap::Round, ..Stroke::default() };
+            self.pm.stroke_path(&p, &Self::paint(c), &s, Transform::identity(), None);
         }
     }
 

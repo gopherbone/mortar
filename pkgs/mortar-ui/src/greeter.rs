@@ -9,7 +9,7 @@ use crate::gfx::{Rect, Ui};
 use crate::greetd::Reply;
 use crate::input::Button;
 use crate::quickmenu::QuickMenu;
-use crate::toolkit::{self, hint, theme, Glyph, ListState, MenuItem, PillKind};
+use crate::toolkit::{self, hint, Glyph, ListState, MenuItem, PillKind};
 use std::time::{Duration, Instant, SystemTime};
 
 pub struct Greeter {
@@ -172,7 +172,7 @@ impl Screen for Greeter {
             .collect();
         let (_, rest) = right.take_top(lh + col_gap);
         if items.is_empty() {
-            let st = toolkit::st_body(ui, 2.6, theme::DIM);
+            let st = toolkit::st_body(ui, 2.6, mortar_ui::theme::get().line_soft);
             ui.text(rest.x, rest.y, "No sessions for this profile.", &st);
         }
         toolkit::menu(ui, rest, 1.2, &items, &mut self.sessions);
@@ -345,7 +345,7 @@ impl Screen for PinPad {
         y += toolkit::title_h2(ui, body.x, y, title) + ui.cq(2.2);
         let shown: String = if self.secret { "•".repeat(self.entry.chars().count()) } else { self.entry.clone() };
         y += toolkit::text_field(ui, body.x, y, lw, &shown, None) + ui.cq(2.2);
-        let sub = toolkit::st_body(ui, 2.4, theme::DIM);
+        let sub = toolkit::st_body(ui, 2.4, mortar_ui::theme::get().line_soft);
         toolkit::paragraph(ui, body.x, y, lw, "Use the D-pad and A, or type digits on a keyboard. B with nothing typed goes back.", &sub);
 
         // keypad, 3x4, vertically centred in the right column

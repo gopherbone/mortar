@@ -1,35 +1,29 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
-# The three type families from the Mortar UI mockups, all SIL OFL 1.1:
-#   Bricolage Grotesque (display)  google/fonts at a fixed commit; it only
-#                                  ships as a variable font, so the weights
-#                                  and optical sizes the UI uses are cut into
-#                                  static instances here (fontdue can't pick
-#                                  variable-font instances at runtime).
-#   IBM Plex Sans (body)           nixpkgs ibm-plex, sans family only
-#   JetBrains Mono (mono)          nixpkgs jetbrains-mono
+# The three type families of the Mortar UI style (v2, after the "Pond"
+# visual language; see src/theme.rs), all SIL OFL 1.1, from google/fonts at
+# a fixed commit:
+#   Instrument Serif (display)  static Regular + Italic: titles, clock, names
+#   Onest (UI)                  variable; cut into static 400/500/600
+#   Geist Mono (labels, hints)  variable; cut into static 400/600
+# fontdue can't pick variable-font instances at runtime, so the weights the
+# UI uses are instanced here with fonttools.
 {
   lib,
   runCommand,
   fetchurl,
   python3Packages,
-  ibm-plex,
-  jetbrains-mono,
 }:
 
 let
-  rev = "6ce172f74aa355ea43eb964fa4a91570a4d3064d";
-  base = "https://raw.githubusercontent.com/google/fonts/${rev}/ofl/bricolagegrotesque";
-  bricolage = fetchurl {
-    name = "BricolageGrotesque-VF.ttf";
-    url = "${base}/BricolageGrotesque%5Bopsz,wdth,wght%5D.ttf";
-    hash = "sha256-QT5zV4Cd3RL9gKlqijlt4OQBY41KzTyz43Uy8EcqxoI=";
-  };
-  bricolageLicense = fetchurl {
-    name = "BricolageGrotesque-OFL.txt";
-    url = "${base}/OFL.txt";
-    hash = "sha256-S1p9jzf1YCYhyKjXNYpqLnExfmwjHGYeFa7wJ10+B7o=";
-  };
-  plex = ibm-plex.override { families = [ "sans" ]; };
+  rev = "6c1dbe27dcf7d817d4b62cec033ba77fa8e2a5ec";
+  get = path: name: hash: fetchurl { inherit name hash; url = "https://raw.githubusercontent.com/google/fonts/${rev}/ofl/${path}"; };
+  serifRegular = get "instrumentserif/InstrumentSerif-Regular.ttf" "InstrumentSerif-Regular.ttf" "sha256-SY79Rh9t38t6ERv5pWVwnSCF1IIB1QHq2WDZPoT/u4g=";
+  serifItalic = get "instrumentserif/InstrumentSerif-Italic.ttf" "InstrumentSerif-Italic.ttf" "sha256-CJObi99TSv7CSuDvXgP5SJQM2aj+COf+y60EDmIyc4U=";
+  serifLicense = get "instrumentserif/OFL.txt" "InstrumentSerif-OFL.txt" "sha256-Ep7XYYlZcWlZ8pQf3VtJ4K1ubB14cmdheGoAJT2GVSE=";
+  onest = get "onest/Onest%5Bwght%5D.ttf" "Onest-VF.ttf" "sha256-lmxcKbR1XahLaFTVwh3U6qJCAiXQ6YdN5gLeF21KnzE=";
+  onestLicense = get "onest/OFL.txt" "Onest-OFL.txt" "sha256-BxGV2IBuIm+u7mAlnCjKZ7RYInr1GVpz9c/KsG4wA7w=";
+  geistMono = get "geistmono/GeistMono%5Bwght%5D.ttf" "GeistMono-VF.ttf" "sha256-0A5ZC46zpZrMMpstBE/RQ66TUJC32jMZnr7ifMfegZY=";
+  geistMonoLicense = get "geistmono/OFL.txt" "GeistMono-OFL.txt" "sha256-F4HSgGoH2RxO30dAuIRJ+rfQ6trVP3w1G5TNTU64wA8=";
 in
 runCommand "mortar-ui-fonts"
   {
@@ -42,16 +36,19 @@ runCommand "mortar-ui-fonts"
   }
   ''
     d=$out/share/fonts/mortar-ui
-    mkdir -p $d $out/share/licenses/mortar-ui-fonts
+    l=$out/share/licenses/mortar-ui-fonts
+    mkdir -p $d $l
 
-    # name     weight  optical size (CSS opsz follows the px size it's used at)
-    cut() { fonttools varLib.instancer -q -o "$d/BricolageGrotesque-$1.ttf" ${bricolage} wght=$2 opsz=$3 wdth=100; }
-    cut ExtraBold 800 64   # screen titles (d-h, ~65 px)
-    cut Bold      700 42   # section titles (d-h2, ~43 px), tile names
-    cut ExtraBoldSmall 800 28  # profile initials (~31 px)
+    cp ${serifRegular} $d/InstrumentSerif-Regular.ttf
+    cp ${serifItalic} $d/InstrumentSerif-Italic.ttf
+    for w in 400:Regular 500:Medium 600:SemiBold; do
+      fonttools varLib.instancer -q -o "$d/Onest-''${w#*:}.ttf" ${onest} wght=''${w%%:*}
+    done
+    for w in 400:Regular 600:SemiBold; do
+      fonttools varLib.instancer -q -o "$d/GeistMono-''${w#*:}.ttf" ${geistMono} wght=''${w%%:*}
+    done
 
-    cp ${plex}/share/fonts/truetype/IBMPlexSans-{Regular,Medium,SemiBold}.ttf $d/
-    cp ${jetbrains-mono}/share/fonts/truetype/JetBrainsMono-{Regular,SemiBold}.ttf $d/
-
-    cp ${bricolageLicense} $out/share/licenses/mortar-ui-fonts/BricolageGrotesque-OFL.txt
+    cp ${serifLicense} $l/InstrumentSerif-OFL.txt
+    cp ${onestLicense} $l/Onest-OFL.txt
+    cp ${geistMonoLicense} $l/GeistMono-OFL.txt
   ''

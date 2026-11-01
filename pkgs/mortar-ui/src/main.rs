@@ -8,14 +8,13 @@
 mod app;
 mod backend;
 mod config;
-mod gfx;
 mod greetd;
 mod greeter;
-mod icons;
-mod input;
 mod quickmenu;
-mod status;
-mod toolkit;
+
+// The shared toolkit lives in the library (src/lib.rs); these imports keep
+// `crate::gfx` & co. working for the binary's own modules.
+use mortar_ui::{gfx, icons, input, status, toolkit};
 
 use app::{Ctx, Runner, Screen};
 use config::Config;
@@ -45,6 +44,7 @@ options:
   --size WxH       (screenshot) canvas size, default 1024x768
   --time HH:MM     (screenshot) clock text, default 21:40
   --ssh N          (screenshot) pretend N SSH sessions are logged in
+  --theme NAME     light (default) | dark; also $MORTAR_UI_THEME
 
 environment:
   MORTAR_UI_FONTS     font directory (default: baked in at build time)
@@ -82,6 +82,11 @@ fn parse_args() -> Result<Args, String> {
             "--screen" => a.screen = val(&mut it, &arg)?,
             "--out" => a.out = Some(val(&mut it, &arg)?.into()),
             "--time" => a.time = val(&mut it, &arg)?,
+            "--theme" => {
+                let n = val(&mut it, &arg)?;
+                let t = mortar_ui::theme::Theme::by_name(&n).ok_or(format!("unknown theme '{n}'"))?;
+                mortar_ui::theme::set(t);
+            }
             "--ssh" => a.ssh = val(&mut it, &arg)?.parse().map_err(|_| "--ssh wants a number")?,
             "--keys" => {
                 for k in val(&mut it, &arg)?.split(',').filter(|k| !k.is_empty()) {

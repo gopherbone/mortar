@@ -10,17 +10,28 @@ publish = false
 opt-level = 3
 lto = "thin"
 
+# The library (toolkit, theme, gfx, input mapping) needs only the first four
+# dependencies; the greeter binary needs the "app" feature (default).
+[features]
+default = ["app"]
+app = ["dep:greetd_ipc", "dep:serde_json", "dep:drm", "dep:evdev", "dep:minifb"]
+
+[[bin]]
+name = "mortar-ui"
+path = "src/main.rs"
+required-features = ["app"]
+
 [dependencies]
 fontdue = "0.9.5"
-greetd_ipc = { version = "0.10.3", features = ["sync-codec"] }
 libc = "0.2.191"
 resvg = { version = "0.49.0", default-features = false }
 serde = { version = "1.0.229", features = ["derive"] }
-serde_json = "1.0.154"
+greetd_ipc = { version = "0.10.3", features = ["sync-codec"], optional = true }
+serde_json = { version = "1.0.154", optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-drm = "0.15.0"
-evdev = "0.13.2"
+drm = { version = "0.15.0", optional = true }
+evdev = { version = "0.13.2", optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-minifb = "0.29.0"
+minifb = { version = "0.29.0", optional = true }
