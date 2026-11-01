@@ -1,0 +1,12 @@
+{
+  "profiles": [
+    { "user": "alex" },
+    { "user": "guest", "sessions": ["games"] }
+  ],
+  "sessions": [
+    { "id": "games", "name": "Games", "description": "Fullscreen, controller", "icon": "pad", "command": ["mortar-games"] },
+    { "id": "desktop", "name": "Desktop", "description": "Wayland, keyboard", "icon": "folder", "command": ["cage", "--", "foot"] },
+    { "id": "terminal", "name": "Terminal", "description": "Console", "icon": "term", "command": ["bash", "--login"] },
+    { "id": "ai", "name": "AI", "description": "Needs Wi-Fi", "icon": "link", "command": ["mortar-ai"], "needsWifi": true }
+  ]
+}

@@ -1,0 +1,26 @@
+[package]
+name = "mortar-ui"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-2.0-or-later"
+description = "Controller-driven UI toolkit and greetd greeter for Mortar on the TrimUI Brick"
+publish = false
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+
+[dependencies]
+fontdue = "0.9.5"
+greetd_ipc = { version = "0.10.3", features = ["sync-codec"] }
+libc = "0.2.191"
+resvg = { version = "0.49.0", default-features = false }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+drm = "0.15.0"
+evdev = "0.13.2"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+minifb = "0.29.0"
