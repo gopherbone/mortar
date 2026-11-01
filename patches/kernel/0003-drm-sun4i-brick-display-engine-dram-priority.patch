@@ -1,0 +1,93 @@
+Brick: give the display engine DRAM priority (A133 NSI arbiter).
+
+The mainline SPL leaves the A133 NSI bus arbiter at reset defaults, so
+the display engine competes with the GPU at equal priority. GPU bursts
+right after each flip starved the mixer fetch of the top rows: a band of
+grey/white stripes ~30 lines tall at the top of the panel whenever the
+GPU rendered (CPU-drawn frames were clean). Program the vendor libdram
+priorities (DE0/DE1 high, IOMMU highest) when the Brick DE comes up,
+and again on deep-sleep restore.
+
+--- a/drivers/gpu/drm/sun4i/sun8i_mixer.c	2026-10-31 23:53:51
++++ b/drivers/gpu/drm/sun4i/sun8i_mixer.c	2026-10-31 23:53:51
+@@ -530,6 +530,72 @@
+ 	return 0;
+ }
+ 
++/*
++ * A133 DRAM arbiter (NSI, 0x03100000, one 0x200 block per master): give the
++ * display engine priority over the CPU and GPU, as the vendor libdram does.
++ * The mainline SPL leaves every master at the reset priority (0), so GPU
++ * bursts at the start of each frame (right after the flip) starved the
++ * mixer's fetch of the top rows: a ~30-line band of grey/white stripes at
++ * the top of the panel whenever the GPU rendered. Table from the A133 BSP
++ * nsi driver (also in the proposed U-Boot "sunxi: a133: dram: Add NSI
++ * arbiter configuration support" patch). Per port: MODE (0x10) and ENABLE
++ * (0xc0) 0 = no bandwidth limiting, PRI_CFG (0x14) bits 3:2 read and 1:0
++ * write priority, IO_CFG (0x18) QoS select.
++ */
++#define BRICK_NSI_BASE		0x03100000
++#define BRICK_NSI_PORT(i)	((i) * 0x200)
++#define BRICK_NSI_MODE		0x10
++#define BRICK_NSI_PRI_CFG	0x14
++#define BRICK_NSI_IO_CFG	0x18
++#define BRICK_NSI_ENABLE	0xc0
++
++static void sun8i_mixer_brick_nsi_init(struct device *dev)
++{
++	/* priority (0 lowest .. 3 highest), qos select (1 input, 0 output) */
++	static const u8 ports[][2] = {
++		{ 0, 1 },	/* cpu */
++		{ 0, 1 },	/* gpu */
++		{ 0, 0 },	/* sd1 */
++		{ 0, 0 },	/* mstg */
++		{ 0, 0 },	/* gmac0 */
++		{ 0, 0 },	/* gmac1 */
++		{ 0, 0 },	/* usb0 */
++		{ 0, 0 },	/* usb1 */
++		{ 0, 0 },	/* ndfc */
++		{ 0, 0 },	/* dmac */
++		{ 0, 0 },	/* ce */
++		{ 2, 1 },	/* de0 */
++		{ 2, 1 },	/* de1 */
++		{ 0, 1 },	/* ve */
++		{ 2, 1 },	/* csi */
++		{ 2, 1 },	/* isp */
++		{ 0, 1 },	/* g2d */
++		{ 0, 0 },	/* eink */
++		{ 3, 1 },	/* iommu */
++		{ 0, 0 },	/* cpus */
++	};
++	void __iomem *nsi;
++	unsigned int i;
++
++	nsi = ioremap(BRICK_NSI_BASE, BRICK_NSI_PORT(ARRAY_SIZE(ports)));
++	if (!nsi) {
++		dev_warn(dev, "Brick NSI: ioremap failed, DE keeps default DRAM priority\n");
++		return;
++	}
++	for (i = 0; i < ARRAY_SIZE(ports); i++) {
++		void __iomem *p = nsi + BRICK_NSI_PORT(i);
++		u32 pri = ports[i][0];
++
++		writel(0, p + BRICK_NSI_MODE);
++		writel(0, p + BRICK_NSI_ENABLE);
++		writel(ports[i][1], p + BRICK_NSI_IO_CFG);
++		writel(pri << 2 | pri, p + BRICK_NSI_PRI_CFG);
++	}
++	dev_info(dev, "Brick NSI: DE0 DRAM priority %#x\n",
++		 readl(nsi + BRICK_NSI_PORT(11) + BRICK_NSI_PRI_CFG));
++	iounmap(nsi);
++}
++
+ /* The Brick maps SRAM C to DE and enables the DE-local
+  * reset, bus and memory clocks before touching mixer registers. CCU CLK_DE
+  * alone does not provide these gates. Keep this scoped to the tested board.
+@@ -567,6 +633,7 @@
+ 	}
+ 	dev_info(dev, "Brick DE SRAM %08x->%08x internal clocks %08x/%08x/%08x\n",
+ 		  old_sram, readl(sram), readl(clocks), readl(clocks + 4), readl(clocks + 8));
++	sun8i_mixer_brick_nsi_init(dev);
+ out:
+ 	if (clocks)
+ 		iounmap(clocks);

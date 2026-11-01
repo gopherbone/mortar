@@ -83,6 +83,13 @@ buildLinux (
         name = "drm-img-disable-active-power-management";
         patch = ../patches/kernel/0002-drm-img-disable-active-power-management.patch;
       }
+      {
+        # The SPL leaves the A133 NSI DRAM arbiter at reset priorities, so
+        # GPU bursts starve the display engine's fetch (garbage band at the
+        # top of the panel while the GPU renders). Program the BSP table.
+        name = "drm-sun4i-brick-display-engine-dram-priority";
+        patch = ../patches/kernel/0003-drm-sun4i-brick-display-engine-dram-priority.patch;
+      }
     ];
     # Makefile at this rev is 7.3.0; the defconfig sets CONFIG_LOCALVERSION="-brick-dev"
     # and disables LOCALVERSION_AUTO. The fetched source has no .git, so
