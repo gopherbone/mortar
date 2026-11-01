@@ -1,0 +1,63 @@
+PuzzleScript SDL shell: redraw after KMSDRM surface rebuilds; opaque canvas texture.
+
+SDL 3.4 KMSDRM rebuilds its GBM/EGL surface at the first present after a
+fullscreen change and drops what was drawn before it, so the dirty-driven
+shell showed a black screen until the first input. Also draw the canvas
+texture without blending: with llvmpipe, blending reads the uncached
+scanout buffer back.
+
+diff --git a/sdl/src/main.rs b/sdl/src/main.rs
+index 739890d..0564117 100644
+--- a/sdl/src/main.rs
++++ b/sdl/src/main.rs
+@@ -378,7 +378,7 @@ fn main() {
+     };
+     let (w, h) = if o.headless { (o.size.0 as i32, o.size.1 as i32) } else { pixel_size(&canvas) };
+     let mut cv = gfx::Canvas::new(w, h);
+-    let mut tex = tc.create_texture_streaming(PixelFormat::ARGB8888, w as u32, h as u32).ok();
++    let mut tex = opaque(tc.create_texture_streaming(PixelFormat::ARGB8888, w as u32, h as u32).ok());
+ 
+     let mut audio = audio::Audio::new(audio_sys.as_ref());
+     audio.muted = o.mute;
+@@ -400,6 +400,10 @@ fn main() {
+     let mut script = o.script.as_deref().map(Script::load);
+     let mut shot_n = 0;
+     let mut last = Instant::now();
++    // SDL's KMSDRM backend rebuilds its EGL surface at the first present after a
++    // fullscreen/size change and drops what was drawn into the old one, so a
++    // single redraw after a resize would leave the screen black. Draw twice.
++    let mut redraw = 2u8;
+     let frame = Duration::from_micros(16_667);
+ 
+     'main: loop {
+@@ -539,12 +543,14 @@ fn main() {
+             let (w, h) = pixel_size(&canvas);
+             if (w, h) != (cv.w, cv.h) {
+                 cv = gfx::Canvas::new(w, h);
+-                tex = tc.create_texture_streaming(PixelFormat::ARGB8888, w as u32, h as u32).ok();
++                tex = opaque(tc.create_texture_streaming(PixelFormat::ARGB8888, w as u32, h as u32).ok());
+             }
+             app.mark_dirty();
++            redraw = 2;
+         }
+ 
+-        let dirty = app.take_dirty();
++        let dirty = app.take_dirty() || redraw > 0;
++        redraw = redraw.saturating_sub(dirty as u8);
+         if dirty {
+             app.draw(&mut cv);
+             if let Some(t) = &mut tex {
+@@ -588,3 +594,13 @@ fn main() {
+         }
+     }
+ }
++
++/// The canvas is always opaque. Without this SDL alpha-blends ARGB textures,
++/// which with a software GL (llvmpipe) reads back the write-combined scanout
++/// buffer on every redraw.
++fn opaque(tex: Option<sdl3::render::Texture<'_>>) -> Option<sdl3::render::Texture<'_>> {
++    tex.map(|mut t| {
++        t.set_blend_mode(sdl3::render::BlendMode::None);
++        t
++    })
++}

@@ -44,7 +44,12 @@
           ./modules/brick-firmware.nix
           ./modules/brick-gpu.nix
           ./modules/mortar-apps.nix
-          { mortar.apps.puzzlescript.package = puzzlescript.packages.aarch64-linux.default; }
+          {
+            # The patch is for upstream (the puzzlescript repo); see the file.
+            mortar.apps.puzzlescript.package = puzzlescript.packages.aarch64-linux.default.overrideAttrs (old: {
+              patches = (old.patches or [ ]) ++ [ ./pkgs/puzzlescript/kmsdrm-redraw.patch ];
+            });
+          }
           ./modules/mortar-greeter.nix
           ({ config, pkgs, ... }: {
             mortar.greeter.enable = true;
@@ -54,10 +59,15 @@
                 description = "Puzzle games, controller";
                 icon = "pad";
                 order = 10;
-                command = "${config.mortar.apps.puzzlescript.package}/bin/puzzlescript";
+                command = "exec ${config.mortar.apps.puzzlescript.package}/bin/puzzlescript";
               };
-              # M8 (m8c) comes back once m8c can get a GL window through the
-              # PowerVR path; today it crashes in renderer_initialize.
+              m8 = {
+                name = "M8";
+                description = "Tracker on the top USB-C port";
+                icon = "usb";
+                order = 20;
+                command = "exec ${config.mortar.apps.m8c.package}/bin/m8c-brick";
+              };
               terminal = {
                 name = "Terminal";
                 description = "Console";
