@@ -169,6 +169,7 @@ impl Shell {
         let osk_buf = opaque_buffer(size.0, osk_h);
 
         let viewporter_dh = dh.clone();
+        let setup_socket = cfg.setup_socket.clone();
         Ok(Shell {
             dh,
             loop_handle,
@@ -193,7 +194,7 @@ impl Shell {
             cfg,
             apps: Apps::default(),
             pending_focus: None,
-            overlay: Overlay::default(),
+            overlay: Overlay::with_setup_socket(setup_socket),
             osk: Osk::default(),
             router: Router::default(),
             pads: Pads::default(),

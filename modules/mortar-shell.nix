@@ -154,6 +154,8 @@ let
       # modules/brick-gpu.nix) must stay on software GL: the shell owns
       # the display, so they render as Wayland clients.
       env = { MORTAR_SDL = "software"; } // cfg.environment;
+      # Settings > Wi-Fi / Remote access (modules/mortar-setup.nix)
+      setupSocket = if config.mortar ? setup && config.mortar.setup.enable then "/run/mortar-setup/control.sock" else null;
     }
   );
 

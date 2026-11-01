@@ -120,6 +120,10 @@ pub struct Config {
     /// Extra environment for every app.
     #[serde(default)]
     pub env: BTreeMap<String, String>,
+    /// mortar-setup's control socket: Settings > Wi-Fi and Remote access
+    /// open its screens (unset: those rows only show the state).
+    #[serde(default)]
+    pub setup_socket: Option<std::path::PathBuf>,
 }
 
 fn d_bg_fps() -> u32 {

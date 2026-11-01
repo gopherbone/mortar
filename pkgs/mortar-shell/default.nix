@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 # mortar-shell: Mortar's controller-driven Wayland compositor (Smithay).
-# Shares the UI toolkit, theme and input mapping with mortar-ui (path
-# dependency, library only). See DESIGN.md.
+# Shares the UI toolkit, theme and input mapping with mortar-ui, and embeds
+# the Wi-Fi / Remote access screens from mortar-setup (path dependencies,
+# libraries only). See DESIGN.md.
 #
 #   nix build ... pkgs.callPackage ./pkgs/mortar-shell { }
 #   passthru.tests.headless   compositor on the headless backend with real
@@ -32,6 +33,10 @@ let
         ./src
         ../mortar-ui/Cargo.toml
         ../mortar-ui/src
+        ../mortar-setup/Cargo.toml
+        ../mortar-setup/src
+        ../mortar-pair/Cargo.toml
+        ../mortar-pair/src
       ];
     };
     sourceRoot = "source/mortar-shell";
