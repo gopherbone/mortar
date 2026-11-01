@@ -40,8 +40,38 @@ use serde::{Deserialize, Serialize};
 
 /// The ground-colour veil over the blurred app behind the MENU (light
 /// enough that its colours and layout show, with the blur its text does
-/// not read).
+/// not read). Over dark backdrops it is raised (`veil_for`), up to
+/// VEIL_MAX.
 const FROST_VEIL: f32 = 0.62;
+const VEIL_MAX: f32 = 0.9;
+
+/// WCAG relative luminance of an sRGB colour (channels 0..1).
+fn luminance(c: [f32; 3]) -> f32 {
+    let lin = |v: f32| if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) };
+    0.2126 * lin(c[0]) + 0.7152 * lin(c[1]) + 0.0722 * lin(c[2])
+}
+
+fn rgb(c: Color) -> [f32; 3] {
+    [c.0 as f32 / 255.0, c.1 as f32 / 255.0, c.2 as f32 / 255.0]
+}
+
+/// The lightest veil (from FROST_VEIL up) over a backdrop of mean colour
+/// `mean` that gives the palette's ink-soft text at least 4.5:1 against
+/// the veiled backdrop. Light backdrops keep 62%; black needs ~85%.
+pub fn veil_for(mean: [f32; 3], pal: &Pal) -> f32 {
+    let (g, ls) = (rgb(pal.ground), luminance(rgb(pal.soft)));
+    let mut v = FROST_VEIL;
+    while v < VEIL_MAX {
+        let c: [f32; 3] = std::array::from_fn(|i| mean[i] * (1.0 - v) + g[i] * v);
+        let l = luminance(c);
+        let ratio = (l.max(ls) + 0.05) / (l.min(ls) + 0.05);
+        if ratio >= 4.5 {
+            return v;
+        }
+        v += 0.01;
+    }
+    VEIL_MAX
+}
 
 pub const W: f32 = 1024.0;
 pub const H: f32 = 768.0;
@@ -503,6 +533,9 @@ pub struct ShellUi {
     row_x: Spring,
     tiles: Vec<TileAnim>,
     lp: Spring,
+    /// The veil over the blurred backdrop: FROST_VEIL, raised over dark
+    /// backdrops so ink-soft text keeps 4.5:1 (`set_backdrop`).
+    veil: Spring,
     trans: Option<Trans>,
     menu: Option<cross::Cross>,
     /// Each MENU category's selected row (kept between openings).
@@ -536,6 +569,7 @@ impl ShellUi {
             row_x: Spring::new(0.0),
             tiles: Vec::new(),
             lp: Spring::new(0.0),
+            veil: Spring::new(FROST_VEIL),
             trans: None,
             menu: None,
             cross_sel: [0; 5],
@@ -882,7 +916,7 @@ impl ShellUi {
     }
 
     fn springs_ref(&self) -> Vec<&Spring> {
-        let mut v: Vec<&Spring> = vec![&self.row_x, &self.lp];
+        let mut v: Vec<&Spring> = vec![&self.row_x, &self.lp, &self.veil];
         for t in &self.tiles {
             v.extend([&t.lift, &t.sc, &t.back]);
         }
@@ -890,7 +924,7 @@ impl ShellUi {
     }
 
     fn springs_mut(&mut self) -> Vec<&mut Spring> {
-        let mut v: Vec<&mut Spring> = vec![&mut self.row_x, &mut self.lp];
+        let mut v: Vec<&mut Spring> = vec![&mut self.row_x, &mut self.lp, &mut self.veil];
         for t in &mut self.tiles {
             v.extend([&mut t.lift, &mut t.sc, &mut t.back]);
         }
@@ -1719,11 +1753,11 @@ impl ShellUi {
             b.push_alpha(frost);
             b.image(src, g[0], g[1], g[2], g[3], [0.0, 0.0, 1.0, 1.0]);
             b.pop_alpha();
-            b.rect(0.0, 0.0, W, H, with_a(pal.ground, frost * FROST_VEIL));
+            b.rect(0.0, 0.0, W, H, with_a(pal.ground, frost * self.veil.x));
         }
         // the MENU fades out under the transition it started
         if let Some(m) = &self.menu {
-            let g = Glass { src: backdrop.filter(|_| frost > 0.0), veil: frost * FROST_VEIL };
+            let g = Glass { src: backdrop.filter(|_| frost > 0.0), veil: frost * self.veil.x };
             self.draw_menu(&mut b, &pal, v, m, &g);
         }
         self.draw_trans(&mut b, &pal, v);
@@ -1758,6 +1792,30 @@ impl ShellUi {
             b.rect(0.0, 0.0, W, H, with_a(Color(0, 0, 0, 255), sl.a.x));
         }
         b.finish()
+    }
+
+    /// The blurred backdrop's mean colour (sRGB 0..1, from the renderer's
+    /// quarter-size blur; None: not measured). The veil eases towards what
+    /// keeps ink-soft legible over it; with nothing frosted on screen (or
+    /// Reduce motion) it moves at once, so opening the MENU never shows it
+    /// sliding.
+    pub fn set_backdrop(&mut self, mean: Option<[f32; 3]>) {
+        let t = mean.map(|m| veil_for(m, &self.pal())).unwrap_or(FROST_VEIL);
+        if (t - self.veil.t).abs() < 0.005 {
+            return;
+        }
+        if self.prefs.reduce_motion || self.frost() <= 0.0 {
+            self.veil.snap(t);
+        } else {
+            self.veil.k_mul = 0.5;
+            self.veil.set(t);
+        }
+        self.dirty = true;
+    }
+
+    /// Put the veil at its target now (previews).
+    pub fn snap_veil(&mut self) {
+        self.veil.snap(self.veil.t);
     }
 
     /// How much of the frosted backdrop shows: it follows the MENU's (or
@@ -2997,6 +3055,42 @@ mod tests {
         settle(&mut ui, &v);
         assert_eq!(ui.sleep_phase(), SleepPhase::Dark);
         assert!(!ui.power_menu_open());
+    }
+
+    #[test]
+    fn veil_keeps_subtitles_legible() {
+        let contrast = |mean: [f32; 3], v: f32, pal: &Pal| {
+            let g = rgb(pal.ground);
+            let c: [f32; 3] = std::array::from_fn(|i| mean[i] * (1.0 - v) + g[i] * v);
+            let (l, s) = (luminance(c), luminance(rgb(pal.soft)));
+            (l.max(s) + 0.05) / (l.min(s) + 0.05)
+        };
+        // light backdrops keep the usual 62%
+        assert_eq!(veil_for([0.85, 0.88, 0.9], &DAY), FROST_VEIL);
+        // black (a dark app, the M8) needs more, about 85%, and gets 4.5:1
+        let v = veil_for([0.0, 0.0, 0.0], &DAY);
+        assert!((0.8..=0.9).contains(&v), "{v}");
+        assert!(contrast([0.0; 3], v, &DAY) >= 4.5);
+        let mid = veil_for([0.3, 0.3, 0.3], &DAY);
+        assert!(mid > FROST_VEIL && mid < v, "{mid}");
+        // night: a light backdrop is the hard case
+        assert!(contrast([1.0; 3], veil_for([1.0; 3], &NIGHT), &NIGHT) >= 4.5);
+        // the UI eases to it while the frost shows, at once when it does not
+        let sys = Sys::demo(None);
+        let l = launcher();
+        let r = [run(2, "term")];
+        let v = view(&r, &l, &sys, Some(2));
+        let mut ui = ShellUi::new(Prefs::default(), false);
+        ui.set_backdrop(Some([0.0; 3]));
+        assert!(ui.veil.x > 0.8, "closed: no animation");
+        ui.set_backdrop(Some([0.9; 3]));
+        ui.menu_key(&v);
+        settle(&mut ui, &v);
+        ui.set_backdrop(Some([0.0; 3]));
+        assert!(ui.veil.x < 0.7 && ui.veil.t > 0.8, "eases over the open MENU");
+        assert_eq!(ui.pace(true), Pace::Full);
+        settle(&mut ui, &v);
+        assert!((ui.veil.x - ui.veil.t).abs() < 0.01);
     }
 
     #[test]

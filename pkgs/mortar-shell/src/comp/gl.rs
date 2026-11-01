@@ -91,6 +91,7 @@ const GL_EXTENSIONS: GLenum = 0x1F03;
 const GL_RENDERER: GLenum = 0x1F01;
 const GL_VERSION: GLenum = 0x1F02;
 const GL_UNPACK_ALIGNMENT: GLenum = 0x0CF5;
+const GL_PACK_ALIGNMENT: GLenum = 0x0D05;
 const GL_TEXTURE0: GLenum = 0x84C0;
 const GL_MAX_FRAGMENT_UNIFORM_VECTORS: GLenum = 0x8DFD;
 
@@ -181,6 +182,7 @@ fns!(Gles {
     glDisableVertexAttribArray: fn(GLuint);
     glDrawArrays: fn(GLenum, GLint, GLsizei);
     glFinish: fn();
+    glReadPixels: fn(GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, *mut c_void);
 });
 
 type ImageTargetTex = unsafe extern "C" fn(GLenum, EGLImage);
@@ -1039,6 +1041,26 @@ impl Gl {
             (self.gl.glBindFramebuffer)(GL_FRAMEBUFFER, 0);
         }
         self.check("home blur")
+    }
+
+    /// Mean colour (sRGB 0..1) of a blur FBO: eight rows read back (a few
+    /// KB, once per re-blur, after the blur has finished anyway).
+    pub fn mean_rgb(&self, f: &Fbo) -> Option<[f32; 3]> {
+        let w = f.w.max(1) as usize;
+        let mut px = vec![0u8; w * 4 * 8];
+        // SAFETY: GL calls on the current context; each row is w*4 bytes
+        // into a buffer of eight rows
+        unsafe {
+            (self.gl.glBindFramebuffer)(GL_FRAMEBUFFER, f.fbo);
+            (self.gl.glPixelStorei)(GL_PACK_ALIGNMENT, 4);
+            for i in 0..8 {
+                let y = ((i * 2 + 1) * f.h as usize / 16) as GLint;
+                (self.gl.glReadPixels)(0, y, f.w, 1, GL_RGBA, GL_UNSIGNED_BYTE, px.as_mut_ptr().add(i * w * 4) as *mut c_void);
+            }
+            (self.gl.glBindFramebuffer)(GL_FRAMEBUFFER, 0);
+        }
+        self.check("mean").ok()?;
+        Some(crate::raster::mean_rgba_bytes(&px, 2))
     }
 
     pub fn finish(&self) {

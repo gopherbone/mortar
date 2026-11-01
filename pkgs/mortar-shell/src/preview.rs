@@ -205,7 +205,7 @@ pub fn run(o: &Opts) -> Result<(), String> {
     let s = o.screen.as_str();
     let mut ui = ShellUi::new(prefs, s == "boot");
     let over_app = s.starts_with("menu") || s.starts_with("cross") || matches!(s, "running" | "lava" | "mixer" | "bluetooth" | "setup-wifi" | "setup-bluetooth" | "settings" | "app" | "osd" | "osd-mute" | "osd-bri" | "osd-home" | "toast" | "achievement" | "flash" | "osk" | "osk-chips" | "osk-chips-focus" | "close" | "swap" | "remote" | "wifi");
-    let mut current = if over_app { Some(2) } else { None };
+    let mut current = if s == "cross-dark" { Some(1) } else if over_app { Some(2) } else { None };
     let run_ref: &[RunningInfo] = if s == "home-empty" { &none } else { &running };
     let host = "brick";
     let demo_st = { use mortar_setup::ui::Device; mortar_setup::ui::demo::DemoDevice::settings().status().clone() };
@@ -244,7 +244,7 @@ pub fn run(o: &Opts) -> Result<(), String> {
         "menu" | "menu-running" | "running" => {
             ui.menu_key(&v0);
         }
-        "menu-apps" | "cross-apps" | "home-menu" | "menu-games" | "menu-music" => {
+        "menu-apps" | "cross-apps" | "cross-dark" | "home-menu" | "menu-games" | "menu-music" => {
             ui.menu_key(&v0);
             let n = match s {
                 "menu-games" => 2,
@@ -385,6 +385,13 @@ pub fn run(o: &Opts) -> Result<(), String> {
     raster.render(&mut pm, &home, &typo, &demo);
     if let Some(b) = crate::raster::blur_quarter(&pm) {
         demo.pix.insert(Src::HomeBlur, b);
+    }
+    // the veil adapts to the backdrop's brightness (the compositor measures
+    // its blur)
+    let back = match current { Some(u) => Src::Blur(u), None => Src::HomeBlur };
+    if let Some(p) = demo.pix.get(&back) {
+        ui.set_backdrop(Some(crate::raster::mean_rgb(p)));
+        ui.snap_veil();
     }
     let n = o.frames.max(1);
     let mut page_ui = Ui::new(W as u32, H as u32, Fonts::load(&dir)?);

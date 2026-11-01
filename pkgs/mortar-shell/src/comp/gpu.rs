@@ -77,6 +77,8 @@ pub struct GpuUi {
     pub render_avg_ms: f32,
     pub blur_ms: f32,
     pub blur_count: u64,
+    /// The newest backdrop blur's mean colour, for the MENU's veil.
+    mean: Option<[f32; 3]>,
     /// The lava lamp's field (quarter resolution), while it shows.
     lava: Option<Fbo>,
     /// The lava field pass's GPU time (ms), sampled every LAVA_SAMPLE
@@ -112,6 +114,7 @@ impl GpuUi {
             render_avg_ms: 0.0,
             blur_ms: 0.0,
             blur_count: 0,
+            mean: None,
             lava: None,
             lava_ms: 0.0,
             lava_frames: 0,
@@ -203,6 +206,9 @@ impl GpuUi {
         self.frame += 1;
         let idx = (0..self.bufs.len()).find(|i| Some(*i) != self.front && Some(*i) != self.queued).ok_or("no free buffer")?;
         self.prepare(shell, scene);
+        if let Some(m) = self.mean.take() {
+            shell.backdrop_rgb = Some(m);
+        }
         let gl = &mut self.gl;
         let dmabufs = &self.dmabufs;
         let shm = &self.shm;
@@ -395,6 +401,7 @@ impl GpuUi {
                 // before its flip, so waiting here costs nothing extra)
                 self.gl.finish();
                 self.blur_ms = t0.elapsed().as_secs_f32() * 1000.0;
+                self.mean = self.gl.mean_rgb(&bl.a);
             }
             Err(e) => tracing::warn!("blur: {e}"),
         }
@@ -440,6 +447,7 @@ impl GpuUi {
                 self.blur_count += 1;
                 self.gl.finish();
                 self.blur_ms = t0.elapsed().as_secs_f32() * 1000.0;
+                self.mean = self.gl.mean_rgb(&a);
                 self.home = Some((shell.home_gen, a, b));
             }
             Err(e) => {

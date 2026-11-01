@@ -292,6 +292,28 @@ fn blit_coverage(pm: &mut Pixmap, x: i32, y: i32, w: usize, h: usize, cov: &[u8]
 /// box down to quarter size, then three rounds of a 7-wide box blur each
 /// way (variance 12 texels², like three 9-tap gaussians of sigma 2). The
 /// renderer scales the small result up with bilinear filtering.
+/// Mean colour (sRGB 0..1) of an opaque pixmap (the blurred backdrop:
+/// the MENU raises its veil over dark ones). Every 4th pixel suffices.
+pub fn mean_rgb(pm: &Pixmap) -> [f32; 3] {
+    mean_rgba_bytes(pm.data(), 4)
+}
+
+/// Mean of RGBA bytes, sampling every `step`th pixel.
+pub fn mean_rgba_bytes(px: &[u8], step: usize) -> [f32; 3] {
+    let mut s = [0f64; 3];
+    let mut n = 0f64;
+    for p in px.chunks_exact(4).step_by(step.max(1)) {
+        for c in 0..3 {
+            s[c] += p[c] as f64;
+        }
+        n += 1.0;
+    }
+    if n == 0.0 {
+        return [1.0; 3];
+    }
+    s.map(|v| (v / n / 255.0) as f32)
+}
+
 pub fn blur_quarter(img: &Pixmap) -> Option<Pixmap> {
     let (sw, sh) = (img.width() as usize, img.height() as usize);
     let (w, h) = ((sw / 4).max(1), (sh / 4).max(1));

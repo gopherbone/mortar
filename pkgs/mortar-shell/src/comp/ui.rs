@@ -291,6 +291,7 @@ impl Shell {
         let now = Instant::now();
         let dt = if self.manual_time { 0.0 } else { now.duration_since(self.last_step).as_secs_f64() };
         self.last_step = now;
+        self.sui.set_backdrop(self.backdrop_rgb);
         let outs = self.with_view(|ui, v| ui.step(dt, v));
         self.handle_outs(outs);
         if let Some((t, _)) = &self.pending_toast
@@ -309,6 +310,7 @@ impl Shell {
         let mut left = ms as f64 / 1000.0;
         while left > 1e-9 {
             let dt = left.min(1.0 / 120.0);
+            self.sui.set_backdrop(self.backdrop_rgb);
             let outs = self.with_view(|ui, v| ui.step(dt, v));
             self.handle_outs(outs);
             left -= dt;
@@ -805,6 +807,7 @@ impl Shell {
                 if let (Some(t), Some(mut pm)) = (self.typo.as_ref(), Pixmap::new(self.size.0 as u32, self.size.1 as u32)) {
                     self.raster.render(&mut pm, hs, t, &self.cpu_imgs);
                     if let Some(b) = crate::raster::blur_quarter(&pm) {
+                        self.backdrop_rgb = Some(crate::raster::mean_rgb(&b));
                         self.cpu_imgs.home_blur = Some((self.home_gen, b));
                     }
                 }
@@ -821,6 +824,7 @@ impl Shell {
                 None => true,
             };
             if stale && let Some(b) = crate::raster::blur_quarter(pm) {
+                self.backdrop_rgb = Some(crate::raster::mean_rgb(&b));
                 self.cpu_imgs.blurs.insert(uid, (sid.clone(), *commit, Instant::now(), b));
             }
         }

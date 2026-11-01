@@ -216,6 +216,9 @@ pub struct Shell {
     /// renderers), and a counter that changes with each new one.
     pub home_scene: Option<crate::scene::Scene>,
     pub home_gen: u64,
+    /// The blurred backdrop's mean colour (the MENU raises its veil over
+    /// dark ones); set by whichever renderer blurred it last.
+    pub backdrop_rgb: Option<[f32; 3]>,
     /// Last volume-step haptic: held keys tick at most every 150 ms.
     pub volume_haptic_at: Option<std::time::Instant>,
     last_bg_tick: Instant,
@@ -362,6 +365,7 @@ impl Shell {
             streams: Vec::new(),
             home_scene: None,
             home_gen: 0,
+            backdrop_rgb: None,
             last_bg_tick: Instant::now(),
             update: Default::default(),
         };
