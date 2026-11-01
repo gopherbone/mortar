@@ -168,6 +168,25 @@ impl Device for DemoDevice {
             Request::Finish => s.setup_done = true,
             Request::WifiScan | Request::Status => {}
             Request::WifiWps => s.wifi.wps = true,
+            Request::WifiForget { ssid } => {
+                for n in s.wifi.networks.iter_mut().filter(|n| n.ssid == ssid) {
+                    n.known = false;
+                    n.connected = false;
+                }
+                if s.wifi.ssid.as_deref() == Some(ssid.as_str()) {
+                    s.wifi.ssid = None;
+                    s.wifi.state = "disconnected".into();
+                    s.wifi.address = None;
+                }
+            }
+            Request::WifiDisconnect => {
+                for n in s.wifi.networks.iter_mut() {
+                    n.connected = false;
+                }
+                s.wifi.ssid = None;
+                s.wifi.state = "disconnected".into();
+                s.wifi.address = None;
+            }
             Request::CheckPassword { .. } => return Err("not here".into()),
             Request::BtPower { on } => {
                 s.bluetooth.powered = on;

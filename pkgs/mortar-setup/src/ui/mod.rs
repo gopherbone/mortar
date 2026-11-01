@@ -191,6 +191,12 @@ impl SetupUi {
         SetupUi::with(|cx| Box::new(pages::WifiList::new(cx)), dev, sys, Mode::Settings)
     }
 
+    /// The password keyboard for one network, then joining it (the shell's
+    /// own Wi-Fi page hands secured networks over to it).
+    pub fn wifi_password(ssid: &str, dev: Box<dyn Device>, sys: Sys) -> SetupUi {
+        SetupUi::with(|_| Box::new(keyboard::PasswordPage::new(ssid)), dev, sys, Mode::Settings)
+    }
+
     /// Settings > Bluetooth.
     pub fn bluetooth(dev: Box<dyn Device>, sys: Sys) -> SetupUi {
         SetupUi::with(|cx| Box::new(bluetooth::BtList::new(cx)), dev, sys, Mode::Settings)

@@ -32,6 +32,11 @@ pub enum Request {
     WifiConnect { ssid: String, passphrase: Option<String> },
     /// WPS push button: press the router's WPS button within 2 minutes.
     WifiWps,
+    /// Forget a known network (iwd KnownNetwork.Forget): it is not joined
+    /// again on its own.
+    WifiForget { ssid: String },
+    /// Leave the connected network (iwd Station.Disconnect).
+    WifiDisconnect,
     /// Bluetooth (BlueZ): adapter power, discovery, and a device by address.
     BtPower { on: bool },
     BtScan { on: bool },
@@ -113,6 +118,9 @@ pub struct WifiView {
     pub last_error: Option<String>,
     /// A WPS push-button session is running.
     pub wps: bool,
+    /// The connected network's channel frequency, MHz.
+    #[serde(default)]
+    pub frequency: Option<u32>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]

@@ -23,10 +23,15 @@ const DEVICE: &str = "net.connman.iwd.Device";
 const WPS: &str = "net.connman.iwd.SimpleConfiguration";
 const AGENT_PATH: &str = "/mortar/setup/agent";
 
+const KNOWN: &str = "net.connman.iwd.KnownNetwork";
+const DIAG: &str = "net.connman.iwd.StationDiagnostic";
+
 enum Cmd {
     Scan,
     Connect { ssid: String, passphrase: Option<String> },
     Wps,
+    Forget { ssid: String },
+    Disconnect,
 }
 
 #[derive(Clone)]
@@ -106,12 +111,14 @@ struct Snapshot {
     station: Option<OwnedObjectPath>,
     device: Option<OwnedObjectPath>,
     networks: HashMap<String, OwnedObjectPath>,
+    /// Known-network objects, by SSID (what Forget is called on).
+    known: HashMap<String, OwnedObjectPath>,
 }
 
 fn refresh(conn: &Connection, view: &Mutex<WifiView>) -> zbus::Result<Snapshot> {
     let om = ObjectManagerProxy::builder(conn).destination(SVC)?.path("/")?.build()?;
     let objs = om.get_managed_objects()?;
-    let mut snap = Snapshot { station: None, device: None, networks: HashMap::new() };
+    let mut snap = Snapshot { station: None, device: None, networks: HashMap::new(), known: HashMap::new() };
     let mut v = WifiView { state: "off".into(), ..Default::default() };
     let mut net_props: HashMap<String, &HashMap<String, OwnedValue>> = HashMap::new();
     for (path, ifaces) in &objs {
@@ -144,6 +151,9 @@ fn refresh(conn: &Connection, view: &Mutex<WifiView>) -> zbus::Result<Snapshot> 
             if connected {
                 v.ssid = Some(ssid.clone());
             }
+            if let Some(k) = get::<OwnedObjectPath>(props, "KnownNetwork") {
+                snap.known.insert(ssid.clone(), k);
+            }
             v.networks.push(NetView {
                 ssid: ssid.clone(),
                 bars: bars(sig),
@@ -155,6 +165,16 @@ fn refresh(conn: &Connection, view: &Mutex<WifiView>) -> zbus::Result<Snapshot> 
         }
     }
     v.address = crate::sys::addr_of("wlan0").map(|a| a.to_string());
+    // the channel of the connected network (StationDiagnostic; older iwd
+    // or no connection: none)
+    if v.state == "connected"
+        && let Some(st) = &snap.station
+    {
+        v.frequency = Proxy::new(conn, SVC, st.as_str(), DIAG)
+            .and_then(|p| p.call::<_, _, HashMap<String, OwnedValue>>("GetDiagnostics", &()))
+            .ok()
+            .and_then(|d| get::<u32>(&d, "Frequency"));
+    }
     let mut cur = view.lock().unwrap();
     v.last_error = cur.last_error.clone();
     v.wps = cur.wps;
@@ -192,6 +212,15 @@ impl Wifi {
         self.view.lock().unwrap().last_error = None;
         let _ = self.tx.send(Cmd::Wps);
     }
+
+    pub fn forget(&self, ssid: String) {
+        self.view.lock().unwrap().last_error = None;
+        let _ = self.tx.send(Cmd::Forget { ssid });
+    }
+
+    pub fn disconnect(&self) {
+        let _ = self.tx.send(Cmd::Disconnect);
+    }
 }
 
 fn worker(view: Arc<Mutex<WifiView>>, rx: Receiver<Cmd>) {
@@ -209,7 +238,7 @@ fn worker(view: Arc<Mutex<WifiView>>, rx: Receiver<Cmd>) {
             eprintln!("iwd: agent: {e}");
         }
         let mut agent_registered = false;
-        let mut snap = Snapshot { station: None, device: None, networks: HashMap::new() };
+        let mut snap = Snapshot { station: None, device: None, networks: HashMap::new(), known: HashMap::new() };
         loop {
             match refresh(&conn, &view) {
                 Ok(s) => snap = s,
@@ -258,6 +287,26 @@ fn worker(view: Arc<Mutex<WifiView>>, rx: Receiver<Cmd>) {
                             v.lock().unwrap().last_error = Some(explain(&e));
                         }
                     });
+                }
+                Cmd::Forget { ssid } => {
+                    let r = match snap.known.get(&ssid) {
+                        Some(k) => Proxy::new(&conn, SVC, k.as_str(), KNOWN).and_then(|p| p.call_method("Forget", &()).map(|_| ())),
+                        None => {
+                            view.lock().unwrap().last_error = Some(format!("'{ssid}' is not a saved network."));
+                            continue;
+                        }
+                    };
+                    if let Err(e) = r {
+                        view.lock().unwrap().last_error = Some(explain(&e));
+                    }
+                }
+                Cmd::Disconnect => {
+                    if let Some(st) = &snap.station
+                        && let Err(e) = Proxy::new(&conn, SVC, st.as_str(), STATION).and_then(|p| p.call_method("Disconnect", &()).map(|_| ()))
+                        && !e.to_string().contains("NotConnected")
+                    {
+                        view.lock().unwrap().last_error = Some(explain(&e));
+                    }
                 }
                 Cmd::Wps => {
                     let Some(dev) = snap.device.clone() else { continue };

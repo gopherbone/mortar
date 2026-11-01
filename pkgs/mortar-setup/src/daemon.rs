@@ -275,6 +275,14 @@ impl Daemon {
                 Some(w) => w.wps(),
                 None => return Response::Error { message: "Wi-Fi is not available".into() },
             },
+            Request::WifiForget { ssid } => match &self.wifi {
+                Some(w) => w.forget(ssid),
+                None => return Response::Error { message: "Wi-Fi is not available".into() },
+            },
+            Request::WifiDisconnect => match &self.wifi {
+                Some(w) => w.disconnect(),
+                None => return Response::Error { message: "Wi-Fi is not available".into() },
+            },
             Request::BtPower { .. }
             | Request::BtScan { .. }
             | Request::BtPair { .. }
