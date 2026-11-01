@@ -34,9 +34,9 @@ over SSH.
 | Updates | `nix run .#mortar -- deploy`: build, copy, switch. Every generation stays in the boot menu. |
 | Debug | Each boot saves logs to `mortar-logs/` on the card's FAT partition. |
 
-The power key sleeps (screen off; any button wakes); hold it for Sleep / Restart / Power off. Set the time zone in MENU > Quick > Settings….
+Tap the power key to sleep: the screen goes dark and the Brick suspends (s2idle) after 3 s; the power key or any gamepad button wakes it. Settings can also sleep it when idle; hold it for Sleep / Restart / Power off. Set the time zone in MENU > Quick > Settings….
 
-Not yet: suspend to RAM, charging configuration, LED effects.
+Not yet: deep suspend (it resumes with a fuzzy panel, see modules/trimui-brick.nix), charging configuration, LED effects.
 
 ## Using it
 
