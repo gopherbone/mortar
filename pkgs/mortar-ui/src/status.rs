@@ -57,7 +57,20 @@ fn read_trim(p: impl AsRef<Path>) -> Option<String> {
     fs::read_to_string(p).ok().map(|s| s.trim().to_string())
 }
 
+unsafe extern "C" {
+    fn tzset();
+}
+
+/// Re-read the time zone. glibc's localtime_r never looks at /etc/localtime
+/// again by itself; tzset (TZ unset) does when the file changed (e.g. after
+/// `timedatectl set-timezone`). Cheap: one stat.
+pub fn reload_timezone() {
+    // SAFETY: no arguments; nothing here calls setenv("TZ")
+    unsafe { tzset() }
+}
+
 pub fn clock() -> String {
+    reload_timezone();
     unsafe {
         let t = libc::time(std::ptr::null_mut());
         let mut tm: libc::tm = std::mem::zeroed();
@@ -134,5 +147,10 @@ impl Backlight {
     pub fn set(&self, pct: u8) -> Result<(), String> {
         let v = (pct.clamp(5, 100) as u32 * self.max).div_ceil(100);
         fs::write(self.dir.join("brightness"), v.to_string()).map_err(|e| e.to_string())
+    }
+    /// Switch the backlight off or on without touching the level
+    /// (bl_power: 0 on, 4 = FB_BLANK_POWERDOWN).
+    pub fn power(&self, on: bool) -> Result<(), String> {
+        fs::write(self.dir.join("bl_power"), if on { "0" } else { "4" }).map_err(|e| e.to_string())
     }
 }

@@ -149,6 +149,7 @@ pub fn run(o: &Opts) -> Result<(), String> {
         keyboard_app: true,
         osk_h,
         host,
+        timezone: "Europe/Lisbon",
     };
     let dt = 1.0 / 120.0;
     let settle = |ui: &mut ShellUi, v: &View, secs: f64| {
@@ -234,6 +235,20 @@ pub fn run(o: &Opts) -> Result<(), String> {
         "achievement" => ui.show_toast(Toast::achievement("First jump", "Games · Game Boy")),
         "flash" => ui.screenshot(),
         "osk" => {}
+        "power" => ui.open_power_menu(),
+        "timezone" | "timezone-zones" => {
+            ui.menu_key(&v0);
+            ui.button(Button::L1, false, &v0);
+            let dir = std::path::Path::new("/usr/share/zoneinfo");
+            let ids = crate::tz::list(dir);
+            let off = crate::tz::offsets(dir, &ids);
+            let zones = ids.into_iter().map(|id| crate::shellui::TzZone { offset: off.get(&id).copied().unwrap_or(0), id }).collect();
+            ui.open_tz(zones, "Europe/Lisbon".into());
+            if s == "timezone-zones" {
+                settle(&mut ui, &v0, 0.6);
+                ui.button(Button::A, false, &v0);
+            }
+        }
         other => return Err(format!("unknown preview screen '{other}' (boot, home, home-empty, app, menu, menu-launch, menu-settings, remote, wifi, launch, close, swap, osd, toast, achievement, flash, osk)")),
     }
     let osk_h = if s == "osk" { demo.pix[&Src::Layer(Layer::Osk)].height() as f32 } else { 0.0 };

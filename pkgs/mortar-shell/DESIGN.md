@@ -132,6 +132,33 @@ blocks with 1 px ink outlines, isometric illustrations.
   TITLE [SUBTITLE]` (control socket `toast {json}`), e.g. mortar-play for
   RetroAchievements.
 
+- Time zone (Settings): a full-screen picker, regions then cities (from
+  the system tzdata's zone1970.tab; offsets and local times computed by a
+  `mortar-shell tz-offsets` child process, since setting TZ in the
+  threaded compositor is unsafe). A sets it with `timedatectl
+  set-timezone` (`actions.timezoneSet`). The configuration carries no
+  zone (`time.timeZone = null` in modules/mortar-base.nix: it would say
+  where the Brick is), so NixOS leaves /etc/localtime to timedated and
+  the choice survives deploys and reboots. The clock calls tzset() before
+  localtime_r: with TZ unset glibc then re-reads /etc/localtime when it
+  changed (verified on the device: a running process follows the change
+  within a second); localtime_r alone never would.
+- Power key (logind ignores it, see modules/mortar-shell.nix; the PMIC's
+  own long-hold force-off is untouched): a tap sleeps, a tap or any
+  button wakes; holding it shows a filling "hold for power menu" pill and
+  at 0.8 s opens the power menu (Sleep, Restart, Power off; the last two
+  need a second A, B backs out).
+- Sleep (power tap, Settings > Sleep, the power menu): the screen fades to
+  black, then the backlight goes off (bl_power), nothing is redrawn, UI
+  sounds and haptics are muted, and the front app is `suspended` like a
+  background app (SDL apps see OCCLUDED and can idle). Apps keep running:
+  audio from the M8 (m8c keeps its capture running) continues. Waking
+  turns the backlight on first, then fades back in; the waking press does
+  nothing else. Real suspend-to-RAM is a hook only: `ui.suspend` runs
+  `actions.sleep` (`systemctl suspend`) once the screen is dark; it is off
+  and untested on the Brick (jkingston's tree has native-deep DTB
+  variants and a config fragment for it).
+
 ### Motion
 
 Springs (motion.rs) integrate like the prototype (semi-implicit Euler in

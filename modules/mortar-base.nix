@@ -17,7 +17,11 @@
   system.stateVersion = "25.05";
 
   networking.hostName = "mortar";
-  time.timeZone = lib.mkDefault "UTC";
+  # No zone in the configuration (it would reveal where the Brick is): the
+  # user picks it on the device (mortar-shell Settings > Time zone, i.e.
+  # `timedatectl set-timezone`). With null, NixOS leaves /etc/localtime to
+  # timedated, so the choice survives deploys and reboots; unset means UTC.
+  time.timeZone = lib.mkDefault null;
   i18n.defaultLocale = "en_US.UTF-8";
 
   nix.settings = {

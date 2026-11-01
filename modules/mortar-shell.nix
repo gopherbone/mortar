@@ -172,7 +172,7 @@ let
         command = argv a.command;
       } // lib.optionalAttrs (a.art or null != null) { inherit (a) art; }) sorted;
       ui = {
-        inherit (cfg.ui) renderer motion reduceMotion sounds soundVolume haptics bootAnimation screenshotDir cardFps msaa audioDevice;
+        inherit (cfg.ui) renderer motion reduceMotion sounds soundVolume haptics bootAnimation screenshotDir cardFps msaa audioDevice suspend;
         hapticMs = cfg.ui.hapticMs;
         palette = if cfg.ui.palette != null then cfg.ui.palette else (if cfg.theme == "dark" then "night" else "day");
         # the stock PowerVR libs for the GPU UI renderer (modules/brick-gpu.nix)
@@ -352,6 +352,16 @@ in
         default = null;
         description = "Default for Settings > Palette (null: from `theme`).";
       };
+      suspend = mkOption {
+        type = types.bool;
+        default = false;
+        description = ''
+          Sleep (power key tap, Settings > Sleep, the power menu) blanks the
+          screen and backlight and occludes the front app. With this on it
+          also runs `systemctl suspend` once the screen is dark. Off: real
+          suspend-to-RAM is untested on the Brick (see DESIGN.md).
+        '';
+      };
       bootAnimation = mkOption {
         type = types.bool;
         default = true;
@@ -455,6 +465,21 @@ in
         # foot and other apps find the Mortar fonts (Geist Mono) here.
         fonts.fontconfig.enable = lib.mkDefault true;
         fonts.packages = [ cfg.package.fonts ];
+
+        # The power key belongs to the shell: a tap sleeps/wakes the screen,
+        # a hold opens its power menu. logind must not power off on it (its
+        # default) or on idle/lid. The PMIC's own long-hold force-off stays
+        # as the hardware emergency path.
+        services.logind.settings.Login = {
+          HandlePowerKey = lib.mkDefault "ignore";
+          HandlePowerKeyLongPress = lib.mkDefault "ignore";
+          HandleSuspendKey = lib.mkDefault "ignore";
+          HandleHibernateKey = lib.mkDefault "ignore";
+          HandleLidSwitch = lib.mkDefault "ignore";
+          HandleLidSwitchExternalPower = lib.mkDefault "ignore";
+          HandleLidSwitchDocked = lib.mkDefault "ignore";
+          IdleAction = lib.mkDefault "ignore";
+        };
 
         # Brightness from quick settings (same rule as the greeter).
         services.udev.extraRules = ''

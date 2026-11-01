@@ -16,6 +16,7 @@ mod router;
 mod scene;
 mod sfx;
 mod shellui;
+mod tz;
 
 use mortar_ui::input::Button;
 use std::path::PathBuf;
@@ -32,6 +33,15 @@ fn main() -> ExitCode {
     let r = match args.first().map(String::as_str) {
         Some("preview") => preview_cmd(&args[1..]),
         Some("sfx") => sfx_cmd(&args[1..]),
+        // debugging: does a running process follow /etc/localtime changes?
+        Some("clock-watch") => {
+            for _ in 0..args.get(1).and_then(|n| n.parse().ok()).unwrap_or(5u32) {
+                println!("{}", mortar_ui::status::clock());
+                std::thread::sleep(std::time::Duration::from_secs(1));
+            }
+            Ok(())
+        }
+        Some("tz-offsets") => tz::helper_main(args.get(1).map(String::as_str).unwrap_or("/etc/zoneinfo")),
         #[cfg(target_os = "linux")]
         Some("ctl") => ctl_cmd(&args[1..]),
         #[cfg(target_os = "linux")]

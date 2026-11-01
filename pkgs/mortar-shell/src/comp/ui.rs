@@ -173,6 +173,7 @@ impl Shell {
     pub fn with_view<T>(&mut self, f: impl FnOnce(&mut crate::shellui::ShellUi, &View) -> T) -> T {
         let (running, launcher) = self.view_parts();
         let host = self.host.clone();
+        let timezone = self.timezone.clone();
         let osk_h = if self.osk.visible { self.osk_height() as f32 } else { 0.0 };
         let v = View {
             running: &running,
@@ -183,6 +184,7 @@ impl Shell {
             keyboard_app: self.keyboard_app(),
             osk_h,
             host: &host,
+            timezone: &timezone,
         };
         f(&mut self.sui, &v)
     }
@@ -243,13 +245,13 @@ impl Shell {
     }
 
     pub fn play_sfx(&self, s: Sfx) {
-        if self.sui.prefs.sounds {
+        if self.sui.prefs.sounds && !self.dark {
             self.sfx.play(s, self.sui.prefs.sound_volume);
         }
     }
 
     pub fn play_haptic(&self, h: Haptic) {
-        if self.sui.prefs.haptics {
+        if self.sui.prefs.haptics && !self.dark {
             self.haptics.play(h);
         }
     }
@@ -292,7 +294,20 @@ impl Shell {
                     self.refocus();
                 }
                 Out::OpenSetup { wifi } => self.open_setup(wifi),
-                Out::Sleep => super::state::run_detached(&self.cfg.actions.sleep.clone()),
+                Out::OpenTimeZone => {
+                    let dir = std::path::PathBuf::from(&self.cfg.ui.zoneinfo);
+                    let ids = crate::tz::list(&dir);
+                    let off = crate::tz::offsets(&dir, &ids);
+                    let zones = ids.into_iter().map(|id| crate::shellui::TzZone { offset: off.get(&id).copied().unwrap_or(0), id }).collect();
+                    self.refresh_timezone();
+                    self.sui.open_tz(zones, self.timezone.clone());
+                }
+                Out::SetTimeZone(zone) => self.set_timezone(&zone),
+                Out::Sleep => {
+                    // the screen-off sleep; real suspend only behind ui.suspend
+                    self.sui.sleep();
+                    self.sync_cover();
+                }
                 Out::Reboot => super::state::run_detached(&self.cfg.actions.reboot.clone()),
                 Out::PowerOff => super::state::run_detached(&self.cfg.actions.poweroff.clone()),
                 Out::Logout => {
@@ -339,6 +354,39 @@ impl Shell {
         self.sui.open_page(page);
         self.page_tick = Some(Instant::now() + Duration::from_secs(1));
         self.page_dirty = true;
+    }
+
+    /// Re-read the zone /etc/localtime names (and make libc notice).
+    pub fn refresh_timezone(&mut self) {
+        mortar_ui::status::reload_timezone();
+        self.timezone = crate::tz::current(&crate::config::expand_home(&self.cfg.ui.localtime));
+    }
+
+    fn set_timezone(&mut self, zone: &str) {
+        let argv: Vec<String> = self.cfg.actions.timezone_set.iter().map(|a| a.replace("{zone}", zone)).collect();
+        let r = argv
+            .split_first()
+            .ok_or("no timezoneSet command".to_string())
+            .and_then(|(c, a)| std::process::Command::new(c).args(a).output().map_err(|e| format!("{c}: {e}")))
+            .and_then(|o| if o.status.success() { Ok(()) } else { Err(String::from_utf8_lossy(&o.stderr).trim().to_string()) });
+        match r {
+            Ok(()) => {
+                tracing::info!(zone, "time zone set");
+                self.refresh_timezone();
+                self.sys = Sys::read();
+                let city = crate::tz::pretty(zone).0;
+                let mut t = Toast::info(format!("Time zone set to {city}"));
+                t.sub = format!("{} · {}", zone.to_uppercase(), self.sys.time);
+                t.haptic = Some(Haptic::Tick);
+                self.sui.show_toast(t);
+            }
+            Err(e) => {
+                tracing::warn!(zone, "set time zone: {e}");
+                self.sui.show_toast(Toast::info(format!("Time zone: {e}")));
+                self.play_sfx(Sfx::Deny);
+            }
+        }
+        self.ui_dirty = true;
     }
 
     pub fn change_volume(&mut self, d: i32) {

@@ -10,8 +10,10 @@
 //! the prototype's 1024x768 logical pixels.
 //!
 //! Layers, bottom to top: home or the visible app (+ on-screen keyboard),
-//! the launch/close/switch transition, the drawer and its scrim, a setup
-//! page, the OSD, a toast, the shutter flash, the boot screen.
+//! the launch/close/switch transition, the drawer and its scrim, the time
+//! zone picker, a setup page, the power menu, the OSD, a toast, the
+//! shutter flash, the boot screen, the power-key hold indicator, and the
+//! black of sleep.
 
 use crate::art::{self, Art, Pal, DAY, NIGHT};
 use crate::haptics::Haptic;
@@ -87,6 +89,8 @@ pub struct View<'a> {
     /// Height of the on-screen keyboard strip when it shows (0: hidden).
     pub osk_h: f32,
     pub host: &'a str,
+    /// The current time zone ("Europe/Lisbon", "UTC").
+    pub timezone: &'a str,
 }
 
 impl View<'_> {
@@ -109,6 +113,9 @@ pub enum Out {
     Brightness(i32),
     ShowKeyboard,
     OpenSetup { wifi: bool },
+    /// Open the time zone picker (the compositor loads the zones).
+    OpenTimeZone,
+    SetTimeZone(String),
     Sleep,
     Logout,
     Reboot,
@@ -147,6 +154,7 @@ enum Setting {
     Palette,
     Volume,
     Brightness,
+    TimeZone,
     Keyboard,
     Wifi,
     Remote,
@@ -158,7 +166,7 @@ enum Setting {
 
 fn settings(keyboard_app: bool) -> Vec<Setting> {
     use Setting::*;
-    let mut v = vec![Sounds, Haptics, Motion, ReduceMotion, Palette, Volume, Brightness];
+    let mut v = vec![Sounds, Haptics, Motion, ReduceMotion, Palette, Volume, Brightness, TimeZone];
     if keyboard_app {
         v.push(Keyboard);
     }
@@ -201,6 +209,100 @@ struct Menu {
     closing: bool,
     then: Option<Then>,
 }
+
+/// A zone and its current UTC offset (seconds).
+#[derive(Clone, Debug, PartialEq)]
+pub struct TzZone {
+    pub id: String,
+    pub offset: i32,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum TzRow {
+    /// A region and how many zones it has ("UTC": none, it is a zone).
+    Region(String, usize),
+    Zone(usize),
+}
+
+/// Settings > Time zone: regions, then the zones of one.
+struct TzPicker {
+    zones: Vec<TzZone>,
+    current: String,
+    region: Option<String>,
+    sel: usize,
+    scroll: Spring,
+    /// Slide in/out from the right.
+    x: Spring,
+    /// Fade/slide of the list when the level changes.
+    swap: Spring,
+    closing: bool,
+}
+
+const TZ_ROWS: usize = 7;
+
+impl TzPicker {
+    fn rows(&self) -> Vec<TzRow> {
+        match &self.region {
+            None => {
+                let mut regions: Vec<(String, usize)> = Vec::new();
+                for z in &self.zones {
+                    if z.id == "UTC" {
+                        continue;
+                    }
+                    let r = crate::tz::region(&z.id);
+                    match regions.iter_mut().find(|(n, _)| n == r) {
+                        Some(e) => e.1 += 1,
+                        None => regions.push((r.to_string(), 1)),
+                    }
+                }
+                regions.sort();
+                let mut v: Vec<TzRow> = regions.into_iter().map(|(n, c)| TzRow::Region(n, c)).collect();
+                v.push(TzRow::Region("UTC".into(), 0));
+                v
+            }
+            Some(r) => {
+                let mut idx: Vec<usize> = (0..self.zones.len()).filter(|i| crate::tz::region(&self.zones[*i].id) == r && self.zones[*i].id != "UTC").collect();
+                idx.sort_by_key(|i| crate::tz::pretty(&self.zones[*i].id).0);
+                idx.into_iter().map(TzRow::Zone).collect()
+            }
+        }
+    }
+    fn scroll_for(sel: usize, n: usize) -> f32 {
+        sel.saturating_sub(3).min(n.saturating_sub(TZ_ROWS)) as f32 * 76.0
+    }
+    fn select(&mut self, sel: usize, n: usize, snap: bool) {
+        self.sel = sel.min(n.saturating_sub(1));
+        let t = Self::scroll_for(self.sel, n);
+        if snap { self.scroll.snap(t) } else { self.scroll.set(t) }
+    }
+}
+
+/// Sleep: the screen fades to black, then the compositor switches the
+/// backlight off and stops drawing; any button wakes it.
+struct SleepSt {
+    a: Spring,
+    waking: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SleepPhase {
+    Awake,
+    Fading,
+    /// Fully black: backlight off, nothing drawn.
+    Dark,
+    Waking,
+}
+
+/// The power menu (hold the power key): Sleep, Restart, Power off.
+struct PowerMenu {
+    sel: usize,
+    x: Spring,
+    /// A row waiting for its confirming second A.
+    confirm: Option<usize>,
+    closing: bool,
+}
+
+const POWER_ROWS: [(&str, &str); 3] = [("Sleep", "Screen off · any button wakes"), ("Restart", "Apps close"), ("Power off", "Apps close")];
 
 struct TileAnim {
     lift: Spring,
@@ -328,6 +430,11 @@ pub struct ShellUi {
     trans: Option<Trans>,
     menu: Option<Menu>,
     page: Option<SetupUi>,
+    tz: Option<TzPicker>,
+    sleep: Option<SleepSt>,
+    power: Option<PowerMenu>,
+    /// Power key held: progress to the power menu (0..1).
+    power_hold: Option<f32>,
     osd: Option<Osd>,
     toast: Option<ToastState>,
     toasts: Vec<Toast>,
@@ -354,6 +461,10 @@ impl ShellUi {
             trans: None,
             menu: None,
             page: None,
+            tz: None,
+            sleep: None,
+            power: None,
+            power_hold: None,
             osd: None,
             toast: None,
             toasts: Vec::new(),
@@ -388,7 +499,14 @@ impl ShellUi {
 
     /// The shell takes the buttons (else they go to the front app).
     pub fn captures_input(&self, has_app: bool) -> bool {
-        !has_app || self.boot.is_some() || self.menu.is_some() || self.page.is_some() || self.trans.is_some()
+        !has_app
+            || self.boot.is_some()
+            || self.menu.is_some()
+            || self.page.is_some()
+            || self.tz.is_some()
+            || self.trans.is_some()
+            || self.sleep.is_some()
+            || self.power.is_some()
     }
 
     /// The front app is (mostly) hidden behind the shell's screens.
@@ -398,7 +516,7 @@ impl ShellUi {
 
     /// Anything of the shell's is on screen over the app (or instead of it).
     pub fn layer_visible(&self, has_app: bool) -> bool {
-        self.covers_app(has_app) || self.osd.is_some() || self.toast.is_some() || self.flash.is_some()
+        self.covers_app(has_app) || self.osd.is_some() || self.toast.is_some() || self.flash.is_some() || self.power_hold.is_some()
     }
 
     pub fn menu_open(&self) -> bool {
@@ -415,6 +533,196 @@ impl ShellUi {
 
     pub fn page_open(&self) -> bool {
         self.page.is_some()
+    }
+
+    /// Fade to black (sleep). The compositor turns the backlight off once
+    /// the screen is dark.
+    pub fn sleep(&mut self) {
+        if self.sleep.as_ref().is_some_and(|s| !s.waking) {
+            return;
+        }
+        self.fx(Sfx::DrawerUp, Some(Haptic::Tick));
+        self.power = None;
+        let mut a = Spring::new(self.sleep.as_ref().map(|s| s.a.x).unwrap_or(0.0));
+        a.k_mul = 0.3; // a slow fade: sleep, not a cut
+        a.set(1.0);
+        self.sleep = Some(SleepSt { a, waking: false });
+        self.dirty = true;
+    }
+
+    /// Wake: the screen comes back (fading in from black).
+    pub fn wake(&mut self) {
+        if let Some(s) = &mut self.sleep
+            && !s.waking
+        {
+            s.waking = true;
+            s.a.k_mul = 1.6;
+            s.a.set(0.0);
+            self.drift_until = self.t + DRIFT_SECS;
+            self.fx(Sfx::Drawer, Some(Haptic::Tick));
+            self.dirty = true;
+        }
+    }
+
+    pub fn sleep_phase(&self) -> SleepPhase {
+        match &self.sleep {
+            None => SleepPhase::Awake,
+            Some(s) if s.waking => SleepPhase::Waking,
+            Some(s) if s.a.x > 0.995 => SleepPhase::Dark,
+            Some(_) => SleepPhase::Fading,
+        }
+    }
+
+    pub fn open_power_menu(&mut self) {
+        let mut x = Spring::new(0.0);
+        x.set(1.0);
+        self.power = Some(PowerMenu { sel: 0, x, confirm: None, closing: false });
+        self.power_hold = None;
+        self.fx(Sfx::Drawer, Some(Haptic::Long));
+        self.dirty = true;
+    }
+
+    pub fn power_menu_open(&self) -> bool {
+        self.power.as_ref().is_some_and(|p| !p.closing)
+    }
+
+    pub fn close_power_menu(&mut self) {
+        if let Some(p) = &mut self.power
+            && !p.closing
+        {
+            p.closing = true;
+            p.x.set(0.0);
+            self.fx(Sfx::DrawerUp, None);
+        }
+    }
+
+    /// The power key is held: show progress towards the power menu.
+    pub fn set_power_hold(&mut self, p: Option<f32>) {
+        if p != self.power_hold {
+            self.power_hold = p;
+            self.dirty = true;
+        }
+    }
+
+    fn power_button(&mut self, b: Button, repeat: bool) {
+        let Some(p) = &mut self.power else { return };
+        if p.closing {
+            return;
+        }
+        match b {
+            Button::Up | Button::Down => {
+                let old = p.sel;
+                p.sel = if b == Button::Up { old.saturating_sub(1) } else { (old + 1).min(POWER_ROWS.len() - 1) };
+                p.confirm = None;
+                if p.sel != old {
+                    self.fx(Sfx::Move, Some(Haptic::Tick));
+                }
+            }
+            Button::A if !repeat => match p.sel {
+                0 => self.sleep(),
+                i if p.confirm == Some(i) => {
+                    self.out.push(if i == 1 { Out::Reboot } else { Out::PowerOff });
+                    self.fx(Sfx::Close, Some(Haptic::Long));
+                }
+                i => {
+                    p.confirm = Some(i);
+                    self.fx(Sfx::Deny, Some(Haptic::Double));
+                }
+            },
+            Button::B if !repeat => {
+                if p.confirm.take().is_none() {
+                    self.close_power_menu();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Show the time zone picker with the system's zones.
+    pub fn open_tz(&mut self, zones: Vec<TzZone>, current: String) {
+        let mut x = Spring::new(W);
+        x.set(0.0);
+        let mut p = TzPicker { zones, current, region: None, sel: 0, scroll: Spring::new(0.0), x, swap: Spring::new(1.0), closing: false };
+        let rows = p.rows();
+        let cur_region = crate::tz::region(&p.current).to_string();
+        let sel = rows.iter().position(|r| matches!(r, TzRow::Region(n, _) if *n == cur_region)).unwrap_or(0);
+        p.select(sel, rows.len(), true);
+        self.tz = Some(p);
+        self.fx(Sfx::Tab, Some(Haptic::Tick));
+        self.dirty = true;
+    }
+
+    pub fn tz_open(&self) -> bool {
+        self.tz.is_some()
+    }
+
+    fn close_tz(&mut self) {
+        if let Some(p) = &mut self.tz {
+            p.closing = true;
+            p.x.set(W);
+        }
+    }
+
+    fn tz_button(&mut self, b: Button, repeat: bool) {
+        let Some(p) = &mut self.tz else { return };
+        if p.closing {
+            return;
+        }
+        let rows = p.rows();
+        let n = rows.len();
+        let old = p.sel;
+        match b {
+            Button::Up | Button::Down | Button::L1 | Button::R1 => {
+                let new = match b {
+                    Button::Up => old.saturating_sub(1),
+                    Button::Down => (old + 1).min(n.saturating_sub(1)),
+                    Button::L1 => old.saturating_sub(TZ_ROWS),
+                    _ => (old + TZ_ROWS).min(n.saturating_sub(1)),
+                };
+                p.select(new, n, false);
+                if new != old {
+                    self.fx(Sfx::Move, Some(Haptic::Tick));
+                } else {
+                    self.fx(Sfx::Deny, None);
+                }
+            }
+            Button::A | Button::Right if !repeat => match rows.get(old) {
+                Some(TzRow::Region(r, _)) if r == "UTC" => {
+                    self.out.push(Out::SetTimeZone("UTC".into()));
+                    self.close_tz();
+                }
+                Some(TzRow::Region(r, _)) => {
+                    p.region = Some(r.clone());
+                    let zr = p.rows();
+                    let cur = zr.iter().position(|z| matches!(z, TzRow::Zone(i) if p.zones[*i].id == p.current)).unwrap_or(0);
+                    p.select(cur, zr.len(), true);
+                    p.swap.snap(0.0);
+                    p.swap.set(1.0);
+                    self.fx(Sfx::Tab, Some(Haptic::Tick));
+                }
+                Some(TzRow::Zone(i)) => {
+                    let id = p.zones[*i].id.clone();
+                    self.out.push(Out::SetTimeZone(id));
+                    self.close_tz();
+                }
+                None => {}
+            },
+            Button::B | Button::Left if !repeat => match p.region.take() {
+                Some(r) => {
+                    let rr = p.rows();
+                    let sel = rr.iter().position(|x| matches!(x, TzRow::Region(n, _) if *n == r)).unwrap_or(0);
+                    p.select(sel, rr.len(), true);
+                    p.swap.snap(0.0);
+                    p.swap.set(1.0);
+                    self.fx(Sfx::Tab, Some(Haptic::Tick));
+                }
+                None => {
+                    self.close_tz();
+                    self.fx(Sfx::DrawerUp, Some(Haptic::Tick));
+                }
+            },
+            _ => {}
+        }
     }
 
     pub fn close_page(&mut self) {
@@ -437,31 +745,33 @@ impl ShellUi {
     }
 
     pub fn pace(&self, has_app: bool) -> Pace {
-        let moving = self.boot.is_some()
+        // asleep and dark: nothing at all
+        if self.sleep_phase() == SleepPhase::Dark {
+            return Pace::Idle;
+        }
+        // layers that animate for as long as they show
+        let timed = self.boot.is_some()
             || self.trans.is_some()
             || self.flash.is_some()
             || self.toast.is_some()
             || self.osd.is_some()
-            || self.menu.is_some()
-            || self.springs_ref().iter().any(|s| !s.rest());
-        if moving {
-            // a drawer at rest only needs frames for its live cards
-            let menu_rest = self.menu.as_ref().is_some_and(|m| {
-                !m.closing && [&m.dy, &m.sa, &m.fan_pos, &m.lg_scroll, &m.set_scroll].iter().all(|s| s.rest())
-                    && m.cards.iter().all(|c| c.gone.is_none() && c.y.rest())
-            });
-            let others = self.boot.is_some()
-                || self.trans.is_some()
-                || self.flash.is_some()
-                || self.toast.is_some()
-                || self.osd.is_some()
-                || self.springs_ref().iter().any(|s| !s.rest());
-            if menu_rest && !others {
-                return if !has_app && self.drifting() { Pace::Ambient } else { Pace::Idle };
-            }
+            || self.power_hold.is_some();
+        // layers that can sit still: moving only while their springs are
+        let menu_moving = self.menu.as_ref().is_some_and(|m| {
+            m.closing
+                || ![&m.dy, &m.sa, &m.fan_pos, &m.lg_scroll, &m.set_scroll].iter().all(|s| s.rest())
+                || !m.cards.iter().all(|c| c.gone.is_none() && c.y.rest())
+        });
+        let tz_moving = self.tz.as_ref().is_some_and(|p| p.closing || !(p.scroll.rest() && p.x.rest() && p.swap.rest()));
+        let power_moving = self.power.as_ref().is_some_and(|p| p.closing || !p.x.rest());
+        let sleep_moving = self.sleep.as_ref().is_some_and(|s| !s.a.rest());
+        let springs = self.springs_ref().iter().any(|s| !s.rest());
+        if timed || menu_moving || tz_moving || power_moving || sleep_moving || springs {
             return Pace::Full;
         }
-        if !has_app && self.drifting() {
+        // home visible (no app, nothing opaque over it): the slow drift
+        let over_home = self.menu.is_none() && self.tz.is_none() && self.power.is_none() && self.sleep.is_none() && self.page.is_none();
+        if !has_app && over_home && self.drifting() {
             return Pace::Ambient;
         }
         Pace::Idle
@@ -506,6 +816,15 @@ impl ShellUi {
             for c in &mut m.cards {
                 v.push(&mut c.y);
             }
+        }
+        if let Some(p) = &mut self.tz {
+            v.extend([&mut p.scroll, &mut p.x, &mut p.swap]);
+        }
+        if let Some(p) = &mut self.power {
+            v.push(&mut p.x);
+        }
+        if let Some(sl) = &mut self.sleep {
+            v.push(&mut sl.a);
         }
         if let Some(o) = &mut self.osd {
             v.push(&mut o.x);
@@ -603,6 +922,20 @@ impl ShellUi {
             if let Some(th) = then {
                 self.run_then(th, v);
             }
+        }
+        // power menu closed; sleep woken
+        if self.power.as_ref().is_some_and(|p| p.closing && p.x.x < 0.02) {
+            self.power = None;
+            self.dirty = true;
+        }
+        if self.sleep.as_ref().is_some_and(|s| s.waking && s.a.x < 0.01) {
+            self.sleep = None;
+            self.dirty = true;
+        }
+        // time zone picker slid away
+        if self.tz.as_ref().is_some_and(|p| p.closing && p.x.x > W - 8.0) {
+            self.tz = None;
+            self.dirty = true;
         }
         // fan: drop cards that flew away, add newly running apps
         if let Some(m) = &mut self.menu {
@@ -782,7 +1115,18 @@ impl ShellUi {
         if self.boot.is_some() {
             return Vec::new();
         }
-        if self.page.is_some() {
+        if self.sleep.is_some() {
+            // any button wakes, and does nothing else
+            self.wake();
+            return std::mem::take(&mut self.out);
+        }
+        if self.power.is_some() {
+            self.power_button(b, repeat);
+            return std::mem::take(&mut self.out);
+        }
+        if self.tz.is_some() {
+            self.tz_button(b, repeat);
+        } else if self.page.is_some() {
             self.page_button(b, v);
         } else if self.menu.is_some() {
             self.menu_button(b, repeat, v);
@@ -801,7 +1145,18 @@ impl ShellUi {
         if self.boot.is_some() {
             return Vec::new();
         }
-        if self.page.is_some() {
+        if self.sleep.is_some() {
+            self.wake();
+            return std::mem::take(&mut self.out);
+        }
+        if self.power.is_some() {
+            self.close_power_menu();
+            return std::mem::take(&mut self.out);
+        }
+        if self.tz.is_some() {
+            self.tz = None;
+            self.close_menu(None);
+        } else if self.page.is_some() {
             self.page = None;
             self.close_menu(None);
         } else if self.menu.as_ref().is_some_and(|m| !m.closing) {
@@ -1149,6 +1504,10 @@ impl ShellUi {
                 changed = false;
                 self.out.push(Out::Volume(if right { 5 } else { -5 }));
             }
+            (Setting::TimeZone, _) if (b == Button::A || right) && !repeat => {
+                changed = false;
+                self.out.push(Out::OpenTimeZone);
+            }
             (Setting::Brightness, _) if horiz => {
                 changed = false;
                 self.out.push(Out::Brightness(if right { 10 } else { -10 }));
@@ -1327,8 +1686,14 @@ impl ShellUi {
         if let Some(m) = &self.menu {
             self.draw_menu(&mut b, &pal, v, m);
         }
+        if let Some(p) = &self.tz {
+            self.draw_tz(&mut b, &pal, p);
+        }
         if self.page.is_some() {
             b.image(Src::Layer(Layer::Page), 0.0, 0.0, W, H, [0.0, 0.0, 1.0, 1.0]);
+        }
+        if let Some(p) = &self.power {
+            self.draw_power(&mut b, &pal, p);
         }
         if let Some(o) = &self.osd {
             self.draw_osd(&mut b, &pal, o);
@@ -1341,6 +1706,12 @@ impl ShellUi {
         }
         if let Some(bt) = &self.boot {
             self.draw_boot(&mut b, &pal, bt);
+        }
+        if let Some(h) = self.power_hold {
+            self.draw_power_hold(&mut b, &pal, h);
+        }
+        if let Some(sl) = &self.sleep {
+            b.rect(0.0, 0.0, W, H, with_a(Color(0, 0, 0, 255), sl.a.x));
         }
         b.finish()
     }
@@ -1590,7 +1961,7 @@ impl ShellUi {
                 let it = items.get(m.set_sel.min(items.len() - 1)).copied();
                 let mut h = vec![("L1/R1", "Tabs"), ("▲▼", "Choose")];
                 match it {
-                    Some(Setting::Keyboard | Setting::Wifi | Setting::Remote | Setting::Sleep | Setting::Logout | Setting::Reboot | Setting::PowerOff) => h.push(("A", "Choose")),
+                    Some(Setting::TimeZone | Setting::Keyboard | Setting::Wifi | Setting::Remote | Setting::Sleep | Setting::Logout | Setting::Reboot | Setting::PowerOff) => h.push(("A", "Choose")),
                     _ => h.push(("◀▶", "Change")),
                 }
                 h.push(("B", "Back"));
@@ -1719,6 +2090,7 @@ impl ShellUi {
                 Setting::Palette => ("Palette", Ok((vec!["Day", "Night"], self.prefs.night as usize))),
                 Setting::Volume => ("Volume", Err(v.volume.map(|x| format!("{x}%")).unwrap_or_else(|| "n/a".into()))),
                 Setting::Brightness => ("Brightness", Err(v.sys.brightness.map(|x| format!("{x}%")).unwrap_or_else(|| "n/a".into()))),
+                Setting::TimeZone => ("Time zone", Err(format!("{} · {} ›", crate::tz::pretty(v.timezone).0, v.sys.time))),
                 Setting::Keyboard => ("On-screen keyboard", Err("START in the app ›".into())),
                 Setting::Wifi => ("Wi-Fi", Err(if v.sys.wifi { "Connected ›".into() } else { "Not connected ›".into() })),
                 Setting::Remote => (
@@ -1733,7 +2105,7 @@ impl ShellUi {
                         "Off ›".into()
                     }),
                 ),
-                Setting::Sleep => ("Sleep", Err("Power key".into())),
+                Setting::Sleep => ("Sleep", Err("Power key · hold for menu".into())),
                 Setting::Logout => ("Log out", Err("Closes all apps".into())),
                 Setting::Reboot => ("Restart", Err("›".into())),
                 Setting::PowerOff => ("Power off", Err("›".into())),
@@ -1770,6 +2142,145 @@ impl ShellUi {
                 x += arrow_text(b, x, top, s, st, true);
             }
         }
+    }
+
+    fn draw_tz(&self, b: &mut B, pal: &Pal, p: &TzPicker) {
+        b.push(Xf::translate(p.x.x, 0.0));
+        b.block(0.0, 0.0, W + 2.0, H, pal.ground, pal.ink);
+        let rows = p.rows();
+        let n = rows.len();
+        let sel = p.sel.min(n.saturating_sub(1));
+        b.clip(Some([0.0, 119.0, W, H - 64.0 - 119.0]));
+        b.push(Xf::translate((1.0 - p.swap.x) * 60.0, 0.0));
+        b.push_alpha(p.swap.x.clamp(0.0, 1.0));
+        let cur_region = crate::tz::region(&p.current).to_string();
+        for (i, r) in rows.iter().enumerate() {
+            let y = 136.0 + i as f32 * 76.0 - p.scroll.x;
+            if y > H || y + 76.0 < 100.0 {
+                continue;
+            }
+            let on = i == sel;
+            let fg = if on { pal.lime_ink } else { pal.ink };
+            let soft = if on { pal.lime_ink } else { pal.soft };
+            if on {
+                b.rect(40.0, y, W - 80.0, 76.0, pal.lime);
+            } else {
+                b.rect(40.0, y + 75.0, W - 80.0, 1.0, pal.faint);
+            }
+            let lab = ts(Face::Body400, 24.0, fg);
+            let mono = ts(Face::Mono400, 18.0, soft);
+            let ty = y + 38.0 - lab.line_px() / 2.0;
+            let my = y + 38.0 - mono.line_px() / 2.0;
+            let (is_cur, right_txt) = match r {
+                TzRow::Region(name, c) => {
+                    b.text(60.0, ty, name, &lab);
+                    let t = if name == "UTC" { "Coordinated Universal Time".to_string() } else { format!("{c} zones ›") };
+                    (*name == cur_region || (name == "UTC" && p.current == "UTC"), t)
+                }
+                TzRow::Zone(zi) => {
+                    let z = &p.zones[*zi];
+                    let (city, sub) = crate::tz::pretty(&z.id);
+                    let w = b.text(60.0, ty, &city, &lab);
+                    if let Some(sub) = sub {
+                        let st = ts(Face::Mono400, 15.0, soft);
+                        b.text(60.0 + w + 14.0, y + 38.0 - st.line_px() / 2.0, &sub.to_uppercase(), &st);
+                    }
+                    (z.id == p.current, format!("{}   {}", crate::tz::hhmm_at(z.offset), crate::tz::fmt_offset(z.offset)))
+                }
+            };
+            let w = b.text_right(W - 60.0, my, &right_txt, &mono);
+            if is_cur {
+                chip(b, W - 60.0 - w - 16.0, y + 38.0, "CURRENT", 13.0, (7.0, 1.0), pal.lavender, pal.lavender_ink);
+            }
+        }
+        b.pop_alpha();
+        b.pop();
+        b.clip(None);
+        // header
+        b.rect(0.0, 0.0, W, 118.0, pal.ground);
+        b.rect(0.0, 118.0, W, 1.0, pal.ink);
+        let crumb = match &p.region {
+            Some(_) => "SETTINGS · TIME ZONE · CITY",
+            None => "SETTINGS · TIME ZONE · REGION",
+        };
+        let sub = ts(Face::Mono400, 15.0, pal.soft);
+        b.text(40.0, 26.0, crumb, &sub);
+        b.text_right(W - 40.0, 26.0, &format!("{} / {}", sel + 1, n), &sub);
+        let title = ts(Face::SerifItalic, 54.0, pal.ink).line_height(1.0);
+        b.text(40.0, 50.0, p.region.as_deref().unwrap_or("Time zone"), &title);
+        let now = format!("{} · {}", crate::tz::pretty(&p.current).0, mortar_ui::status::clock());
+        let st = ts(Face::Mono600, 17.0, pal.lime_ink);
+        let tw = b.measure(&now, &st);
+        let (w, h) = (tw + 26.0, st.line_px() + 10.0);
+        let (x, y) = ((W - 40.0 - w).round(), (104.0 - h).round());
+        b.block(x, y, w.round(), h.round(), pal.lime, pal.lime_ink);
+        b.text(x + 13.0, y + 5.0, &now, &st);
+        let last = if p.region.is_some() { ("A", "Set") } else { ("A", "Open") };
+        hints(b, pal, H - 64.0, &[("▲▼", "Choose"), ("L1/R1", "Page"), ("B", "Back"), last]);
+        b.pop();
+    }
+
+    fn draw_power(&self, b: &mut B, pal: &Pal, p: &PowerMenu) {
+        let x = p.x.x.clamp(0.0, 1.2);
+        b.rect(0.0, 0.0, W, H, Color(29, 29, 29, (0.5 * x.min(1.0) * 255.0) as u8));
+        let (pw, ph) = (560.0, 470.0);
+        let (px, py) = ((W - pw) / 2.0, (H - ph) / 2.0);
+        let s = 0.9 + 0.1 * x;
+        b.push(Xf::about(W / 2.0, H / 2.0, Xf::scale(s, s)));
+        b.push_alpha(x.min(1.0));
+        b.block(px, py, pw, ph, pal.ground, pal.ink);
+        let sub = ts(Face::Mono400, 15.0, pal.soft);
+        b.text(px + 32.0, py + 26.0, "POWER KEY", &sub);
+        let title = ts(Face::SerifItalic, 54.0, pal.ink).line_height(1.0);
+        b.text(px + 32.0, py + 50.0, "Power", &title);
+        b.rect(px, py + 120.0, pw, 1.0, pal.ink);
+        for (i, (name, desc)) in POWER_ROWS.iter().enumerate() {
+            let y = py + 136.0 + i as f32 * 84.0;
+            let on = i == p.sel;
+            let confirm = p.confirm == Some(i);
+            let (bg, fg) = if confirm {
+                (Some(pal.orange), pal.dark)
+            } else if on {
+                (Some(pal.lime), pal.lime_ink)
+            } else {
+                (None, pal.ink)
+            };
+            if let Some(bg) = bg {
+                b.block(px + 24.0, y, pw - 48.0, 72.0, bg, if confirm { pal.dark } else { pal.lime_ink });
+            } else {
+                b.rect(px + 24.0, y + 71.0, pw - 48.0, 1.0, pal.faint);
+            }
+            let lab = ts(Face::Body500, 26.0, fg);
+            b.text(px + 46.0, y + 36.0 - lab.line_px() / 2.0, name, &lab);
+            let d = if confirm { format!("Press A again to {}", name.to_lowercase()) } else { desc.to_string() };
+            let st = ts(Face::Mono400, 15.0, if on || confirm { fg } else { pal.soft });
+            b.text_right(px + pw - 46.0, y + 36.0 - st.line_px() / 2.0, &d, &st);
+        }
+        let cap = ts(Face::Mono600, 13.0, pal.ground);
+        let lab = ts(Face::Body400, 16.0, pal.soft);
+        let mut xr = px + pw - 28.0;
+        for (c, l) in [("▲▼", "Choose"), ("B", "Cancel"), ("A", "Select")].iter().rev() {
+            let lw = b.measure(l, &lab);
+            b.text(xr - lw, py + ph - 44.0, l, &lab);
+            xr -= lw + 8.0;
+            let tw = arrow_text(b, 0.0, 0.0, c, &cap, false);
+            let cw = (tw + 16.0).max(26.0);
+            b.rrect(xr - cw, py + ph - 44.0 + 1.0, cw, 24.0, 12.0, pal.ink);
+            arrow_text(b, xr - cw + (cw - tw) / 2.0, py + ph - 44.0 + 13.0 - cap.line_px() / 2.0, c, &cap, true);
+            xr -= cw + 20.0;
+        }
+        b.pop_alpha();
+        b.pop();
+    }
+
+    /// Holding the power key: a pill that fills towards the power menu.
+    fn draw_power_hold(&self, b: &mut B, pal: &Pal, h: f32) {
+        let (w, hh) = (340.0, 56.0);
+        let (x, y) = ((W - w) / 2.0, H - 64.0 - 24.0 - hh);
+        b.block(x, y, w, hh, pal.ground, pal.ink);
+        b.rect(x + 1.0, y + hh - 7.0, (w - 2.0) * h.clamp(0.0, 1.0), 6.0, pal.lime);
+        let st = ts(Face::Mono600, 15.0, pal.ink).tracking(0.06);
+        b.text_center(W / 2.0, y + 24.0 - st.line_px() / 2.0, "HOLD FOR POWER MENU", &st);
     }
 
     fn draw_osd(&self, b: &mut B, pal: &Pal, o: &Osd) {
@@ -1856,7 +2367,7 @@ mod tests {
         ["term", "m8", "pico"].iter().map(|i| LauncherInfo { id: i.to_string(), name: i.to_string(), description: String::new(), art: Art::Generic, running: false }).collect()
     }
     fn view<'a>(running: &'a [RunningInfo], launcher: &'a [LauncherInfo], sys: &'a Sys, current: Option<u32>) -> View<'a> {
-        View { running, launcher, sys, volume: Some(50), current, keyboard_app: false, osk_h: 0.0, host: "brick" }
+        View { running, launcher, sys, volume: Some(50), current, keyboard_app: false, osk_h: 0.0, host: "brick", timezone: "Europe/Lisbon" }
     }
     fn settle(ui: &mut ShellUi, v: &View) -> Vec<Out> {
         let mut out = Vec::new();
@@ -1997,6 +2508,76 @@ mod tests {
             ui.step(1.0 / 60.0, &v);
         }
         assert_eq!(ui.pace(false), Pace::Idle);
+    }
+
+    #[test]
+    fn time_zone_picker() {
+        let sys = Sys::demo(None);
+        let l = launcher();
+        let v = view(&[], &l, &sys, None);
+        let mut ui = ShellUi::new(Prefs::default(), false);
+        ui.menu_key(&v);
+        ui.button(Button::L1, false, &v); // Settings
+        let tz_row = settings(false).iter().position(|s| *s == Setting::TimeZone).unwrap();
+        for _ in 0..tz_row {
+            ui.button(Button::Down, false, &v);
+        }
+        assert_eq!(actions(&ui.button(Button::A, false, &v)), vec![Out::OpenTimeZone]);
+        let zones = ["Europe/Lisbon", "Europe/Berlin", "America/Argentina/Buenos_Aires", "America/New_York", "UTC"]
+            .iter()
+            .map(|z| TzZone { id: z.to_string(), offset: 0 })
+            .collect();
+        ui.open_tz(zones, "Europe/Lisbon".into());
+        // regions: America, Europe (current, preselected), UTC
+        let p = ui.tz.as_ref().unwrap();
+        assert_eq!(p.rows().len(), 3);
+        assert_eq!(p.sel, 1);
+        ui.button(Button::A, false, &v); // into Europe, on Lisbon
+        let p = ui.tz.as_ref().unwrap();
+        assert_eq!(p.rows(), vec![TzRow::Zone(1), TzRow::Zone(0)]); // Berlin, Lisbon
+        assert_eq!(p.sel, 1);
+        ui.button(Button::Up, false, &v);
+        assert_eq!(actions(&ui.button(Button::A, false, &v)), vec![Out::SetTimeZone("Europe/Berlin".into())]);
+        settle(&mut ui, &v);
+        assert!(!ui.tz_open());
+        assert!(ui.menu_open());
+    }
+
+    #[test]
+    fn sleep_and_power_menu() {
+        let sys = Sys::demo(None);
+        let l = launcher();
+        let r = [run(2, "term")];
+        let v = view(&r, &l, &sys, Some(2));
+        let mut ui = ShellUi::new(Prefs::default(), false);
+        settle(&mut ui, &v);
+        assert!(!ui.captures_input(true));
+        ui.sleep();
+        assert!(ui.captures_input(true), "asleep: buttons do not reach the app");
+        settle(&mut ui, &v);
+        assert_eq!(ui.sleep_phase(), SleepPhase::Dark);
+        assert_eq!(ui.pace(true), Pace::Idle);
+        // a button wakes and does nothing else
+        let out = ui.button(Button::A, false, &v);
+        assert!(actions(&out).is_empty());
+        assert_eq!(ui.sleep_phase(), SleepPhase::Waking);
+        settle(&mut ui, &v);
+        assert_eq!(ui.sleep_phase(), SleepPhase::Awake);
+        assert!(!ui.captures_input(true));
+        // power menu: restart needs a second A; B backs out of the confirm
+        ui.open_power_menu();
+        ui.button(Button::Down, false, &v);
+        assert!(actions(&ui.button(Button::A, false, &v)).is_empty());
+        ui.button(Button::B, false, &v);
+        assert!(ui.power_menu_open());
+        assert!(actions(&ui.button(Button::A, false, &v)).is_empty());
+        assert_eq!(actions(&ui.button(Button::A, false, &v)), vec![Out::Reboot]);
+        // Sleep from the menu
+        ui.button(Button::Up, false, &v);
+        ui.button(Button::A, false, &v);
+        settle(&mut ui, &v);
+        assert_eq!(ui.sleep_phase(), SleepPhase::Dark);
+        assert!(!ui.power_menu_open());
     }
 
     #[test]
