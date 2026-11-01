@@ -17,7 +17,7 @@ Updates are built on your computer and pushed over SSH.
 |---|---|
 | Boot | U-Boot SPL → TF-A → U-Boot → `extlinux.conf` → Linux 7.3 → NixOS. All 4 cores. |
 | USB-C, bottom port | USB device: serial console (`/dev/cu.usbmodem*`) + Ethernet over USB. The Brick is `10.55.0.1` / `mortar.local` and hands the computer an address. A watchdog recovers the link if it goes deaf. |
-| USB-C, top port | USB host (EHCI/OHCI). USB serial works; USB audio not yet enabled in the kernel. |
+| USB-C, top port | USB host (EHCI/OHCI). USB serial and USB audio work. |
 | SSH | Keys only, read from `ssh-keys/root` on the card's FAT boot partition. No account has a password. |
 | Updates | `nix run .#mortar -- deploy`: build, copy, switch. Every generation stays in the boot menu. |
 | Wi-Fi | XR829, 2.4 GHz, station mode, via iwd. |
@@ -25,11 +25,11 @@ Updates are built on your computer and pushed over SSH.
 | Display | JD9168 DSI panel, 1024×768, KMS console. |
 | GPU | PowerVR GE8300 with TrimUI's stock DDK 1.19 userspace. EGL window surfaces present on the panel through our display-class driver (`brick_dc_drm`), vsync-paced at 60 fps. GLES also renders into dma-bufs for KMS apps. |
 | Buttons | GPIO keys, power key. |
-| Apps | PuzzleScript, m8c (M8 tracker client; plug the M8 into the top port). |
+| Apps | PuzzleScript, m8c (M8 tracker client; plug the M8 into the top port; its audio is routed to the codec). Greeter sessions. SDL3 on KMSDRM with Mesa's software GL (llvmpipe): fine for PuzzleScript, ~30 fps at ~2 cores for a busy M8 screen. |
 | Debug | Each boot saves logs to `mortar-logs/` on the card's FAT partition. |
 
 Not yet: the controller-driven greeter and setup screens, charging
-configuration, suspend, audio beyond the driver, USB audio.
+configuration, suspend, a volume control.
 
 ## Getting started
 
