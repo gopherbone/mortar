@@ -19,7 +19,7 @@
       # Vendor SCP blob (not redistributable) and the U-Boot image embedding it.
       # Build locally only; never push these to a public cache.
       mortarUnfree = pkg: builtins.elem (nixpkgs.lib.getName pkg)
-        [ "trimui-brick-scp" "u-boot-trimui-brick-mainline" "trimui-brick-firmware" "pvr-ddk-userspace" "claude-code" ];
+        [ "trimui-brick-scp" "u-boot-trimui-brick-mainline" "trimui-brick-firmware" "pvr-ddk-userspace" "claude-code" "pico-8" "pico" ];
     in {
       nixosConfigurations.trimui-brick = nixpkgs.lib.nixosSystem {
         system = targetSystem;
@@ -58,6 +58,7 @@
           ./modules/mortar-setup.nix
           { mortar.setup.enable = true; }
           ({ config, pkgs, ... }: {
+            mortar.apps.pico8.enable = true;
             mortar.greeter.enable = true;
             mortar.greeter.sessions = {
               games = {
@@ -73,6 +74,13 @@
                 icon = "usb";
                 order = 20;
                 command = "exec ${config.mortar.gpu.sdlRun}/bin/mortar-sdl-run ${config.mortar.apps.m8c.package}/bin/m8c-brick";
+              };
+              pico8 = {
+                name = "PICO-8";
+                description = "Fantasy console, Splore";
+                icon = "pad";
+                order = 25;
+                command = "exec ${config.mortar.gpu.sdlRun}/bin/mortar-sdl-run ${config.mortar.apps.pico8.package}/bin/pico8 -splore";
               };
               terminal = {
                 name = "Terminal";
