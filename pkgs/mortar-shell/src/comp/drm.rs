@@ -13,6 +13,7 @@
 use super::backend::{elements, CLEAR};
 use super::input::Opener;
 use super::state::Shell;
+use smithay::backend::allocator::dumb::DumbAllocator;
 use smithay::backend::allocator::gbm::{GbmAllocator, GbmBufferFlags, GbmDevice};
 use smithay::backend::allocator::Fourcc;
 use smithay::backend::drm::compositor::{DrmCompositor, FrameFlags};
@@ -31,7 +32,25 @@ use std::io;
 use std::os::fd::OwnedFd;
 use std::path::{Path, PathBuf};
 
-type Comp = DrmCompositor<GbmAllocator<DrmDeviceFd>, GbmFramebufferExporter<DrmDeviceFd>, (), DrmDeviceFd>;
+type GbmComp = DrmCompositor<GbmAllocator<DrmDeviceFd>, GbmFramebufferExporter<DrmDeviceFd>, (), DrmDeviceFd>;
+type DumbComp = DrmCompositor<DumbAllocator, DrmDeviceFd, (), DrmDeviceFd>;
+
+/// GBM buffers (default; allows direct scanout of client dmabufs) or plain
+/// KMS dumb buffers (fallback when libgbm/Mesa is unusable, or
+/// MORTAR_SHELL_ALLOCATOR=dumb).
+enum Comp {
+    Gbm(Box<GbmComp>),
+    Dumb(Box<DumbComp>),
+}
+
+macro_rules! with_comp {
+    ($comp:expr, $c:ident => $body:expr) => {
+        match $comp {
+            Comp::Gbm($c) => $body,
+            Comp::Dumb($c) => $body,
+        }
+    };
+}
 
 pub struct DrmBackend {
     pub session: LibSeatSession,
@@ -114,7 +133,6 @@ pub fn init(handle: &LoopHandle<'static, Shell>) -> Result<(DrmBackend, Output, 
         .ok_or("no CRTC for the connector")?;
 
     let (mut drm, drm_notifier) = DrmDevice::new(fd.clone(), true).map_err(|e| format!("drm: {e:?}"))?;
-    let gbm = GbmDevice::new(fd.clone()).map_err(|e| format!("gbm: {e}"))?;
     let surface = drm.create_surface(crtc, mode, &[conn.handle()]).map_err(|e| format!("drm surface: {e:?}"))?;
 
     let (w, h) = (mode.size().0 as i32, mode.size().1 as i32);
@@ -128,20 +146,39 @@ pub fn init(handle: &LoopHandle<'static, Shell>) -> Result<(DrmBackend, Output, 
     output.set_preferred(omode);
 
     let renderer = PixmanRenderer::new().map_err(|e| format!("pixman: {e:?}"))?;
-    let allocator = GbmAllocator::new(gbm.clone(), GbmBufferFlags::RENDERING | GbmBufferFlags::SCANOUT);
-    let exporter = GbmFramebufferExporter::new(gbm.clone(), None);
-    let comp = DrmCompositor::new(
-        &output,
-        surface,
-        None,
-        allocator,
-        exporter,
-        [Fourcc::Xrgb8888, Fourcc::Argb8888],
-        renderer.dmabuf_formats(),
-        drm.cursor_size(),
-        Some(gbm),
-    )
-    .map_err(|e| format!("drm compositor: {e:?}"))?;
+    let formats = [Fourcc::Xrgb8888, Fourcc::Argb8888];
+    let want_dumb = std::env::var("MORTAR_SHELL_ALLOCATOR").is_ok_and(|v| v == "dumb");
+    let gbm = if want_dumb {
+        None
+    } else {
+        GbmDevice::new(fd.clone()).map_err(|e| tracing::warn!("gbm: {e}; using dumb buffers")).ok()
+    };
+    let comp = match gbm {
+        Some(gbm) => {
+            let allocator = GbmAllocator::new(gbm.clone(), GbmBufferFlags::RENDERING | GbmBufferFlags::SCANOUT);
+            let exporter = GbmFramebufferExporter::new(gbm.clone(), None);
+            DrmCompositor::new(&output, surface, None, allocator, exporter, formats, renderer.dmabuf_formats(), drm.cursor_size(), Some(gbm))
+                .map(|c| Comp::Gbm(Box::new(c)))
+                .map_err(|e| format!("drm compositor (gbm): {e:?}"))?
+        }
+        None => {
+            let allocator = DumbAllocator::new(fd.clone());
+            DrmCompositor::new(
+                &output,
+                surface,
+                None,
+                allocator,
+                fd.clone(),
+                formats,
+                renderer.dmabuf_formats(),
+                drm.cursor_size(),
+                None::<GbmDevice<DrmDeviceFd>>,
+            )
+            .map(|c| Comp::Dumb(Box::new(c)))
+            .map_err(|e| format!("drm compositor (dumb): {e:?}"))?
+        }
+    };
+    tracing::info!(allocator = if matches!(comp, Comp::Gbm(_)) { "gbm" } else { "dumb" }, "scanout buffers");
 
     handle
         .insert_source(drm_notifier, |ev, _, shell: &mut Shell| match ev {
@@ -167,7 +204,7 @@ pub fn init(handle: &LoopHandle<'static, Shell>) -> Result<(DrmBackend, Output, 
                     if let Err(e) = d.drm.activate(false) {
                         tracing::warn!("drm activate: {e:?}");
                     }
-                    let _ = d.comp.reset_state();
+                    let _ = with_comp!(&mut d.comp, c => c.reset_state());
                     d.active = true;
                 }
                 shell.inputs.enabled = true;
@@ -187,9 +224,11 @@ pub fn init(handle: &LoopHandle<'static, Shell>) -> Result<(DrmBackend, Output, 
 
 fn on_vblank(shell: &mut Shell) {
     if let super::backend::Backend::Drm(d) = &mut shell.backend {
-        if let Err(e) = d.comp.frame_submitted() {
-            tracing::warn!("frame_submitted: {e:?}");
-        }
+        with_comp!(&mut d.comp, c => {
+            if let Err(e) = c.frame_submitted() {
+                tracing::warn!("frame_submitted: {e:?}");
+            }
+        });
         d.pending = false;
     }
     shell.frame_done();
@@ -205,28 +244,38 @@ impl DrmBackend {
         }
         let els = elements(shell, &mut self.renderer);
         let flags = if std::env::var_os("MORTAR_SHELL_NO_SCANOUT").is_some() { FrameFlags::empty() } else { FrameFlags::DEFAULT };
-        match self.comp.render_frame(&mut self.renderer, &els, CLEAR, flags) {
-            Ok(res) => {
+        let renderer = &mut self.renderer;
+        let r: Result<(bool, bool), String> = with_comp!(&mut self.comp, c => {
+            c.render_frame(renderer, &els, CLEAR, flags)
+                .map(|res| {
+                    let direct = matches!(res.primary_element, smithay::backend::drm::compositor::PrimaryPlaneElement::Element(_));
+                    (res.is_empty, direct)
+                })
+                .map_err(|e| format!("{e:?}"))
+        });
+        match r {
+            Ok((empty, direct)) => {
                 shell.needs_redraw = false;
-                if matches!(res.primary_element, smithay::backend::drm::compositor::PrimaryPlaneElement::Element(_)) {
+                if direct {
                     self.scanout_frames += 1; // a client buffer went straight to the panel
                 }
-                if res.is_empty {
+                if empty {
                     shell.frame_done();
                     return;
                 }
-                match self.comp.queue_frame(()) {
+                let q = with_comp!(&mut self.comp, c => c.queue_frame(()).map_err(|e| format!("{e:?}")));
+                match q {
                     Ok(()) => {
                         self.pending = true;
                         self.frames += 1;
                     }
                     Err(e) => {
-                        tracing::warn!("queue_frame: {e:?}");
+                        tracing::warn!("queue_frame: {e}");
                         shell.frame_done();
                     }
                 }
             }
-            Err(e) => tracing::warn!("render_frame: {e:?}"),
+            Err(e) => tracing::warn!("render_frame: {e}"),
         }
     }
 }

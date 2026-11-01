@@ -121,7 +121,7 @@ let
     gamepad = "keyboard";
     singleInstance = false;
     order = 5;
-    command = [ "${lib.getExe cfg.terminal.package}" "--config" "${footIni}" "--working-directory" "~" ];
+    command = [ "${lib.getExe cfg.terminal.package}" "--config" "${footIni}" ];
     env = { };
   };
 

@@ -67,6 +67,7 @@ environment:
   MORTAR_SHELL_LOG          log filter (tracing EnvFilter), default info
   MORTAR_DRM_DEVICE         DRM card to use
   MORTAR_SHELL_NO_SCANOUT   never scan out client buffers directly
+  MORTAR_SHELL_ALLOCATOR    gbm (default; falls back to dumb) | dumb
   MORTAR_UI_FONTS           font directory (default: baked in)
 ";
 

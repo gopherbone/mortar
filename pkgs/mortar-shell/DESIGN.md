@@ -182,7 +182,9 @@ Now: Smithay's pixman (CPU) renderer everywhere.
   write-combined scanout buffer would read it back, which is slow on the
   A133 (see the notes in pkgs/m8c and pkgs/puzzlescript).
 - Output: DRM/KMS through Smithay's `DrmCompositor`, swapchain buffers from
-  GBM (Mesa's kms_swrast on sun4i, i.e. dumb buffers that pixman maps).
+  GBM (Mesa's kms_swrast on sun4i, i.e. dumb buffers that pixman maps). If
+  libgbm cannot open the card (or `MORTAR_SHELL_ALLOCATOR=dumb`), plain KMS
+  dumb buffers are used instead; only direct scanout is lost.
 - Direct scanout: when the only element is a client dmabuf that covers the
   screen, `DrmCompositor` puts it on the primary plane with no copy (the
   GBM framebuffer exporter imports client dmabufs). `ctl state` reports
