@@ -124,6 +124,8 @@
             };
           })
           ./modules/mortar-base.nix
+          ./modules/mortar-fastboot.nix
+          { mortar.fastboot.enable = true; }
           # Over-the-air updates from a private binary cache (docs/updates.md).
           # Nothing here is secret: bucket, endpoint, the public signing key.
           # Fill these in, set enable = true and `mortar deploy` once; after

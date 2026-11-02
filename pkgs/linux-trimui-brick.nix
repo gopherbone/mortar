@@ -104,6 +104,12 @@ buildLinux (
         name = "power-axp2202-stock-charger-setup-gauge-model-charge-state";
         patch = ../patches/kernel/0005-power-axp2202-stock-charger-setup-gauge-model-charge-state.patch;
       }
+      {
+        # The RTC's "does it tick" check slept 2.5 s in probe, in the
+        # middle of the kernel's boot; a worker does it now.
+        name = "rtc-trimui-brick-check-the-clock-ticks-off-the-boot-path";
+        patch = ../patches/kernel/0006-rtc-trimui-brick-check-the-clock-ticks-off-the-boot-path.patch;
+      }
     ];
     # Makefile at this rev is 7.3.0; the defconfig sets CONFIG_LOCALVERSION="-brick-dev"
     # and disables LOCALVERSION_AUTO. The fetched source has no .git, so
