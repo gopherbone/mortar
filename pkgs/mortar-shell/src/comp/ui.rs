@@ -95,6 +95,10 @@ pub fn read_volume_with(get: &[String]) -> Option<(u8, bool)> {
 /// The MENU backdrop is blurred again at most this often.
 pub const BLUR_EVERY: Duration = Duration::from_millis(66);
 
+/// Settings > About and Home's storage and battery-health lines are read
+/// again at most this often.
+const ABOUT_EVERY: Duration = Duration::from_secs(30);
+
 /// A surface's current buffer and commit.
 pub fn surface_buffer(s: &WlSurface) -> Option<(WlBuffer, CommitCounter)> {
     with_states(s, |st| {
@@ -1039,11 +1043,17 @@ impl Shell {
     pub fn status_refresh(&mut self) -> bool {
         let new = Sys::read();
         let radios = read_radios();
-        let about = crate::about::About::read();
-        let changed = format!("{new:?}") != format!("{:?}", self.sys) || radios != self.radios || about != self.about;
+        let mut changed = format!("{new:?}") != format!("{:?}", self.sys) || radios != self.radios;
         self.sys = new;
         self.radios = radios;
-        self.about = about;
+        // About (storage, battery health, temperature) every 30 s, not
+        // every 2 s: its battery reads were ~25 I2C interrupts/s at idle
+        if self.about_at.elapsed() >= ABOUT_EVERY {
+            let about = crate::about::About::read();
+            changed |= about != self.about;
+            self.about = about;
+            self.about_at = Instant::now();
+        }
         changed
     }
 

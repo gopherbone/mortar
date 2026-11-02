@@ -234,6 +234,9 @@ pub struct Shell {
     pub widget_out: Vec<Option<crate::widgets::Output>>,
     /// Settings > About and the storage widget.
     pub about: crate::about::About,
+    /// When `about` was read (it changes slowly, and its battery health,
+    /// cycle count and battery temperature are I2C reads from the PMIC).
+    pub about_at: Instant,
 }
 
 impl Shell {
@@ -386,6 +389,7 @@ impl Shell {
             widget_worker,
             widget_out,
             about: crate::about::About::read(),
+            about_at: Instant::now(),
         };
         shell.apply_prefs();
         shell.refresh_timezone();
