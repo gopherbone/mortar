@@ -332,6 +332,21 @@ in {
       [ "watchdog.open_timeout=0" ]
     ];
 
+    # schedutil: change the CPU clock at most every 20 ms. A step that
+    # changes vdd-cpu is ~7 I2C transfers to the TCS4838 (the driver reads
+    # back and checks PGOOD), ~50 bus interrupts. With the default limit
+    # (366 us, from the 244 us transition latency) the governor followed
+    # every wakeup and every PipeWire quantum: measured 2026-11-01 on Home
+    # 28 transitions/s and 1,400 I2C interrupts/s, while audio played 67/s
+    # and 3,300/s, after opening the MENU ~200/s and ~10,000/s. At 20 ms:
+    # 16/s, 30/s, 18/s (850 to 1,500 I2C interrupts/s), with the same frame
+    # rates. Games keep the clock up anyway, and everything ran at a fixed
+    # 1008 MHz before schedutil, so a ramp-up 20 ms later costs nothing
+    # visible.
+    systemd.tmpfiles.rules = [
+      "w- /sys/devices/system/cpu/cpufreq/schedutil/rate_limit_us - - - - 20000"
+    ];
+
     # The device kernel only builds what the Brick needs; NixOS' default
     # initrd module list (ahci, xhci_pci, usbhid, ...) mostly doesn't exist.
     boot.initrd.includeDefaultModules = false;
