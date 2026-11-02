@@ -102,6 +102,53 @@ int ac_glShaderSource(GLuint shader, GLsizei count, const GLchar* const* string,
     return 0;
 }
 
+/* The port prints only the start of a failed compile's log. */
+void ac_glCompileShader(GLuint shader) {
+    mgl_glCompileShader(shader);
+    GLint ok = 0, len = 0;
+    mgl_glGetShaderiv(shader, GL_COMPILE_STATUS, &ok);
+    if (ok) return;
+    mgl_glGetShaderiv(shader, GL_INFO_LOG_LENGTH, &len);
+    char* log = (char*)malloc(len > 0 ? (size_t)len + 1 : 1);
+    if (!log) return;
+    log[0] = '\0';
+    mgl_glGetShaderInfoLog(shader, len, NULL, log);
+    fprintf(stderr, "[AC/Mortar] shader compile failed:\n%s\n", log);
+    free(log);
+    /* ACGC_SHADER_DUMP=DIR: keep the failing source */
+    const char* dir = getenv("ACGC_SHADER_DUMP");
+    if (dir) {
+        static int n;
+        GLint slen = 0;
+        mgl_glGetShaderiv(shader, GL_SHADER_SOURCE_LENGTH, &slen);
+        char* src = (char*)malloc((size_t)slen + 1);
+        char path[512];
+        snprintf(path, sizeof(path), "%s/fail-%d.glsl", dir, n++);
+        FILE* f = src ? fopen(path, "w") : NULL;
+        if (f) {
+            mgl_glGetShaderSource(shader, slen, NULL, src);
+            fputs(src, f);
+            fclose(f);
+        }
+        free(src);
+    }
+}
+
+/* pc_gx_texture.c's Switch texture code (compact formats, mip chains) is
+ * compiled for Mortar too; its decode thread is never started here, but
+ * the libnx calls it names must link. */
+#include <stdint.h>
+#include <time.h>
+unsigned g_ac_switch_tex_creates;
+uint32_t svcSetThreadCoreMask(uint32_t handle, int32_t core, uint32_t mask) {
+    (void)handle; (void)core; (void)mask;
+    return 0;
+}
+void svcSleepThread(int64_t nano) {
+    struct timespec t = { (time_t)(nano / 1000000000), (long)(nano % 1000000000) };
+    nanosleep(&t, NULL);
+}
+
 /* pc_pad.c reads the Android touch overlay; there is none here. */
 volatile int g_android_touch_buttons = 0;
 volatile int g_android_touch_stick_x = 0;

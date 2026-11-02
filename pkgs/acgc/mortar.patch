@@ -2,14 +2,20 @@ Mortar (TrimUI Brick) changes to digdat0/ACGC-Switch-Port, all behind
 TARGET_MORTAR (pkgs/acgc/CMakeLists.txt defines it with TARGET_ANDROID):
 
 - libultra.h: glibc declares bcmp/bcopy/bzero (mortar_decls.h includes them).
-- pc_main.c: load GLES through SDL_GL_GetProcAddress (compat/glad/gl.h);
-  a window smaller than the panel (settings.ini, default 640x480) is an
-  exclusive fullscreen mode, so the compositor scales it (fill rate).
+- pc_main.c: load GLES through SDL_GL_GetProcAddress (compat/glad/gl.h).
+- pc_gx_tev.c + default.frag: specialized fragment shaders get the TEV
+  stages as straight-line GLSL generated from the key (acTev) and sample
+  textures straight from the varyings. The PowerVR compiler neither unrolls
+  the stage loop nor folds the helper switches (and fails on them inlined at
+  literal indices), so every pixel ran the whole TEV interpreter: the title
+  screen took ~55 ms of GPU per frame at 640x480, now ~5 ms at 1024x768.
+  Plus the Switch build's program binary cache (~70 s of shader compiles at
+  every start without it).
 - pc_gx.c: the Switch build's vertex ring (one 8 MiB buffer, base-vertex
   draws), persistently mapped with EXT_buffer_storage: glBufferData per
   draw made the PowerVR driver allocate and map device memory each time.
-- pc_gx_tev.c: the Switch build's program binary cache (the PowerVR
-  compiler needs ~70 s for the 172 boot variants; ~0.1 s from the cache).
+- pc_gx_texture.c: the Switch build's compact texture formats and mip
+  chains (decoded on the main thread; no decode thread).
 - pc_keybindings.c, pc_pad.c, pc_pause_menu.c: Brick buttons by label; the
   D-pad drives the main stick, L2 + D-pad is the GameCube D-pad.
 - pc_vi.c: ACGC_FPS=1 logs the frame rate.
@@ -26,6 +32,55 @@ diff -ruN a/include/libultra/libultra.h b/include/libultra/libultra.h
  int bcmp(void* v1, void* v2, u32 size);
  void bcopy(void* src, void* dst, size_t n);
  void bzero(void* ptr, size_t size);
+diff -ruN a/pc/shaders/default.frag b/pc/shaders/default.frag
+--- a/pc/shaders/default.frag	2026-11-02 00:57:28
++++ b/pc/shaders/default.frag	2026-11-02 01:20:06
+@@ -306,9 +306,23 @@
+     /* Texture samples. Kept as an explicit 3-way dispatch rather than a
+        sampler array so the C side doesn't need to change. */
+     vec4 texColor[3];
++    /* AC_TEXn_DIRECT (Mortar's specialized shaders): sample straight from the
++       varying, so the PowerVR issues the read before the shader runs */
++#ifdef AC_TEX0_DIRECT
++    texColor[0] = texture(u_texture0, AC_TEX0_DIRECT);
++#else
+     texColor[0] = (u_use_texture[0] != 0) ? texture(u_texture0, stc[0]) : vec4(1.0);
++#endif
++#ifdef AC_TEX1_DIRECT
++    texColor[1] = texture(u_texture1, AC_TEX1_DIRECT);
++#else
+     texColor[1] = (u_use_texture[1] != 0) ? texture(u_texture1, stc[1]) : vec4(1.0);
++#endif
++#ifdef AC_TEX2_DIRECT
++    texColor[2] = texture(u_texture2, AC_TEX2_DIRECT);
++#else
+     texColor[2] = (u_use_texture[2] != 0) ? texture(u_texture2, stc[2]) : vec4(1.0);
++#endif
+ 
+     /* Rasterized color: GX lighting model */
+     vec4 rasColor;
+@@ -343,6 +357,13 @@
+     vec4 r1 = u_tev_reg1;
+     vec4 r2 = u_tev_reg2;
+ 
++#ifdef AC_SPECIALIZED
++    /* Mortar: the stages as straight-line code (pc_gx_tev.c). The PowerVR
++       compiler neither unrolls this loop nor folds the helpers' switches,
++       and fails outright on the inlined helpers at literal indices. */
++    acTev(texColor[0], texColor[1], texColor[2], rasColor,
++          u_kcolor[0], u_kcolor[1], u_kcolor[2], u_kcolor[3], prev, r0, r1, r2);
++#else
+     /* Main TEV loop (Stage 0, 1, 2) */
+     for (int s = 0; s < u_num_tev_stages; s++) {
+         ivec2 swap = u_tev_swap[s];
+@@ -356,6 +377,7 @@
+         result = applyBSC(result, u_tev_bsc[s]);
+         writeToReg(result, u_tev_out[s], prev, r0, r1, r2);
+     }
++#endif
+ 
+     /* Alpha compare */
+     if (u_alpha_ctrl.x != 7 || u_alpha_ctrl.z != 7) {
 diff -ruN a/pc/src/pc_gx.c b/pc/src/pc_gx.c
 --- a/pc/src/pc_gx.c	2026-11-02 00:04:03
 +++ b/pc/src/pc_gx.c	2026-11-02 00:08:34
@@ -114,8 +169,85 @@ diff -ruN a/pc/src/pc_gx.c b/pc/src/pc_gx.c
      glBufferData(GL_ARRAY_BUFFER, PC_GX_MAX_VERTS * sizeof(PCGXVertex), NULL, GL_STREAM_DRAW);
 diff -ruN a/pc/src/pc_gx_tev.c b/pc/src/pc_gx_tev.c
 --- a/pc/src/pc_gx_tev.c	2026-11-02 00:04:30
-+++ b/pc/src/pc_gx_tev.c	2026-11-02 00:04:30
-@@ -408,8 +408,8 @@
++++ b/pc/src/pc_gx_tev.c	2026-11-02 01:20:31
+@@ -369,6 +369,67 @@
+          k->alpha[0], k->alpha[1], k->alpha[2]);
+     EMIT("const int u_num_ind_stages = %d;\n", k->num_ind);
+     EMIT("const int u_fog_enable = %d;\n", k->fog_enable);
++#ifdef TARGET_MORTAR
++    /* The TEV stages as straight-line GLSL (default.frag calls acTev under AC_SPECIALIZED): every
++     * selector of the key resolved here. The PowerVR compiler neither unrolls default.frag's stage
++     * loop nor folds the switches in its helpers, so each pixel ran the whole TEV interpreter: ~50x
++     * the cost of a plain texture read, most of the GPU time of a frame. */
++    {
++        static const char* const ch = "rgba";
++        static const char* const reg[4] = { "prev", "r0", "r1", "r2" };
++        EMIT("#define AC_SPECIALIZED 1\n");
++        EMIT("void acTev(vec4 t0, vec4 t1, vec4 t2, vec4 ras, vec4 k0, vec4 k1, vec4 k2, vec4 k3,\n"
++             "           inout vec4 prev, inout vec4 r0, inout vec4 r1, inout vec4 r2) {\n");
++        for (int s = 0; s < k->num_stages && s < 3; s++) {
++            const u8* ts = &k->swap_tbl[(k->st[s].swap[1] & 3) * 4];
++            const u8* rs = &k->swap_tbl[(k->st[s].swap[0] & 3) * 4];
++            EMIT("    {\n        vec4 tx = t%d.%c%c%c%c;\n        vec4 rs = ras.%c%c%c%c;\n", s,
++                 ch[ts[0] & 3], ch[ts[1] & 3], ch[ts[2] & 3], ch[ts[3] & 3],
++                 ch[rs[0] & 3], ch[rs[1] & 3], ch[rs[2] & 3], ch[rs[3] & 3]);
++            /* konst colour / alpha (getKonstC / getKonstA) */
++            int kc = k->st[s].ksel[0], ka = k->st[s].ksel[1];
++            if (kc <= 7) EMIT("        vec3 kc = vec3(%d.0 / 8.0);\n", 8 - kc);
++            else if (kc <= 11) EMIT("        vec3 kc = vec3(0.0);\n");
++            else if (kc <= 15) EMIT("        vec3 kc = k%d.rgb;\n", kc - 12);
++            else EMIT("        vec3 kc = vec3(k%d.%c);\n", (kc - 16) & 3, ch[((kc - 16) >> 2) & 3]);
++            if (ka <= 7) EMIT("        float ka = %d.0 / 8.0;\n", 8 - ka);
++            else if (ka <= 15) EMIT("        float ka = 0.0;\n");
++            else EMIT("        float ka = k%d.%c;\n", (ka - 16) & 3, ch[((ka - 16) >> 2) & 3]);
++            /* colour and alpha arguments (getTevC / getTevA) */
++            static const char* const carg[16] = {
++                "prev.rgb", "vec3(prev.a)", "r0.rgb", "vec3(r0.a)", "r1.rgb", "vec3(r1.a)", "r2.rgb", "vec3(r2.a)",
++                "tx.rgb", "vec3(tx.a)", "rs.rgb", "vec3(rs.a)", "vec3(1.0)", "vec3(0.5)", "kc", "vec3(0.0)" };
++            static const char* const aarg[8] = { "prev.a", "r0.a", "r1.a", "r2.a", "tx.a", "rs.a", "ka", "0.0" };
++            const u8* ci = k->st[s].cin;
++            const u8* ai = k->st[s].ain;
++            EMIT("        vec3 c = %s %c mix(%s, %s, %s);\n", carg[ci[3] & 15], k->st[s].cop == 1 ? '-' : '+',
++                 carg[ci[0] & 15], carg[ci[1] & 15], carg[ci[2] & 15]);
++            EMIT("        float a = %s %c mix(%s, %s, %s);\n", aarg[ai[3] & 7], k->st[s].aop == 1 ? '-' : '+',
++                 aarg[ai[0] & 7], aarg[ai[1] & 7], aarg[ai[2] & 7]);
++            /* bias / scale (applyBSC) */
++            const u8* b = k->st[s].bsc;
++            if (b[0] == 1) EMIT("        c += 0.5;\n"); else if (b[0] == 2) EMIT("        c -= 0.5;\n");
++            if (b[1] == 1) EMIT("        c *= 2.0;\n"); else if (b[1] == 2) EMIT("        c *= 4.0;\n");
++            else if (b[1] == 3) EMIT("        c *= 0.5;\n");
++            if (b[2] == 1) EMIT("        a += 0.5;\n"); else if (b[2] == 2) EMIT("        a -= 0.5;\n");
++            if (b[3] == 1) EMIT("        a *= 2.0;\n"); else if (b[3] == 2) EMIT("        a *= 4.0;\n");
++            else if (b[3] == 3) EMIT("        a *= 0.5;\n");
++            /* clamp and destination register (writeToReg) */
++            const u8* o = k->st[s].outc;
++            EMIT("        %s.rgb = %s;\n        %s.a = %s;\n    }\n",
++                 reg[o[2] & 3], o[0] ? "clamp(c, 0.0, 1.0)" : "c",
++                 reg[o[3] & 3], o[1] ? "clamp(a, 0.0, 1.0)" : "a");
++        }
++        EMIT("}\n");
++    }
++    /* Stages that sample a texture at an interpolated coordinate as is (no indirect offset):
++     * default.frag samples them straight from the varying. On PowerVR that read is issued before
++     * the shader runs; through the stc[] arrays it was a dependent read the shader waits for. */
++    for (int s = 0; s < k->num_stages && s < 3; s++) {
++        if (k->st[s].use_tex && (k->num_ind == 0 || k->st[s].ind[1] == 0))
++            EMIT("#define AC_TEX%d_DIRECT v_texcoord%d\n", s, k->st[s].tc_src);
++    }
++#endif
+ 
+     return (int)pos;
+ }
+@@ -378,7 +439,7 @@
+ /* Builds the specialized fragment source: #version line + const block + the
+  * base source with the #version line and folded uniform decls stripped. */
+ static char* build_specialized_source(const PCGXShaderKey* k) {
+-    char consts[4096];
++    char consts[8192]; /* Mortar: room for acTev */
+     int clen = emit_const_block(consts, sizeof(consts), k);
+     if (clen < 0) return NULL;
+ 
+@@ -408,8 +469,8 @@
      return out;
  }
  
@@ -126,7 +258,7 @@ diff -ruN a/pc/src/pc_gx_tev.c b/pc/src/pc_gx_tev.c
   * ~60 s on every start. Linked programs are saved with glGetProgramBinary and loaded back with
   * glProgramBinary on later starts; a binary the driver rejects (driver update) is just recompiled.
   * File: magic, key size, then { key, format, length, data } records. */
-@@ -514,7 +514,7 @@
+@@ -514,7 +575,7 @@
      memset(v, 0, sizeof(*v));
  
      GLuint prog = 0;
@@ -135,7 +267,7 @@ diff -ruN a/pc/src/pc_gx_tev.c b/pc/src/pc_gx_tev.c
      prog = bin_cache_get(k);
      if (prog) {
          s_bin_hits++;
-@@ -527,7 +527,7 @@
+@@ -527,7 +588,7 @@
          prog = link_program(s_vertex_shader, fs);
          free(src);
      }
@@ -144,7 +276,7 @@ diff -ruN a/pc/src/pc_gx_tev.c b/pc/src/pc_gx_tev.c
      if (prog) {
          s_bin_misses++;
          bin_cache_put(k, prog);
-@@ -706,6 +706,8 @@
+@@ -706,6 +767,8 @@
          printf("[PC/TEV] %s: %s, %ld recorded configs (+%d built in)\n", PC_GX_KEY_CACHE_FILE,
                 kf ? "found" : "not found", extra > 0 ? extra : 0, PC_SHADER_SEED_COUNT);
      }
@@ -153,6 +285,68 @@ diff -ruN a/pc/src/pc_gx_tev.c b/pc/src/pc_gx_tev.c
  #endif
  
      /* Built-in seed: configs seen during development, so a fresh install
+diff -ruN a/pc/src/pc_gx_texture.c b/pc/src/pc_gx_texture.c
+--- a/pc/src/pc_gx_texture.c	2026-11-02 00:52:55
++++ b/pc/src/pc_gx_texture.c	2026-11-02 00:52:55
+@@ -9,7 +9,7 @@
+ static int pc_gx_tlut_force_be(void);
+ static void decode_rgb5a3_entry(u16 val, u8* r, u8* g, u8* b, u8* a);
+ static u32 tlut_content_hash(const void* data, int tlut_fmt, int n_entries, int is_be);
+-#ifdef TARGET_SWITCH
++#if defined(TARGET_SWITCH) || defined(TARGET_MORTAR)
+ static void compact_tables_init(void);
+ #endif
+ 
+@@ -238,7 +238,7 @@
+ }
+ 
+ void pc_gx_texture_init(void) {
+-#ifdef TARGET_SWITCH
++#if defined(TARGET_SWITCH) || defined(TARGET_MORTAR)
+     compact_tables_init();
+ #endif
+     memset(tex_cache, 0, sizeof(tex_cache));
+@@ -754,7 +754,9 @@
+     }
+ }
+ 
+-#ifdef TARGET_SWITCH
++#if defined(TARGET_SWITCH) || defined(TARGET_MORTAR)
++/* (Mortar: the compact formats and mip chains below, decoded on the main thread; the
++ * libnx calls of the decode thread, which Mortar does not start, are stubs in mortar_glue.c.) */
+ /* Upload a decoded texture in the smallest GPU format that gives the same texels, as the GameCube
+  * keeps them: its I4/I8/IA4/IA8, RGB565, RGB5A3 and palette textures are 4-16 bits per texel, the
+  * decoder makes 32. Greyscale -> R8 (+alpha: RG8) with a swizzle; 5/6-bit colour -> RGB565 or
+@@ -1342,7 +1344,7 @@
+     pc_gx_texture_bind_cache_invalidate();
+ 
+     int mips = 0;
+-#ifdef TARGET_SWITCH
++#if defined(TARGET_SWITCH) || defined(TARGET_MORTAR)
+     {
+         extern unsigned g_ac_switch_tex_creates; /* hitch diagnostics (switch_glue.c) */
+         g_ac_switch_tex_creates++;
+@@ -1399,6 +1401,11 @@
+                 int opaque = upload_compact_rgba(rgba, width, height);
+                 if (mips == 2 && !opaque) mips = 0;
+             }
++#elif defined(TARGET_MORTAR)
++            /* the PowerVR is short of bandwidth too: compact formats + mip chains (Switch) */
++            decode_gc_texture(image_ptr, rgba, width, height, format, palette);
++            int opaque = upload_compact_rgba(rgba, width, height);
++            if (mips == 2 && !opaque) mips = 0;
+ #else
+             decode_gc_texture(image_ptr, rgba, width, height, format, palette);
+             glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0,
+@@ -1415,7 +1422,7 @@
+         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, white);
+     }
+ 
+-#ifdef TARGET_SWITCH
++#if defined(TARGET_SWITCH) || defined(TARGET_MORTAR)
+     if (mips) {
+         if (!queued) glGenerateMipmap(GL_TEXTURE_2D); /* queued: after the upload */
+     }
 diff -ruN a/pc/src/pc_keybindings.c b/pc/src/pc_keybindings.c
 --- a/pc/src/pc_keybindings.c	2026-11-01 23:49:37
 +++ b/pc/src/pc_keybindings.c	2026-11-01 23:49:52
@@ -186,28 +380,8 @@ diff -ruN a/pc/src/pc_keybindings.c b/pc/src/pc_keybindings.c
      .dpad_left  = SDL_CONTROLLER_BUTTON_DPAD_LEFT,
 diff -ruN a/pc/src/pc_main.c b/pc/src/pc_main.c
 --- a/pc/src/pc_main.c	2026-11-01 23:49:37
-+++ b/pc/src/pc_main.c	2026-11-02 00:11:59
-@@ -197,6 +197,19 @@
-         /* the screen; the game's render size is switch_glue.c's offscreen target (dynamic) */
-         win_w = 1280;
-         win_h = 720;
-+#elif defined(TARGET_MORTAR)
-+        /* Brick: the GPU is fill-bound at the panel's 1024x768. A smaller
-+         * window_width/height in settings.ini (default 640x480, the
-+         * GameCube's) is an exclusive fullscreen mode: SDL renders at that
-+         * size and the compositor scales it up (wp_viewporter). Set the
-+         * panel size there for native resolution. */
-+        {
-+            SDL_DisplayMode dm;
-+            if (SDL_GetDesktopDisplayMode(0, &dm) == 0 && (win_w < dm.w || win_h < dm.h))
-+                flags |= SDL_WINDOW_FULLSCREEN;
-+            else
-+                flags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
-+        }
- #elif defined(TARGET_ANDROID)
-         /* SDL requests immersive Android system UI and the full drawable. */
-         flags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
-@@ -233,7 +246,7 @@
++++ b/pc/src/pc_main.c	2026-11-02 01:25:02
+@@ -233,7 +233,7 @@
          exit(1);
      }
  

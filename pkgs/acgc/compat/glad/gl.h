@@ -93,6 +93,7 @@ extern "C" {
     X(GetProgramiv, GETPROGRAMIV) \
     X(GetShaderInfoLog, GETSHADERINFOLOG) \
     X(GetShaderiv, GETSHADERIV) \
+    X(GetShaderSource, GETSHADERSOURCE) \
     X(GetString, GETSTRING) \
     X(GetStringi, GETSTRINGI) \
     X(GetUniformBlockIndex, GETUNIFORMBLOCKINDEX) \
@@ -174,7 +175,9 @@ AC_GLES_FUNCS(AC_GLES_DECLARE)
 #define glClearStencil mgl_glClearStencil
 #define glClientWaitSync mgl_glClientWaitSync
 #define glColorMask mgl_glColorMask
-#define glCompileShader mgl_glCompileShader
+/* compile errors go to the log in full (mortar_glue.c) */
+void ac_glCompileShader(GLuint shader);
+#define glCompileShader ac_glCompileShader
 #define glCompressedTexImage2D mgl_glCompressedTexImage2D
 #define glCreateProgram mgl_glCreateProgram
 #define glCreateShader mgl_glCreateShader
