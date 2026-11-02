@@ -1535,7 +1535,7 @@ impl ShellUi {
         let was = self.saver_p;
         self.saver_p = if self.prefs.reduce_motion || !allowed && target == 0.0 && self.menu.is_none() {
             target
-        } else if target > self.saver_p {
+        } else if self.saver_on {
             (self.saver_p + dt / SAVER_GROW).min(1.0)
         } else {
             (self.saver_p - dt / SAVER_GROW).max(0.0)
@@ -2763,6 +2763,25 @@ mod tests {
     }
 
     #[test]
+    fn full_screensaver_holds_still_at_the_pattern_pace() {
+        // at full size it stays there (it once stepped back and forth every
+        // frame: a flicker, and 60 fps)
+        let sys = Sys::demo(None);
+        let l = launcher();
+        let v = view(&[], &l, &sys, None);
+        let mut ui = ShellUi::new(Prefs { screensaver: 30, ..quiet() }, false);
+        ui.menu_key(&v);
+        press(&mut ui, &v, &[Button::Right]);
+        for i in 0..(40 * 40) {
+            ui.step(if i % 3 == 0 { 0.008 } else { 1.0 / 30.0 }, &v);
+            if ui.t > 33.0 {
+                assert_eq!(ui.saver().0, 1.0);
+                assert_eq!(ui.pace(false), Pace::Pattern);
+            }
+        }
+    }
+
+    #[test]
     fn screensaver_grows_and_a_press_brings_the_menu_back() {
         let sys = Sys::demo(None);
         let l = launcher();
@@ -2787,6 +2806,7 @@ mod tests {
         }
         assert!(ui.saver().0 >= 0.999, "full screen");
         assert!(ui.menu_open());
+        assert_eq!(ui.pace(false), Pace::Pattern, "the saver moves at the pattern's pace");
         // a press brings the menu back and does nothing else
         assert!(press(&mut ui, &v, &[Button::A]).is_empty());
         assert_eq!(ui.menu_category(), Some(Cat::Apps));
