@@ -302,6 +302,11 @@ fn deploy(o: &Opts) {
         }
     }
     remote(&o.host, &format!("nix-env -p {PROFILE} --list-generations | tail -3"));
+    // PICO-8 lives in its own profile (never in the system closure or the
+    // update cache), so a deploy never brings it back: say so when it's gone.
+    if !remote(&o.host, &format!("test -x {PICO8_PROFILE}/bin/pico8")) {
+        say("PICO-8 is not installed on the Brick; run `mortar pico8` to add it");
+    }
 }
 
 fn main() {
