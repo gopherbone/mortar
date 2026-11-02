@@ -763,29 +763,6 @@ impl Gl {
         self.check("blur")
     }
 
-    /// The gaussian rounds alone on `a` (already quarter size: the home
-    /// screen drawn small), `b` as scratch.
-    pub fn blur_in_place(&mut self, a: &Fbo, b: &Fbo) -> Result<(), String> {
-        // SAFETY: plain state changes on the current context
-        unsafe {
-            (self.gl.glDisable)(GL_BLEND);
-            (self.gl.glDisable)(GL_SCISSOR_TEST);
-        }
-        let (tx, ty) = (1.0 / a.w as f32, 1.0 / a.h as f32);
-        for _ in 0..3 {
-            self.pass(4, a.tex, b, (tx, 0.0), false, false);
-            self.pass(4, b.tex, a, (0.0, ty), false, false);
-        }
-        // SAFETY: state reset
-        unsafe {
-            (self.gl.glDisableVertexAttribArray)(0);
-            (self.gl.glDisableVertexAttribArray)(1);
-            (self.gl.glDisableVertexAttribArray)(2);
-            (self.gl.glBindFramebuffer)(GL_FRAMEBUFFER, 0);
-        }
-        self.check("home blur")
-    }
-
     /// Mean colour (sRGB 0..1) of a blur FBO: eight rows read back (a few
     /// KB, once per re-blur, after the blur has finished anyway).
     pub fn mean_rgb(&self, f: &Fbo) -> Option<[f32; 3]> {
@@ -914,13 +891,6 @@ impl Gl {
     /// already shows this scene); None draws everything.
     pub fn render(&mut self, t: &Target, scene: &Scene, typo: &Typo, tex: &dyn Fn(Src) -> Option<(GLuint, bool, bool, i32, i32)>, only: Option<(&[Info], &[[f32; 4]])>) -> Result<(), String> {
         self.render_fb(t.fbo, t.w, t.h, t.w as f32, t.h as f32, scene, typo, tex, only)
-    }
-
-    /// Draw `scene` (laid out in `cw` x `ch` units) into an offscreen
-    /// target of any size (the home screen into the blur's quarter-size
-    /// FBO: it is blurred anyway, so drawing it small costs nothing).
-    pub fn render_into(&mut self, f: &Fbo, cw: f32, ch: f32, scene: &Scene, typo: &Typo) -> Result<(), String> {
-        self.render_fb(f.fbo, f.w, f.h, cw, ch, scene, typo, &|_| None, None)
     }
 
     /// Fingerprints and covered areas of `scene`'s items (damage.rs), text

@@ -260,7 +260,7 @@ impl ShellUi {
 
     /// Start a game as its own app, zooming from `from`; a game that runs
     /// is switched to.
-    fn launch_game(&mut self, g: GameRef, from: R4, v: &View) {
+    pub(super) fn launch_game(&mut self, g: GameRef, from: R4, v: &View) {
         if let Some(a) = v.by_entry(&g.key()) {
             let uid = a.uid;
             self.switch_from_menu_at(uid, v, from);
@@ -284,7 +284,7 @@ impl ShellUi {
         self.fx(Sfx::Tab, Some(Haptic::Tick));
     }
 
-    fn close_gpage(&mut self) {
+    pub(super) fn close_gpage(&mut self) {
         let reduce = self.prefs.reduce_motion;
         let Some(p) = self.menu.as_mut().and_then(|m| m.gpage.as_mut()) else { return };
         p.closing = true;
@@ -311,7 +311,7 @@ impl ShellUi {
         self.fx(Sfx::Drawer, Some(Haptic::Tick));
     }
 
-    fn close_gpanel(&mut self) {
+    pub(super) fn close_gpanel(&mut self) {
         let reduce = self.prefs.reduce_motion;
         let Some(p) = self.menu.as_mut().and_then(|m| m.gpanel.as_mut()) else { return };
         p.closing = true;
@@ -525,6 +525,10 @@ impl ShellUi {
             }
             // the Continue picture is wanted first anyway
             out.extend(row_thumb(&GRow::Continue, v));
+        }
+        // the dashboard's Recently closed (a game's resume picture)
+        if self.dashboard_visible() {
+            out.extend(self.dash_pics(v));
         }
         out.dedup();
         out

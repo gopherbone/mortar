@@ -82,10 +82,6 @@ pub enum Src {
     Blur(u32),
     /// A CPU-drawn layer (mortar-ui toolkit screens).
     Layer(Layer),
-    /// The home screen blurred (the MENU's backdrop when no app is in
-    /// front): rendered once when it is first needed, blurred like
-    /// `Blur`, kept while frames keep using it.
-    HomeBlur,
     /// A still picture decoded on the CPU (a game's resume or slot
     /// thumbnail, a sleeping game's last frame), by id; an id's pixels
     /// never change.
@@ -186,11 +182,6 @@ impl Scene {
         v.sort();
         v.dedup();
         v
-    }
-
-    /// The frame shows the blurred home screen.
-    pub fn home_blur(&self) -> bool {
-        self.items.iter().any(|i| matches!(i, Item::Image { src: Src::HomeBlur, .. }))
     }
 
     /// The apps this frame shows blurred.

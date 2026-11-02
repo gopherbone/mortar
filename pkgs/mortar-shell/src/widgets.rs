@@ -4,11 +4,13 @@
 //! 4 x 3 grid of tiles (1x1 or 2x1), and the worker that runs "command"
 //! widgets off the event loop.
 //!
-//! Built-in kinds: `clock` (the big clock and date), `continue` (the last
-//! app or game; A resumes it), `needs-you` (apps asking for attention,
-//! attention.rs), `battery`, `wifi`, `storage`, `now-playing` (which app is
-//! making sound, from the Mixer's PipeWire streams) and `command`: a script
-//! run every `interval` seconds while Home shows, whose output is shown as
+//! Built-in kinds: `clock` (the big clock and date), `recent` (what you
+//! closed last, an app or a game, that is not running now; A starts it
+//! again; `continue` is its old name), `needs-you` (apps asking for
+//! attention, attention.rs), `battery`, `wifi`, `storage`, `now-playing`
+//! (which app is making sound, from the Mixer's PipeWire streams) and
+//! `command`: a script run every `interval` seconds while the dashboard
+//! shows, whose output is shown as
 //! text, or, if it prints a JSON object, as
 //! `{"title": "...", "value": "...", "accent": "lime"}`.
 //! Any widget can have `open = "<app id>"`: A starts (or switches to) it.
@@ -22,7 +24,10 @@ use std::time::{Duration, Instant};
 #[serde(rename_all = "kebab-case")]
 pub enum Kind {
     Clock,
-    Continue,
+    /// Recently closed. It was `continue` (the last app), but the stack's
+    /// next card is the last app now, so it shows what no longer runs.
+    #[serde(alias = "continue")]
+    Recent,
     NeedsYou,
     Battery,
     Wifi,
@@ -70,7 +75,7 @@ impl Accent {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Widget {
     pub kind: Kind,
-    /// 1x1 or 2x1 (default: 2x1 for clock, continue, needs-you,
+    /// 1x1 or 2x1 (default: 2x1 for clock, recent, needs-you,
     /// now-playing; 1x1 for the rest).
     #[serde(default)]
     pub size: Option<Size>,
@@ -101,7 +106,7 @@ impl Widget {
 
     pub fn size(&self) -> Size {
         self.size.unwrap_or(match self.kind {
-            Kind::Clock | Kind::Continue | Kind::NeedsYou | Kind::NowPlaying => Size::Two,
+            Kind::Clock | Kind::Recent | Kind::NeedsYou | Kind::NowPlaying => Size::Two,
             _ => Size::One,
         })
     }
@@ -112,7 +117,7 @@ impl Widget {
         }
         match self.kind {
             Kind::Clock => "Clock",
-            Kind::Continue => "Continue",
+            Kind::Recent => "Recently closed",
             Kind::NeedsYou => "Needs you",
             Kind::Battery => "Battery",
             Kind::Wifi => "Wi-Fi",
@@ -126,7 +131,7 @@ impl Widget {
 
 /// The dashboard without any configuration.
 pub fn defaults() -> Vec<Widget> {
-    [Kind::Clock, Kind::Continue, Kind::NeedsYou, Kind::NowPlaying, Kind::Battery, Kind::Wifi, Kind::Storage].into_iter().map(Widget::new).collect()
+    [Kind::Clock, Kind::Recent, Kind::NeedsYou, Kind::NowPlaying, Kind::Battery, Kind::Wifi, Kind::Storage].into_iter().map(Widget::new).collect()
 }
 
 pub const COLS: usize = 4;
@@ -200,7 +205,7 @@ fn clip(s: &str, lines: usize) -> String {
 }
 
 /// Runs the command widgets, each every `interval` seconds while active
-/// (Home on screen), on a thread of its own; a run that takes more than
+/// (the dashboard on screen), on a thread of its own; a run that takes more than
 /// 10 s is killed (its whole process group).
 pub struct Worker {
     shared: Arc<Shared>,
@@ -343,11 +348,13 @@ mod tests {
         assert!(serde_json::from_str::<Widget>(r#"{"kind":"weather"}"#).is_err());
         assert!(serde_json::from_str::<Widget>(r#"{"kind":"clock","colour":1}"#).is_err());
         assert_eq!(defaults().len(), 7);
+        // `continue` is the old name of `recent`
+        assert_eq!(serde_json::from_str::<Widget>(r#"{"kind":"continue"}"#).unwrap().kind, Kind::Recent);
     }
 
     #[test]
     fn layout_fills_the_grid() {
-        // clock 2, continue 2 | needs-you 2, now-playing 2 | three 1x1
+        // clock 2, recent 2 | needs-you 2, now-playing 2 | three 1x1
         let s = layout(&defaults());
         assert_eq!(s.len(), 7);
         assert_eq!(s[0], Slot { i: 0, col: 0, row: 0, w: 2 });
@@ -356,7 +363,7 @@ mod tests {
         assert_eq!(s[6], Slot { i: 6, col: 2, row: 2, w: 1 });
         // 1x1, 2x1, 2x1: the second 2x1 goes to the next row, a 1x1 fills the gap
         let w = |k: Kind, s: Size| Widget { size: Some(s), ..Widget::new(k) };
-        let ws = vec![w(Kind::Battery, Size::One), w(Kind::Clock, Size::Two), w(Kind::Continue, Size::Two), w(Kind::Wifi, Size::One)];
+        let ws = vec![w(Kind::Battery, Size::One), w(Kind::Clock, Size::Two), w(Kind::Recent, Size::Two), w(Kind::Wifi, Size::One)];
         let s = layout(&ws);
         assert_eq!(s[2], Slot { i: 2, col: 0, row: 1, w: 2 });
         assert_eq!(s[3], Slot { i: 3, col: 3, row: 0, w: 1 });

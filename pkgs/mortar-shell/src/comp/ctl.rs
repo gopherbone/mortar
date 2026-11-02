@@ -290,7 +290,9 @@ fn state(shell: &Shell) -> String {
         "menu_pages": shell.sui.menu_pages().iter().map(|s| s.name()).collect::<Vec<_>>(),
         "attention": shell.attention.items(),
         "widgets": shell.widget_out,
-        "home": shell.visible_app().is_none() && !shell.sui.menu_open(),
+        "home": shell.visible_app().is_none(),
+        "dashboard": shell.sui.dash_selected(),
+        "tiles": shell.sui.in_tiles(),
         "ui": {
             "layer": shell.ui_layer(),
             "booting": shell.sui.booting(),

@@ -145,7 +145,7 @@ let
       # the dashboard, with a command widget (JSON output)
       home.widgets = [
         { kind = "clock"; }
-        { kind = "continue"; }
+        { kind = "recent"; }
         { kind = "needs-you"; }
         { kind = "now-playing"; }
         { kind = "battery"; }
@@ -190,17 +190,20 @@ runCommand "mortar-shell-headless-test"
     }
     visible() { echo "[.apps[] | select(.id == \"$1\" and .visible)] | length == 1"; }
 
-    echo "== boot screen, then the Home dashboard (no apps; the command widget ran)"
+    echo "== boot screen, then home: the stack on the dashboard (nothing running; the command widget ran)"
     wait_for '.ui.booting == false'
-    wait_for '.home == true'
+    wait_for '.home == true and .dashboard == true and .category == "Running"'
     wait_for '[.widgets[] | select(. != null)] | .[0].value == "42"'
     sleep 0.3
     shot 01-home
+    jq -e '.ui.pace == "Idle"' <(ctl state) >/dev/null || echo "FAIL: home at rest is not idle" >> $out/result
 
-    echo "== Home is not a launcher: MENU, Apps, A starts weston-fullscreen"
+    echo "== Home is not a launcher: A, B and MENU stay on the dashboard; ▶ Apps, A starts weston-fullscreen"
     ctl press a
-    jq -e '.apps | length == 0' <(ctl state) >/dev/null || echo "FAIL: A on an empty Home started something" >> $out/result
+    ctl press b
     ctl press menu
+    jq -e '.apps | length == 0' <(ctl state) >/dev/null || echo "FAIL: A on an empty Home started something" >> $out/result
+    wait_for '.dashboard == true and .tiles == false and .overlay == true'
     ctl press right
     wait_for '.category == "Apps"'
     ctl press a
@@ -353,29 +356,29 @@ runCommand "mortar-shell-headless-test"
     echo "== transition frames (UI time frozen, stepped by hand)"
     tshot() { ctl time +$1 >/dev/null; shot "t-$2"; }
     ctl home
-    wait_for '.home == true and .ui.layer == true'
+    wait_for '.home == true and .ui.layer == true and .dashboard == true'
     ctl time manual
     tshot 1500 home-settled
-    ctl press right
-    tshot 60 home-move-060
-    tshot 400 home-move-460
-    ctl press menu
-    tshot 50 menu-050
-    tshot 100 menu-150
-    tshot 600 menu-750
-    ctl press right   # Running slides off, the cross slides in
+    ctl press down    # the stack scrolls from the dashboard to weston-fullscreen's card
+    tshot 60 home-down-060
+    tshot 400 home-down-460
+    ctl press up      # and back up: the status bar's clock fades as the big one comes
+    tshot 60 home-up-060
+    tshot 600 home-up-660
+    ctl press right   # the stack slides off, the cross slides in
     tshot 120 cross-in-120
     tshot 600 cross-in-720
     ctl press down    # the pattern takes a nudge
     tshot 300 pattern-0300
     tshot 1500 pattern-1800
     tshot 4000 pattern-5800
-    ctl press b
-    tshot 80 menu-close-080
-    tshot 600 menu-close-680
-    ctl press left
-    tshot 600 home-focus-first
-    ctl press a     # weston-fullscreen is running: it grows out of its tile
+    ctl press b       # home: B comes back to the dashboard
+    tshot 80 back-home-080
+    tshot 600 back-home-680
+    jq -e '.dashboard == true and .overlay == true' <(ctl state) >/dev/null || echo "FAIL: B on the cross at home: the dashboard" >> $out/result
+    ctl press down
+    tshot 600 home-card
+    ctl press a     # weston-fullscreen is running: it grows out of its card
     tshot 60 launch-060
     tshot 60 launch-120
     tshot 100 launch-220
@@ -400,17 +403,20 @@ runCommand "mortar-shell-headless-test"
     sleep 3
     ls $HOME/Pictures/Screenshots/mortar-*.png > $out/screenshots.txt || echo "FAIL: screenshot file" >> $out/result
 
-    echo "== MENU from the app, Home row: the app shrinks back into its tile"
+    echo "== MENU from the app, ▲ to the dashboard, A: home (the app keeps running, its card below)"
     ctl time manual
     ctl press menu
-    tshot 700 menu-over-app
+    tshot 50 menu-050
+    tshot 100 menu-150
+    tshot 600 menu-over-app
     ctl press up
-    tshot 300 menu-home-row
+    tshot 300 menu-dashboard
     ctl press a
-    tshot 100 close-menu-fade
-    tshot 40 close-040
-    tshot 60 close-100
-    tshot 800 close-done
+    tshot 60 go-home-060
+    tshot 200 go-home-260
+    tshot 800 go-home-done
+    jq -e '.home == true and .dashboard == true and .overlay == true and (.apps | length == 1)' <(ctl state) >/dev/null \
+      || echo "FAIL: A on the dashboard: home, the stack stays, the app runs" >> $out/result
 
     # MENU > Settings > the row N (0 Brightness, 1 Volume, 2 Display, ...
     # 6 Time zone: no keyboard app in front). The category remembers its
