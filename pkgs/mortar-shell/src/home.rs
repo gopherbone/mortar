@@ -200,7 +200,7 @@ impl ShellUi {
             return;
         }
         let front = v.current.and_then(|u| v.app(u)).filter(|a| a.has_buffer);
-        let game = front.and_then(|a| a.entry.as_deref()).and_then(|e| v.launcher.iter().find(|l| l.id == e)).is_some_and(|l| l.category == Category::Games);
+        let game = front.is_some_and(|a| a.game) || front.and_then(|a| a.entry.as_deref()).and_then(|e| v.launcher.iter().find(|l| l.id == e)).is_some_and(|l| l.category == Category::Games);
         let due = |id: &str| match id {
             "menu" => front.is_some(),
             "keyboard" => front.is_some() && v.keyboard_app,
@@ -335,6 +335,11 @@ impl ShellUi {
                         let g = a.geom;
                         b.image(Src::App(a.uid), px + g[0] * pw / W, py + g[1] * ph / H, g[2] * pw / W, g[3] * ph / H, [0.0, 0.0, 1.0, 1.0]);
                         b.clip(None);
+                    }
+                    // a game asleep: its last frame
+                    None if running.and_then(|a| a.pic).is_some() => {
+                        b.rect(px, py, pw, ph, Color(0, 0, 0, 255));
+                        b.image(Src::Pic(running.and_then(|a| a.pic).unwrap_or(0)), px, py, pw, ph, [0.0, 0.0, 1.0, 1.0]);
                     }
                     None => {
                         b.rect(px, py, pw, ph, accent);
