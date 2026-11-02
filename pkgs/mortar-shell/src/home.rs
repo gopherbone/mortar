@@ -31,12 +31,12 @@ impl Home {
     }
 }
 
-// the grid: under the status bar, above the hint bar
+// the grid: from near the top edge to the hint bar
 const GX: f32 = 40.0;
-const GY: f32 = 78.0;
+const GY: f32 = 36.0;
 const GAP: f32 = 20.0;
 const TW: f32 = (W - 2.0 * GX - 3.0 * GAP) / 4.0;
-const TH: f32 = 186.0;
+const TH: f32 = 200.0;
 
 fn slot_rect(s: &Slot) -> R4 {
     R4 { x: GX + s.col as f32 * (TW + GAP), y: GY + s.row as f32 * (TH + GAP), w: s.w as f32 * TW + (s.w as f32 - 1.0) * GAP, h: TH }
@@ -234,33 +234,8 @@ impl ShellUi {
             let st = ts(Face::Body400, 24.0, pal.soft);
             b.text(56.0, 420.0, "No widgets (mortar.shell.home.widgets).", &st);
         }
-        // status bar
-        b.rect(0.0, 0.0, W, 56.0, pal.ground);
-        b.rect(0.0, 55.0, W, 1.0, pal.ink);
-        let sb = ts(Face::Mono400, 18.0, pal.soft);
-        b.text(30.0, 28.0 - sb.line_px() / 2.0, &v.sys.time, &sb);
-        let mut right = W - 30.0;
-        let mut net = Vec::new();
-        if v.sys.wifi {
-            net.push("Wi-Fi".to_string());
-        }
-        if v.sys.usb_net {
-            net.push("USB".to_string());
-        }
-        right = battery_status(b, pal, v, right, &mut net);
-        let net = net.join(" · ");
-        if !net.is_empty() {
-            right -= b.text_right(right, 28.0 - sb.line_px() / 2.0, &net, &sb) + 10.0;
-        }
-        if v.sys.ssh_sessions > 0 {
-            right -= chip(b, right, 28.0, "SSH", 15.0, (9.0, 2.0), pal.lime, pal.lime_ink) + 10.0;
-        }
-        if !v.dash.attention.is_empty() {
-            right -= chip(b, right, 28.0, "NEEDS YOU", 15.0, (9.0, 2.0), pal.yellow, pal.dark) + 10.0;
-        }
-        if !v.running.is_empty() {
-            chip(b, right, 28.0, &format!("{} running", v.running.len()), 15.0, (9.0, 2.0), pal.lavender, pal.lavender_ink);
-        }
+        // No status bar: the clock, Needs you, battery and Wi-Fi tiles already
+        // say all of it (the MENU's glass bar still has SSH and the rest).
         let verb = match self.home.focus.and_then(|f| ws.get(f)).and_then(|w| self.act_of(w, v)) {
             Some(Act::Switch(_)) => Some("Resume"),
             Some(Act::Launch(_)) => Some("Open"),
