@@ -142,8 +142,18 @@ the resampling ratio is nudged by at most ±0.5% from the queue fill:
 target)`, target 64 ms. The queue settles where the ratio cancels the drift,
 so there is no underrun crackle and no growing latency; ±0.5% (8.6 cents)
 is inaudible. A hard cap drops audio if the queue ever exceeds 4x target
-(after a stall). Unit tests cover length/pitch of the resampler and a
-simulated 0.2% clock drift that settles instead of overflowing.
+(after a stall). The other way round, DRC is far too slow to build a queue
+from nothing (0.5% of 64 ms takes ~13 s), so a queue under a quarter of
+the target (the game starting, or a stall that drained it) is first
+filled to the target with silence: one short gap instead of seconds of
+near-underruns. (Measured on the Brick under PipeWire, PS1, first 10 s:
+5 empty and 75 low pushes and 15 sink xruns before; steady play after
+that never went under ~49 ms.) Every 10 s with a problem the log says
+how many frames started late, the lowest queue, and how many pushes found
+it low or empty (`MORTAR_PLAY_DEBUG_AUDIO=1`: always). Unit tests cover
+length/pitch of the resampler, a simulated 0.2% clock drift that settles
+instead of overflowing, and a device draining 1024-frame periods from an
+empty queue that never runs dry.
 
 Fast-forward mutes audio (the queue isn't fed) and runs `fastForwardSpeed`
 frames per presented frame.

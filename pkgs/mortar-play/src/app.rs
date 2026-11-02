@@ -38,7 +38,7 @@ pub fn install_signal_handlers() {
 /// Frame clock: sleeps until the next frame is due.
 pub struct Pacer {
     next: Instant,
-    period: Duration,
+    pub period: Duration,
     pub enabled: bool,
 }
 
@@ -52,17 +52,26 @@ impl Pacer {
     pub fn reset(&mut self) {
         self.next = Instant::now();
     }
-    pub fn wait(&mut self) {
+    /// Sleep until the next frame is due. Returns how late it is (zero
+    /// when on time) and whether the clock was reset after a stall.
+    pub fn wait(&mut self) -> (Duration, bool) {
         if !self.enabled {
-            return;
+            return (Duration::ZERO, false);
         }
         let now = Instant::now();
+        let mut late = Duration::ZERO;
+        let mut reset = false;
         if self.next > now {
             std::thread::sleep(self.next - now);
-        } else if now - self.next > self.period * 4 {
-            self.next = now; // fell behind (load, stall): don't race to catch up
+        } else {
+            late = now - self.next;
+            if late > self.period * 4 {
+                self.next = now; // fell behind (load, stall): don't race to catch up
+                reset = true;
+            }
         }
         self.next += self.period;
+        (late, reset)
     }
 }
 
@@ -124,6 +133,54 @@ pub fn parse_script(s: &str) -> Result<Vec<Step>, String> {
     Ok(v)
 }
 
+/// Playback health, logged every 10 s when something went wrong (audio
+/// hitches: a queue running low, audio dropped, frames started late).
+struct PlayStats {
+    since: Instant,
+    frames: u32,
+    /// Frames that started more than half a frame late / that reset the clock.
+    late: u32,
+    resets: u32,
+    worst_late: Duration,
+    /// Pushes that found the audio queue under 16 ms (an underrun is near)
+    /// or empty, and pushes dropped by the queue's hard cap.
+    low: u32,
+    empty: u32,
+    capped: u32,
+    /// The lowest queue seen, in frames.
+    min_q: usize,
+}
+
+impl PlayStats {
+    fn new() -> PlayStats {
+        PlayStats { since: Instant::now(), frames: 0, late: 0, resets: 0, worst_late: Duration::ZERO, low: 0, empty: 0, capped: 0, min_q: usize::MAX }
+    }
+
+    fn report(&mut self, rate: u32, target: usize, prefills: u32) {
+        if self.since.elapsed() < Duration::from_secs(10) {
+            return;
+        }
+        let ms = |q: usize| if q == usize::MAX { 0.0 } else { q as f64 * 1000.0 / rate.max(1) as f64 };
+        if self.late + self.resets + self.low + self.empty + self.capped > 0 || std::env::var_os("MORTAR_PLAY_DEBUG_AUDIO").is_some() {
+            eprintln!(
+                "mortar-play: last {:.0} s: {} frames, {} late (worst {:.1} ms), {} clock resets; audio queue min {:.1} ms (target {:.0}), {} low, {} empty, {} dropped, {} silence fills so far",
+                self.since.elapsed().as_secs_f64(),
+                self.frames,
+                self.late,
+                self.worst_late.as_secs_f64() * 1000.0,
+                self.resets,
+                ms(self.min_q),
+                ms(target),
+                self.low,
+                self.empty,
+                self.capped,
+                prefills
+            );
+        }
+        *self = PlayStats::new();
+    }
+}
+
 struct MenuState {
     list: ListState,
     slot: u8,
@@ -158,6 +215,7 @@ pub struct App {
     single: bool,
     quit: bool,
     pacer: Pacer,
+    stats: PlayStats,
     menu: MenuState,
     script: Vec<Step>,
     script_wait: u32,
@@ -208,6 +266,7 @@ impl App {
             single: false,
             quit: false,
             pacer: Pacer::new(60.0),
+            stats: PlayStats::new(),
             menu: MenuState { list: ListState::default(), slot: 0, toast: None, paused: Frame::default(), aspect: 0.0 },
             script: Vec::new(),
             script_wait: 0,
@@ -515,7 +574,14 @@ impl App {
         };
         let ff = self.ff_on || s.sys.fast_forward_button(&hot).is_some_and(|b| self.held.is(b));
         let runs = if ff { hot.fast_forward_speed.max(2) } else { 1 };
-        self.pacer.wait();
+        let (late, reset) = self.pacer.wait();
+        let st = &mut self.stats;
+        st.frames += 1;
+        if late > self.pacer.period / 2 {
+            st.late += 1;
+        }
+        st.resets += reset as u32;
+        st.worst_late = st.worst_late.max(late);
         let mut new_frame = false;
         for _ in 0..runs {
             if s.run(&self.held, ff, Some(self.mixer.occupancy())) {
@@ -525,7 +591,16 @@ impl App {
             self.frames += 1;
             new_frame |= s.host().frame_new;
             if !ff {
-                self.mixer.push(s.audio());
+                let q = self.mixer.out.queued();
+                if q != usize::MAX {
+                    let st = &mut self.stats;
+                    st.min_q = st.min_q.min(q);
+                    st.empty += (q == 0) as u32;
+                    st.low += (q > 0 && q < self.mixer.out.rate() as usize * 16 / 1000) as u32;
+                }
+                if !self.mixer.push(s.audio()) {
+                    self.stats.capped += 1;
+                }
             }
             if s.host().shutdown {
                 break;
@@ -542,6 +617,7 @@ impl App {
             self.pf.display.present_game(&f, dst, s.view.filter);
         }
         s.tick_autosave();
+        self.stats.report(self.mixer.out.rate(), self.mixer.target, self.mixer.prefills);
         if s.host().shutdown {
             self.end_game();
         }

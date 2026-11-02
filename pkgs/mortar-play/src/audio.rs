@@ -145,13 +145,15 @@ pub struct Mixer {
     pub target: usize,
     tmp: Vec<i16>,
     pub muted: bool,
+    /// Times the queue was filled up with silence (start, after a stall).
+    pub prefills: u32,
 }
 
 impl Mixer {
     pub fn new(out: Box<dyn AudioOut>, latency_ms: u32) -> Mixer {
         let target = (out.rate() as usize * latency_ms as usize / 1000).max(256);
         let drc = Drc::new(out.rate() as f64, out.rate() as f64);
-        Mixer { out, rs: Resampler::default(), drc, target, tmp: Vec::new(), muted: false }
+        Mixer { out, rs: Resampler::default(), drc, target, tmp: Vec::new(), muted: false, prefills: 0 }
     }
 
     pub fn set_core_rate(&mut self, core_rate: f64) {
@@ -171,9 +173,10 @@ impl Mixer {
         (self.fill() * 100.0).round().clamp(0.0, 100.0) as u32
     }
 
-    pub fn push(&mut self, core: &[i16]) {
+    /// Queue the core's samples; false when they were dropped by the cap.
+    pub fn push(&mut self, core: &[i16]) -> bool {
         if self.muted || core.is_empty() {
-            return;
+            return true;
         }
         let ratio = self.drc.ratio(self.fill());
         self.tmp.clear();
@@ -181,9 +184,21 @@ impl Mixer {
         // a hard cap: never queue more than 4x target (e.g. after a stall)
         let q = self.out.queued();
         if q != usize::MAX && q > 4 * self.target {
-            return;
+            return false;
+        }
+        // Nearly empty (the game just started, or a stall drained it): fill
+        // to the target with silence first. DRC moves the rate by at most
+        // 0.5%, so it would take ~13 s to build the queue from nothing, and
+        // until then every audio period on the device risks an underrun
+        // (measured: 5 empty and 75 low pushes in the first 10 s of a PS1
+        // game, 15 xruns on the sink). One short silence instead.
+        if q != usize::MAX && q < self.target / 4 {
+            let frames = self.target.saturating_sub(q + self.tmp.len() / 2);
+            self.out.push(&vec![0i16; frames * 2]);
+            self.prefills += 1;
         }
         self.out.push(&self.tmp);
+        true
     }
 }
 
@@ -302,5 +317,47 @@ mod tests {
         // (here 0.36% slow: fill ~0.86) instead of overflowing
         let fill = q.q / (2.0 * target);
         assert!(fill > 0.5 && fill < 0.95, "fill {fill}");
+    }
+
+    /// A device that drains a 1024-frame period whenever it has one: the
+    /// queue starts empty (a game starting). With the prefill it never runs
+    /// dry; it fills once, not every frame.
+    #[test]
+    fn prefill_on_an_empty_queue() {
+        struct Dev {
+            q: std::rc::Rc<std::cell::Cell<usize>>,
+        }
+        impl AudioOut for Dev {
+            fn rate(&self) -> u32 {
+                44100
+            }
+            fn queued(&self) -> usize {
+                self.q.get()
+            }
+            fn push(&mut self, s: &[i16]) {
+                self.q.set(self.q.get() + s.len() / 2);
+            }
+            fn set_paused(&mut self, _: bool) {}
+            fn clear(&mut self) {}
+        }
+        let q = std::rc::Rc::new(std::cell::Cell::new(0));
+        let mut m = Mixer::new(Box::new(Dev { q: q.clone() }), 64);
+        m.set_core_rate(44100.0);
+        let block = sine(44100.0, 440.0, 735);
+        let (mut played, mut dry) = (0usize, 0);
+        for f in 0..600 {
+            m.push(&block);
+            // the device takes a period every 1024 frames of real time
+            while played + 1024 <= (f + 1) * 735 {
+                if q.get() < 1024 {
+                    dry += 1;
+                }
+                q.set(q.get().saturating_sub(1024));
+                played += 1024;
+            }
+        }
+        assert_eq!(dry, 0, "the device ran dry");
+        assert_eq!(m.prefills, 1);
+        assert!(q.get() > 2000, "queue {}", q.get());
     }
 }

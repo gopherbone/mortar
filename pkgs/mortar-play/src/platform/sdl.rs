@@ -58,6 +58,13 @@ impl SdlInput {
     /// Init SDL (video only when `with_video`). Returns the audio output too.
     pub fn init(with_video: bool) -> Result<(SdlInput, Box<dyn AudioOut>), String> {
         sdl3::hint::set("SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS", "1");
+        // 256-frame audio periods (5.8 ms at 44.1 kHz). SDL's default (1024)
+        // lets PipeWire run its graph at 1024, and then every shell UI sound
+        // (volume keys, toasts; the shell asks for a 30 ms buffer) switches
+        // the graph to 256 and back, an xrun each time: a hitch in the game.
+        // Asking for 256 keeps the graph at 256 while a game plays. The
+        // environment variable of the same name still overrides it.
+        sdl3::hint::set("SDL_AUDIO_DEVICE_SAMPLE_FRAMES", "256");
         // the shell configures the window; don't let SDL inhibit the screensaver etc.
         let sdl = sdl3::init().map_err(|e| format!("SDL: {e}"))?;
         let video = if with_video { Some(sdl.video().map_err(|e| format!("SDL video: {e}"))?) } else { None };
