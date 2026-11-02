@@ -43,8 +43,11 @@
 # in the recovery slots and reopened on the next start.
 #
 # Audio: SDL picks PipeWire; 44.1 kHz by default, 512 frames (11.6 ms). No
-# MIDI in upstream (USB MIDI does nothing here). Recording uses a USB audio
-# input if one is plugged in.
+# MIDI in upstream (USB MIDI does nothing here). Recording uses SDL's default
+# input; untested here. Playback carries on while another app is on screen.
+#
+# Cost on the Brick, % of one core: 15 idle, 50-70 playing (Pattern is the
+# heaviest screen, 36 fps; the others about 60), 5 hidden, playing or not.
 {
   lib,
   stdenv,
