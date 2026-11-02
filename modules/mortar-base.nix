@@ -115,4 +115,16 @@
   documentation.man.enable = false;
   documentation.nixos.enable = false;
   services.logrotate.enable = false;
+
+  # Closure (2026-11-01: 5.5 GB). Speech synthesis is on by default for
+  # graphical desktops (greetd counts as one): speech-dispatcher with
+  # mbrola voices, flite and Python, ~1 GB and a socket in every session,
+  # and nothing on the Brick speaks.
+  services.speechd.enable = false;
+  # linux-firmware (865 MB) has nothing the Brick loads: XR829 and GPU
+  # firmware come from brick-firmware.nix. The Wi-Fi regulatory database
+  # stays. For a USB Wi-Fi or Bluetooth dongle that needs firmware:
+  # hardware.enableRedistributableFirmware = lib.mkForce true.
+  hardware.enableRedistributableFirmware = lib.mkOverride 90 false;
+  hardware.wirelessRegulatoryDatabase = true;
 }

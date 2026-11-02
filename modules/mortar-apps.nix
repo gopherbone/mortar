@@ -156,6 +156,15 @@ in
             "pulse.min.quantum" = "128/44100";
           };
         };
+        # No cameras on the Brick: WirePlumber would still start libcamera
+        # (its camera manager, IPA search, dma-buf probing) and the V4L2
+        # monitor in every session.
+        wireplumber.extraConfig."90-mortar-no-cameras" = {
+          "wireplumber.profiles".main = {
+            "monitor.libcamera" = "disabled";
+            "monitor.v4l2" = "disabled";
+          };
+        };
         wireplumber.extraConfig."90-mortar-codec" = {
           # The Brick codec (the only platform sound card; USB cards are
           # alsa_card.usb-*): plain PCM nodes, no ALSA card profile. ACP's
