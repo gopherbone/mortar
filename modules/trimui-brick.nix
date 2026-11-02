@@ -365,6 +365,13 @@ in {
     # absent (e.g. ext2 via EXT4_USE_FOR_EXT2). Tolerate that instead of
     # failing the initrd build.
     boot.initrd.allowMissingModules = true;
+    # The root is a plain ext4 partition on the card and the A133 has no
+    # TPM: no LVM and no TPM2 tooling in the initrd (tpm2-tss, lvm2 and
+    # cryptsetup were ~8 MB of its 82 MB, which the kernel unpacks before
+    # anything else runs: 1.4 s for the whole initrd).
+    services.lvm.enable = false;
+    boot.initrd.systemd.tpm2.enable = false;
+    systemd.tpm2.enable = false;
 
     hardware.deviceTree = {
       enable = true;
