@@ -77,12 +77,15 @@ in {
       };
       cpuIdle = mkOption {
         type = types.bool;
-        default = false;
+        default = true;
         description = ''
           Add the PSCI CPU/cluster idle states that -native-deep.dts
-          includes (dtb/brick-cpu-idle.dtso). Suspend does not need them.
-          Untested on their own: the first deep-suspend boot had them and
-          the panel was fuzzy, but that was the deep resume (see `mode`).
+          includes (dtb/brick-cpu-idle.dtso): cpu-sleep-0 (core power-down,
+          entry/exit 46/59 us, min residency 3.57 ms) and cluster-sleep-0
+          (cluster power-down, 47/74 us, 5 ms). Without them an idle core
+          only waits in WFI. Both stop the local timer; the kernel's
+          hrtimer broadcast covers that. The fuzzy panel once blamed on
+          them came from the deep-suspend resume (see `mode`).
         '';
       };
       padWake = mkOption {
