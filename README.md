@@ -21,7 +21,7 @@ over SSH.
 | Shell | `mortar-shell`, a Wayland compositor (Rust, Smithay). Apps run fullscreen side by side; **MENU** opens your running apps as live full-screen windows; ▶ brings the cross menu: launchers by category, settings (Wi-Fi, Bluetooth, a per-app mixer) and power, over a quiet animated pattern per category. Its UI is drawn on the GPU with spring animations, synthesized UI sounds and haptic ticks. |
 | GPU | PowerVR GE8300 on TrimUI's stock DDK 1.19 userspace. GPU apps inside the shell render into dma-bufs (`mortar-wlegl`) that the shell scans out directly; outside the shell, `brick_dc_drm` flips them at 60 fps. A busy M8 screen costs ~12% CPU. |
 | Greeter | `mortar-ui` greeter (greetd): pick **Mortar** (the shell) or launch an app directly. |
-| Apps | M8 (m8c; plug the M8 into the top port), ChooChooTracker, PICO-8 (your own licensed copy), PuzzleScript, Games (emulators), Terminal, Claude Code. |
+| Apps | M8 (m8c; plug the M8 into the top port), ChooChooTracker, Little XM Tracker, PICO-8 (your own licensed copy), PuzzleScript, Games (emulators), Terminal, Claude Code. |
 | Emulators | `mortar-play`, a minimal libretro frontend with 16 curated, preconfigured systems (GB/GBC/GBA, NES, SNES, Genesis, PS1, arcade, …). Auto-saves and resume, save states, fast-forward. |
 | Claude Code | Runs in a persistent tmux session, a controller UI for approving tool calls (A/B/X), and Remote Control from your phone. Sign in with a QR code. |
 | Audio | PipeWire in the session: codec speaker and headphones, USB audio and USB MIDI on the top port, Bluetooth headphones. 5.8 ms quantum for the trackers. |
@@ -164,6 +164,7 @@ pkgs/
   mortar-rumble/          rumble motor helper (Rust)
   m8c/, pico8/, trimui-brick-firmware.nix, mortar-gpu-tests/
   choochootracker/        ChooChooTracker (MIT tracker/groovebox), Mortar build + launcher
+  little-xm-tracker/      Little XM Tracker (BSD tracker for gamepads), Mortar build + launcher
 firmware/mainline/        U-Boot SPL + TF-A + U-Boot, with jkingston's patches
 image/build-image-mainline.nix   SD image (bootloader at 128 KiB, FAT /boot, ext4 /)
 docs/                     mortar.md, firmware.md, setup-file.md, pairing.md, updates.md

@@ -1,0 +1,158 @@
+Little XM Tracker on Mortar. Every change is behind MORTAR_BUILD (set by
+pkgs/little-xm-tracker); other builds are unchanged.
+
+- TrackerApp.cpp, controller(): the app names buttons after the Brick's
+  printed labels and upstream relies on KNULLI's patched SDL mapping for
+  that. Here SDL auto-maps the evdev pad (A = BTN_EAST = SDL "B", B =
+  BTN_SOUTH = SDL "A"), so swap them, and in the --ui-test fixture too.
+- BitmapFont.cpp: ASCII text from a glyph atlas instead of one fill rect per
+  pixel. A pattern screen took about 100 ms a frame on the A53s that way, a
+  whole core at 10 fps, playing or not. Same pixels; Unifont glyphs unchanged.
+- TrackerApp.cpp, run(): the whole screen is redrawn every frame. With no
+  input for 500 ms, nothing playing and no worker busy, redraw at 4 fps; while
+  the shell has the focus (the app is hidden), at 1 fps, playing or not.
+  Events are still polled and the audio thread is unaffected.
+- TrackerSession.inc: theme presets and the mapping file are copied from the
+  read-only store and would stay read-only; upstream means them to be edited.
+
+diff --git a/src/ui/BitmapFont.cpp b/src/ui/BitmapFont.cpp
+index 6190f9c..807d281 100644
+--- a/src/ui/BitmapFont.cpp
++++ b/src/ui/BitmapFont.cpp
+@@ -208,9 +208,43 @@ bool hasUnicodeGlyph(char32_t codepoint) noexcept {
+         !(codepoint >= 0xd800 && codepoint <= 0xdfff) && (*unicodeFont)[codepoint].width != 0;
+ }
+ 
++#ifdef MORTAR_BUILD
++// One textured quad per ASCII glyph, not a fill rect per pixel: a full pattern
++// screen is about 30000 rects, 100 ms a frame on the Brick's A53s.
++static constexpr int atlasCols = 16, atlasRows = 6, atlasCellW = 6, atlasCellH = 8;
++static SDL_Texture* asciiAtlas(SDL_Renderer* renderer) {
++    static SDL_Renderer* owner = nullptr;
++    static SDL_Texture* atlas = nullptr;
++    if (owner == renderer) return atlas;
++    owner = renderer;
++    atlas = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STATIC,
++                              atlasCols * atlasCellW, atlasRows * atlasCellH);
++    if (!atlas) return nullptr;
++    std::array<Uint32, atlasCols * atlasCellW * atlasRows * atlasCellH> pixels{};
++    for (char32_t c = 32; c < 128; ++c) {
++        const auto* glyph = asciiGlyph(c);
++        if (!glyph) continue;
++        const int cell = int(c) - 32, ox = cell % atlasCols * atlasCellW, oy = cell / atlasCols * atlasCellH;
++        for (int row = 0; row < 7; ++row) for (int col = 0; col < 5; ++col)
++            if ((*glyph)[row] & (1 << (4 - col)))
++                pixels[std::size_t((oy + row) * atlasCols * atlasCellW + ox + col)] = 0xffffffffu;
++    }
++    SDL_UpdateTexture(atlas, nullptr, pixels.data(), atlasCols * atlasCellW * int(sizeof(Uint32)));
++    SDL_SetTextureBlendMode(atlas, SDL_BLENDMODE_BLEND);
++    return atlas;
++}
++#endif
++
+ void text(SDL_Renderer* renderer, int x, int y, std::string_view value, SDL_Color color, int scale) {
+     if (scale <= 0) return;
+     SDL_SetRenderDrawColor(renderer, color.r, color.g, color.b, color.a);
++#ifdef MORTAR_BUILD
++    SDL_Texture* const atlas = asciiAtlas(renderer);
++    if (atlas) {
++        SDL_SetTextureColorMod(atlas, color.r, color.g, color.b);
++        SDL_SetTextureAlphaMod(atlas, color.a);
++    }
++#endif
+     const int origin = x;
+     int baseX = x, baseAdvance = 0;
+     bool hasBase = false, baseAscii = false;
+@@ -225,6 +259,14 @@ void text(SDL_Renderer* renderer, int x, int y, std::string_view value, SDL_Colo
+         }
+         const int units = advance(codepoint, hasBase);
+         if (const auto* tinyGlyph = asciiGlyph(codepoint)) {
++#ifdef MORTAR_BUILD
++            if (atlas && codepoint >= 32 && codepoint < 128) {
++                const int cell = int(codepoint) - 32;
++                const SDL_Rect from{cell % atlasCols * atlasCellW, cell / atlasCols * atlasCellH, 5, 7};
++                const SDL_Rect to{x, y, 5 * scale, 7 * scale};
++                if (codepoint != U' ') SDL_RenderCopy(renderer, atlas, &from, &to);
++            } else
++#endif
+             for (int row = 0; row < 7; ++row) for (int col = 0; col < 5; ++col) {
+                 if ((*tinyGlyph)[row] & (1 << (4 - col))) {
+                     SDL_Rect pixel{x + col * scale, y + row * scale, scale, scale};
+diff --git a/src/ui/TrackerApp.cpp b/src/ui/TrackerApp.cpp
+index f48f066..28d258f 100644
+--- a/src/ui/TrackerApp.cpp
++++ b/src/ui/TrackerApp.cpp
+@@ -85,8 +85,14 @@ std::optional<Button> controller(Uint8 key) {
+     case SDL_CONTROLLER_BUTTON_DPAD_DOWN: return Button::Down;
+     case SDL_CONTROLLER_BUTTON_DPAD_LEFT: return Button::Left;
+     case SDL_CONTROLLER_BUTTON_DPAD_RIGHT: return Button::Right;
++#ifdef MORTAR_BUILD
++    // The Brick's printed A is the right face button (BTN_EAST, SDL "B").
++    case SDL_CONTROLLER_BUTTON_B: return Button::A;
++    case SDL_CONTROLLER_BUTTON_A: return Button::B;
++#else
+     case SDL_CONTROLLER_BUTTON_A: return Button::A;
+     case SDL_CONTROLLER_BUTTON_B: return Button::B;
++#endif
+     case SDL_CONTROLLER_BUTTON_START: return Button::Start;
+     case SDL_CONTROLLER_BUTTON_BACK: return Button::Select;
+     default: return {};
+@@ -1464,7 +1470,11 @@ struct TrackerApp::Impl {
+         constexpr std::array<Uint8,8> controllerButtons{{
+             SDL_CONTROLLER_BUTTON_DPAD_UP,SDL_CONTROLLER_BUTTON_DPAD_DOWN,
+             SDL_CONTROLLER_BUTTON_DPAD_LEFT,SDL_CONTROLLER_BUTTON_DPAD_RIGHT,
++#ifdef MORTAR_BUILD
++            SDL_CONTROLLER_BUTTON_B,SDL_CONTROLLER_BUTTON_A,
++#else
+             SDL_CONTROLLER_BUTTON_A,SDL_CONTROLLER_BUTTON_B,
++#endif
+             SDL_CONTROLLER_BUTTON_START,SDL_CONTROLLER_BUTTON_BACK}};
+         auto buttonInput=[&](Button code,bool down){
+             SDL_Event input{};input.type=down?SDL_CONTROLLERBUTTONDOWN:SDL_CONTROLLERBUTTONUP;
+@@ -1708,13 +1718,30 @@ struct TrackerApp::Impl {
+     int run() {
+         if(options.uiTest)return runUiTest();
+         int frames=0;bool captured=false;
++#ifdef MORTAR_BUILD
++        Uint32 lastInput=SDL_GetTicks(),lastDraw=0;
++#endif
+         while(running){
+             try {
+-                SDL_Event e;while(SDL_PollEvent(&e))event(e);
++                SDL_Event e;while(SDL_PollEvent(&e)){
++#ifdef MORTAR_BUILD
++                    lastInput=SDL_GetTicks();
++#endif
++                    event(e);
++                }
+                 pollTools();
+                 pollRecovery();
+                 const Uint32 now=SDL_GetTicks();
+                 for(int i=0;i<4;++i)if(held[i]&&Sint32(now-repeatAt[i])>=0){buttonDown(static_cast<Button>(i),true);repeatAt[i]=now+Uint32(repeatInterval);}
++#ifdef MORTAR_BUILD
++                // The whole screen is redrawn each frame. Hidden (the shell took
++                // focus): 1 fps, playback runs on its own thread. Idle: 4 fps.
++                const bool focused=(SDL_GetWindowFlags(window)&SDL_WINDOW_INPUT_FOCUS)!=0;
++                const bool live=focused&&(transport.playing||playback->previewPlaying()||mode==Mode::Busy||mode==Mode::Recording||
++                    std::any_of(held.begin(),held.end(),[](bool h){return h;})||now-lastInput<500);
++                if(!live&&!options.smoke&&options.screenshotPath.empty()&&now-lastDraw<(focused?250u:1000u)){SDL_Delay(8);continue;}
++                lastDraw=now;
++#endif
+                 draw();
+                 if(!options.screenshotPath.empty()&&!captured&&frames>=2){screenshot(options.screenshotPath);captured=true;}
+                 SDL_RenderPresent(renderer);
+diff --git a/src/ui/TrackerSession.inc b/src/ui/TrackerSession.inc
+index 6cb2ab0..8ac7de2 100644
+--- a/src/ui/TrackerSession.inc
++++ b/src/ui/TrackerSession.inc
+@@ -6,6 +6,10 @@
+             // user. Updates only replace the templates under assets/.
+             if(std::filesystem::symlink_status(destination).type()!=std::filesystem::file_type::not_found)return;
+             std::filesystem::copy_file(source,destination,std::filesystem::copy_options::skip_existing);
++#ifdef MORTAR_BUILD
++            // The source is in the read-only Nix store; these are the user's to edit.
++            std::filesystem::permissions(destination,std::filesystem::perms::owner_write,std::filesystem::perm_options::add);
++#endif
+         };
+         copyMissing(assets/"gamecontrollerdb.txt",contentDirectory/"gamecontrollerdb.txt");
+         for(const auto& entry:std::filesystem::directory_iterator(assets/"themes"))

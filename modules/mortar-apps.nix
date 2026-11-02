@@ -7,6 +7,8 @@
 #                 Brick's TOP USB-C port (USB host).
 #   choochootracker  multi-engine tracker / groovebox ("ChooChoo"); see
 #                 pkgs/choochootracker for controls, data dir and MIDI.
+#   littlexm      Little XM Tracker, an XM tracker for gamepads ("Little
+#                 XM"); see pkgs/little-xm-tracker for controls and data.
 #   pico8         PICO-8 is commercial, so it is never part of the system
 #                 closure (which CI builds and the update cache holds). It
 #                 lives in its own Nix profile on the Brick,
@@ -137,6 +139,15 @@ in
         description = "ChooChooTracker (Mortar build) with its launcher.";
       };
     };
+    littlexm = {
+      enable = lib.mkEnableOption "Little XM Tracker, an XM tracker for gamepads" // { default = true; };
+      package = lib.mkOption {
+        type = lib.types.package;
+        default = pkgs.callPackage ../pkgs/little-xm-tracker { };
+        defaultText = lib.literalExpression "pkgs.callPackage ../pkgs/little-xm-tracker { }";
+        description = "Little XM Tracker (Mortar build) with its launcher.";
+      };
+    };
     m8c = {
       enable = lib.mkEnableOption "m8c, the M8 tracker client" // { default = true; };
       package = lib.mkOption {
@@ -153,6 +164,7 @@ in
       lib.optional (cfg.puzzlescript.enable && cfg.puzzlescript.package != null) cfg.puzzlescript.package
       ++ lib.optional cfg.m8c.enable cfg.m8c.package
       ++ lib.optional cfg.choochootracker.enable cfg.choochootracker.package
+      ++ lib.optional cfg.littlexm.enable cfg.littlexm.package
       ++ [ pkgs.alsa-utils ];
 
     # `pico8` on PATH once installed (the profile is not in the closure)
