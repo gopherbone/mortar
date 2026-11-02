@@ -351,6 +351,7 @@ mod alsa {
         let mut pcm: Option<Pcm> = None;
         let mut last_sound = Instant::now();
         let mut retry_at: Option<Instant> = None;
+        let started = Instant::now();
         let mut buf = vec![0i16; PERIOD * 2];
         loop {
             if voices.is_empty() {
@@ -376,9 +377,15 @@ mod alsa {
                 }
                 match Pcm::open(dev) {
                     Ok(p) => pcm = Some(p),
+                    // The shell now starts before PipeWire is up: for the first
+                    // seconds keep the sound and try again shortly.
+                    Err(_) if started.elapsed() < Duration::from_secs(8) => {
+                        std::thread::sleep(Duration::from_millis(200));
+                        continue;
+                    }
                     Err(e) => {
                         tracing::warn!("UI sounds off for a while: {e}");
-                        retry_at = Some(Instant::now() + Duration::from_secs(30));
+                        retry_at = Some(Instant::now() + Duration::from_secs(3));
                         voices.clear();
                         continue;
                     }
