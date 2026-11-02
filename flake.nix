@@ -19,7 +19,7 @@
       # Vendor SCP blob (not redistributable) and the U-Boot image embedding it.
       # Build locally only; never push these to a public cache.
       mortarUnfree = pkg: builtins.elem (nixpkgs.lib.getName pkg)
-        [ "trimui-brick-scp" "u-boot-trimui-brick-mainline" "trimui-brick-firmware" "pvr-ddk-userspace" "claude-code" "pico-8" "pico"
+        [ "trimui-brick-scp" "u-boot-trimui-brick-mainline" "trimui-brick-firmware" "pvr-ddk-userspace" "claude-code" "pico-8" "pico" "acgc"
           # mortar-play cores with non-commercial licences
           "libretro-snes9x2005-plus" "libretro-genesis-plus-gx" "libretro-fbneo" ];
     in {
@@ -67,8 +67,12 @@
           { mortar.play.enable = true; }
           ./modules/mortar-power.nix
           { mortar.power.enable = true; }
-          ({ config, pkgs, ... }: {
+          ({ config, lib, pkgs, ... }: {
             mortar.apps.pico8.enable = true;
+            # Animal Crossing: like PICO-8, installed by `mortar acgc --iso`
+            # with the user's own disc; the entry hides until the ISO is there.
+            mortar.apps.acgc.enable = true;
+            mortar.shell.categories.acgc = "games";
             mortar.greeter.enable = true;
             mortar.greeter.sessions = {
               games = {
@@ -101,6 +105,14 @@
                 order = 25;
                 requires = config.mortar.apps.pico8.bin;
                 command = "exec ${config.mortar.gpu.sdlRun}/bin/mortar-sdl-run ${config.mortar.apps.pico8.bin} -splore";
+              };
+              acgc = lib.mkIf config.mortar.apps.acgc.enable {
+                name = "Animal Crossing";
+                description = "GameCube · your own disc";
+                icon = "pad";
+                order = 26;
+                requires = config.mortar.apps.acgc.rom;
+                command = "exec ${config.mortar.gpu.sdlRun}/bin/mortar-sdl-run ${config.mortar.apps.acgc.bin}";
               };
               terminal = {
                 name = "Terminal";
@@ -207,6 +219,9 @@
           # Not in the system: `mortar pico8` builds this and installs it
           # into /nix/var/nix/profiles/pico8 on the Brick.
           pico8 = mainlineConfig.mortar.apps.pico8.package;
+          # Not in the system either: `mortar acgc` installs it into
+          # /nix/var/nix/profiles/acgc (no game data; pkgs/acgc).
+          acgc = mainlineConfig.mortar.apps.acgc.package;
 
           # Mainline boot chain + SD image (fully mainline SPL/TF-A/U-Boot)
           u-boot-mainline = mainlineConfig.system.build.mortarBootloader;

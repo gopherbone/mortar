@@ -6,6 +6,7 @@
 //! (pkgs/mortar-pair) itself. `mortar publish` pushes a build to the
 //! over-the-air update bucket (docs/updates.md).
 
+mod acgc;
 mod pair;
 mod publish;
 
@@ -28,6 +29,12 @@ mortar pico8 [--host HOST] [--remove]
     Build PICO-8 from your own zip (pkgs/pico8) and install it into its own
     profile on the Brick (/nix/var/nix/profiles/pico8). It is never part of
     the system, so over-the-air updates neither ship nor remove it.
+mortar acgc [--host HOST] [--iso PATH] [--remove]
+    Animal Crossing (GameCube decomp port, pkgs/acgc): check your own disc
+    image (USA, GAFE01 rev 0), build the port and install it into its own
+    profile (/nix/var/nix/profiles/acgc), and copy the image to the Brick
+    (~brick/.local/share/acgc/rom/GAFE01.iso). Neither is ever part of the
+    system. --remove takes the port away and leaves the image and saves.
 mortar publish [--config NAME] [--path STORE_PATH] [--channel C] [--key FILE]
                [--credentials FILE] [--force] [--dry-run]
                [--endpoint URL --bucket NAME [--region R]]
@@ -58,6 +65,7 @@ struct Opts {
     reboot: bool,
     remove: bool,
     key_id: Option<String>,
+    iso: Option<String>,
     rest: Vec<String>,
 }
 
@@ -79,6 +87,7 @@ fn parse(args: &[String]) -> Opts {
         reboot: false,
         remove: false,
         key_id: None,
+        iso: None,
         rest: Vec::new(),
     };
     let mut it = args.iter();
@@ -88,6 +97,7 @@ fn parse(args: &[String]) -> Opts {
             "--config" => o.config = it.next().cloned().unwrap_or_else(|| die("--config needs a value")),
             "--boot" => o.boot_only = true,
             "--remove" => o.remove = true,
+            "--iso" => o.iso = Some(it.next().cloned().unwrap_or_else(|| die("--iso needs a value"))),
             "--key-id" => o.key_id = Some(it.next().cloned().unwrap_or_else(|| die("--key-id needs a value"))),
             "--reboot" => {
                 o.reboot = true;
@@ -341,6 +351,7 @@ fn main() {
         }
         "reboot" => reboot(&o.host),
         "pico8" => pico8(&o),
+        "acgc" => acgc::acgc(&o, o.iso.as_deref()),
         "update" => publish::update_now(&o.host),
         "update-creds" => publish::update_creds(&o.host, o.key_id.clone()),
         "attention" => {
