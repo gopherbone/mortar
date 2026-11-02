@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //! Where frames go and buttons come from.
 //!
-//! - `wayland`: inside mortar-shell (WAYLAND_DISPLAY set). A plain wl_shm
-//!   client: frames are scaled on the CPU straight into shared memory and
-//!   only the game rectangle is damaged, so the shell's composition is one
-//!   copy. (SDL's Wayland path would render through Mesa's llvmpipe, which
-//!   costs about a core at 60 fps on the A53s.) SDL still provides audio
-//!   and gamepads (the shell's per-app virtual pad, isolated by SDL hints).
+//! - `wayland`: inside mortar-shell (WAYLAND_DISPLAY set). A plain Wayland
+//!   client: dma-bufs the shell puts straight on the display plane (the
+//!   frame at its own size, scaled by the display engine through a
+//!   viewport, or CPU scaled to the screen), else wl_shm (one copy in the
+//!   shell). SDL still provides audio and gamepads (the shell's per-app
+//!   virtual pad, isolated by SDL hints).
 //! - `sdl`: anywhere else (greeter session on the PowerVR GPU through
 //!   mortar-sdl-run, KMSDRM, the macOS dev window): SDL window + renderer,
 //!   the game texture is scaled by the GPU.
@@ -18,6 +18,8 @@ use crate::video::{Dst, Frame, Scaler};
 use mortar_ui::gfx::Ui;
 use std::time::Duration;
 
+#[cfg(target_os = "linux")]
+pub mod dumb;
 pub mod sdl;
 #[cfg(target_os = "linux")]
 pub mod wayland;

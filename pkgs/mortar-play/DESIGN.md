@@ -75,18 +75,35 @@ asked (vertical arcade games), then laid out on the 1024x768 screen:
 
 Presenters:
 
-- **Inside mortar-shell** (WAYLAND_DISPLAY set): a minimal wl_shm client
-  (`platform/wayland.rs`, wayland-client in pure Rust): one fullscreen
-  xdg_toplevel, two XRGB8888 buffers in memfd shared memory. The frame is
-  scaled on the CPU (nearest, precomputed column map, repeated rows are a
-  memcpy) straight into whichever buffer the shell has released; only the
-  game rectangle is damaged after the first frame of a layout, and if both
-  buffers are still held the frame is dropped rather than waited for. The
-  shell's composition is then a single damage-tracked copy into scanout.
-  Why not SDL's Wayland backend: SDL renders through EGL, which inside the
-  shell is Mesa's llvmpipe (the PowerVR has no GBM/Wayland path); a
-  textured full-screen quad there costs most of an A53 core at 60 fps,
-  time the emulator needs. The scaled write is ~3 MB/frame.
+- **Inside mortar-shell** (WAYLAND_DISPLAY set): a minimal Wayland client
+  (`platform/wayland.rs`, wayland-client in pure Rust), one fullscreen
+  xdg_toplevel. As in gamescope, the game is drawn at its own size and the
+  display scales it; nothing is composited. Buffers, best first:
+  1. **native** (`sharp = false` systems whose picture fills the screen:
+     the PlayStation, 4:3 on a 4:3 panel): the core's frame at its own
+     size (256..640 x 240/480) is copied into a KMS dumb buffer
+     (`platform/dumb.rs`: sun4i-drm, CMA, linear XRGB8888, shared as a
+     zwp_linux_dmabuf_v1 buffer; three of them) with a wp_viewport
+     destination of 1024x768. The shell puts it straight on the primary
+     plane and the display engine's scaler (a soft Lanczos-2 filter:
+     gamescope's "linear" with a touch of sharpness) scales it: ~0.3 MB
+     copied per frame, nothing in the shell.
+  2. **screen-size dma-buf** (pixel-perfect systems, letterboxed pictures,
+     the menus): the CPU nearest scaler writes into a 1024x768 dumb buffer
+     that the shell scans out unscaled, so the shell's copy is gone. The
+     mapping is write-combined, so the scaler only ever writes (each
+     source row is gathered once into a cached row, then copied to every
+     screen row that repeats it).
+  3. **wl_shm** (no display device, e.g. the sandbox tests, a refused
+     dma-buf, or `MORTAR_PLAY_PRESENT=shm`): two memfd buffers, CPU scaled;
+     the shell copies the damaged rectangle into scanout.
+
+  Only the game rectangle is damaged after the first frame of a layout,
+  and if every buffer is still held the frame is dropped rather than
+  waited for. Why not SDL's Wayland backend: it renders through EGL
+  (mortar-wlegl on the PowerVR inside the shell), and a texture upload
+  plus a full-screen quad a frame is more work than handing the display
+  a 0.3 MB buffer.
 - **Standalone** (greeter session, `mortar-sdl-run`, so SDL's vivante
   backend on the PowerVR GPU; or KMSDRM + llvmpipe as the fallback; or the
   macOS window for development): SDL3 renderer, the native frame is
@@ -238,7 +255,7 @@ lime selection, Instrument Serif titles), rendered on the CPU into a
 | Super Nintendo | snes9x2005-plus | non-commercial | the fast snes9x branch with the blargg APU |
 | Mega Drive, Master System, Game Gear | genesis-plus-gx | non-commercial | |
 | PC Engine (+CD) | beetle-pce-fast | GPL-2.0 | syscard3.pce for CD |
-| PlayStation | pcsx-rearmed | GPL-2.0 | dynarec, threaded GPU + SPU; HLE BIOS unless scph*.bin |
+| PlayStation | pcsx-rearmed | GPL-2.0 | dynarec, threaded GPU + SPU, auto frameskip; display-scaled native frames; HLE BIOS unless scph*.bin |
 | Arcade / Neo Geo | fbneo | non-commercial | zips as-is; neogeo.zip for Neo Geo |
 | Atari 2600 | stella2014 | GPL-2.0 | |
 | Atari Lynx | handy | zlib | needs lynxboot.img |
@@ -268,13 +285,59 @@ column is `mortar-play selftest` on the device (`ms_per_frame`,
 | beetle-pce-fast | 20-30% | | CD games similar |
 | snes9x2005-plus | 30-50% | | SuperFX/SA-1 titles 60-90%; snes9x2010 costs ~1.5x, current snes9x ~2-3x |
 | mgba | 50-75% | | full speed with idle-loop removal; gpsp (dynarec) is ~2x faster if needed |
-| pcsx-rearmed | 40-70% (main) + GPU thread | | arm64 dynarec + NEON GPU; enhanced resolution off |
+| pcsx-rearmed | 40-70% (main) + GPU thread | 13% main + 9% GPU thread at 1008 MHz; 8% main at 1992 MHz (a light 2D scene, 320x240) | arm64 dynarec + NEON GPU; enhanced resolution off |
 | fbneo | 30-80% | | CPS1/2 and Neo Geo fine; heavier boards (CPS3, Cave SH-3) not |
 | handy | 15-25% | | |
 
-Frontend overhead per frame: the CPU scale into shared memory (~3 MB
-write, ~1-2 ms) plus the shell's copy of the damaged area; audio
-resampling ~0.1 ms; the SDL/GPU path uploads at most 1.2 MB.
+Frontend overhead per frame: native PlayStation frames are a ~0.3 MB
+copy into a dma-buf the display scales; pixel-perfect systems are a CPU
+nearest scale into a screen-size dma-buf (~2-3 MB written; 2.6 ms at
+1008 MHz, 2.1 ms at 1992 MHz); the shell copies nothing in either case.
+Audio resampling ~0.1 ms; the SDL/GPU path uploads at most 1.2 MB.
+
+### PlayStation, measured (2026-11-01)
+
+`mortar-play selftest psx GAME --resume [--paced]` from a resume state
+(a light 320x240 2D scene; heavy 3D games cost more, the split is the
+same), unpaced unless noted. `cpu` is the whole process (all threads).
+
+| Clock | retro_run | GPU thread | SPU thread | CPU scale to 1024x768 | cpu |
+|---|---|---|---|---|---|
+| 1008 MHz, before (old scaler) | 2.09-2.17 ms | 1.6-1.7 ms | 0.5 ms | 3.1-3.3 ms | 7.4-7.7 ms |
+| 1008 MHz, write-only scaler | 2.09 ms | 1.5 ms | 0.5 ms | 2.5-2.7 ms | 6.6-7.0 ms |
+| 1416 MHz | 1.85 ms | | | 2.75 ms | 6.0 ms |
+| 1992 MHz | 1.34 ms | | | 2.10 ms | 4.9 ms |
+| 1008 MHz, GPU thread off | 3.28 ms | - | 0.5 ms | 2.6 ms | 6.5 ms |
+| 1008 MHz, core built with -mcpu=cortex-a53 | 2.09 ms | 1.5 ms | 0.5 ms | 2.6 ms | 6.9 ms |
+
+Paced (60 fps, 2400 frames at 1008 MHz): 2 late frames, RSS 70 MB, no swap.
+The threaded GPU takes 1.2 ms a frame off the emulation thread. Building
+the core for the A53 bought nothing measurable (nixpkgs already builds it
+with -Ofast, ari64 and the NEON renderer), so the cached build stays.
+
+In the shell (the same game and state as a shell client, 30 s at
+1008 MHz, `top`-style share of one core; audio to SDL's dummy driver):
+
+| Presenter | shell | emulation thread | GPU thread | SPU | total |
+|---|---|---|---|---|---|
+| before: wl_shm, CPU scale, shell copies | 24.5% | 21.4% | 10.5% | 2.5% | 59% |
+| wl_shm with the write-only scaler | 26.1% | 21.2% | 13.5% | 3.2% | 64% |
+| screen-size dma-buf (CPU scale, scanout) | 4.3% | 21.1% | 13.3% | 2.6% | 41% |
+| native 320x240 dma-buf + viewport (plane scaler) | 4.5% | 14.6% | 13.9% | 2.7% | 36% |
+
+Every frame of the last two went straight to the panel (the shell's
+`scanout_frames` counted them all); debugfs showed the primary plane with a
+320x240 framebuffer and a 1024x768 CRTC rectangle. 1269 frames presented,
+0 dropped for lack of a free buffer (the game draws at 30 fps).
+
+**CPU clock.** Until the kernel change in this commit series the A53s ran
+at the 1008 MHz boot OPP all the time: the defconfig's default governor
+was `userspace` and nothing set a speed. schedutil is the default now. A
+10-minute soak with two cores spinning at the 1992 MHz setpoint (a stand-in
+for a heavy game) averaged 63 C on cpu-thermal (peak 71 C); the 63 C
+passive trip (step_wise) held the clock at 1992/1800/1608 MHz for about
+47/49/5% of the time, so ~1.9 GHz sustained, no fan needed. zram: no swap
+activity during play (pswpin/pswpout unchanged over the runs).
 
 ## Hardware rendering (designed, not built)
 

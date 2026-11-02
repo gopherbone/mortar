@@ -218,15 +218,17 @@ pub fn layout(mode: Scaling, fw: u32, fh: u32, aspect: f32, sw: u32, sh: u32) ->
 }
 
 /// Nearest-neighbour scaler into a 32-bit destination buffer (`stride` in
-/// pixels). Rows that repeat the previous source row are copied, so the cost
-/// is about one gather per source row plus memcpy.
+/// pixels). Each source row is gathered once into a cached row and copied to
+/// every screen row that repeats it, so the destination is only ever
+/// written, never read: it may be write-combined memory (a scanout dma-buf),
+/// where reads are very slow.
 #[derive(Default)]
 pub struct Scaler {
     key: (u32, u32, Dst),
     xmap: Vec<u32>,
     ymap: Vec<u32>,
+    row: Vec<u32>,
 }
-
 
 impl Scaler {
     pub fn scale(&mut self, f: &Frame, dst: Dst, out: &mut [u32], stride: usize) {
@@ -241,22 +243,19 @@ impl Scaler {
             };
             self.xmap = map(dst.w, f.w);
             self.ymap = map(dst.h, f.h);
+            self.row = vec![0; dst.w as usize];
         }
-        let mut prev: Option<(u32, usize)> = None;
+        let mut prev = None;
         for (dy, &sy) in self.ymap.iter().enumerate() {
+            if prev != Some(sy) {
+                let src = &f.px[(sy * f.w) as usize..((sy + 1) * f.w) as usize];
+                for (d, &sx) in self.row.iter_mut().zip(&self.xmap) {
+                    *d = src[sx as usize];
+                }
+                prev = Some(sy);
+            }
             let o = (dst.y as usize + dy) * stride + dst.x as usize;
-            if let Some((py, po)) = prev
-                && py == sy
-            {
-                out.copy_within(po..po + dst.w as usize, o);
-                continue;
-            }
-            let src = &f.px[(sy * f.w) as usize..((sy + 1) * f.w) as usize];
-            let row = &mut out[o..o + dst.w as usize];
-            for (d, &sx) in row.iter_mut().zip(&self.xmap) {
-                *d = src[sx as usize];
-            }
-            prev = Some((sy, o));
+            out[o..o + dst.w as usize].copy_from_slice(&self.row);
         }
     }
 }

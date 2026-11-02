@@ -192,14 +192,28 @@ let
       tag = "PS1";
       folders = [ "psx" "ps1" ];
       extensions = [ "cue" "chd" "pbp" "m3u" "ccd" "iso" ];
+      # nixpkgs' aarch64 build already has the ari64 dynarec (+ its compile
+      # thread), the NEON GPU and -Ofast ("arm64v8 neon ari64 gpu=neon" in
+      # the log); rebuilding it with -mcpu=cortex-a53 measured the same
+      # (2.09 vs 2.10 ms/frame), so the cached build stays.
       core = lr.pcsx-rearmed;
       scaling = "aspect";
       fastForward = "f2";
+      # smooth: the frame goes to the shell at its own size and the display
+      # engine scales it to 4:3 (no CPU scaling; mortar-play DESIGN.md)
+      sharp = false;
+      # Option names and values as this pcsx-rearmed (r26) declares them:
+      # GPU thread is enabled/disabled/auto (no sync/async here), the SPU
+      # IRQ option is gone. Frameskip "auto" only skips drawing when
+      # mortar-play's audio queue reports an underrun is likely (below a
+      # quarter full), i.e. only in scenes that can't keep up.
       options = {
         pcsx_rearmed_drc = "enabled";
+        pcsx_rearmed_drc_thread = "auto";
         pcsx_rearmed_gpu_thread_rendering = "enabled";
         pcsx_rearmed_spu_thread = "enabled";
-        pcsx_rearmed_frameskip_type = "disabled";
+        pcsx_rearmed_frameskip_type = "auto";
+        pcsx_rearmed_neon_interlace_enable_v2 = "disabled";
         pcsx_rearmed_neon_enhancement_enable = "disabled";
         pcsx_rearmed_show_bios_bootlogo = "disabled";
         pcsx_rearmed_dithering = "enabled";

@@ -1,27 +1,62 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-//! A minimal Wayland client for mortar-shell: one fullscreen xdg_toplevel,
-//! two wl_shm XRGB8888 buffers, frames scaled on the CPU into whichever
-//! buffer the compositor has released, damage limited to the game area.
+//! A minimal Wayland client for mortar-shell: one fullscreen xdg_toplevel.
 //! `activated` from the toplevel configure says whether we are on screen
 //! (the shell deactivates apps behind its overlay and in the background),
 //! which the app turns into pause/resume. Keys from a real keyboard come
 //! through wl_keyboard as evdev codes.
+//!
+//! Buffers, best first (as gamescope does it: the game at its own size, the
+//! display scales, nothing is composited):
+//!
+//! - **native** (smooth systems whose picture fills the screen, e.g. the
+//!   PlayStation at 4:3): the core's frame at its own size (320x240,
+//!   640x480, ...) in a KMS dumb buffer (a dma-buf, `dumb.rs`), with a
+//!   wp_viewport destination of the whole screen. The shell puts it on the
+//!   primary plane and the display engine's scaler scales it: the frontend
+//!   copies ~0.3 MB a frame and the shell nothing.
+//! - **screen-size dma-buf** (pixel-perfect systems, letterboxed pictures,
+//!   the menus): the CPU nearest scaler writes straight into a screen-size
+//!   dumb buffer, which the shell scans out unscaled (no copy in the shell).
+//! - **wl_shm** (no display device, e.g. the sandbox tests, or
+//!   MORTAR_PLAY_PRESENT=shm): two shared-memory buffers, scaled on the CPU;
+//!   the shell copies the damaged area into scanout.
+//!
+//! A frame goes into whichever buffer the compositor has released; if all
+//! are still held it is dropped rather than waited for.
 
+use super::dumb::{Card, DumbBuf};
 use super::{Display, PEvent, ui_to_xrgb};
 use crate::video::{Dst, Frame, Scaler};
 use mortar_ui::gfx::Ui;
 use std::os::fd::{AsFd, FromRawFd, OwnedFd};
 use std::time::Duration;
 use wayland_client::protocol::{wl_buffer, wl_compositor, wl_keyboard, wl_registry, wl_seat, wl_shm, wl_shm_pool, wl_surface};
-use wayland_client::{Connection, Dispatch, EventQueue, QueueHandle, WEnum, delegate_noop};
+use wayland_client::{Connection, Dispatch, EventQueue, QueueHandle, WEnum, delegate_noop, event_created_child};
+use wayland_protocols::wp::linux_dmabuf::zv1::client::{zwp_linux_buffer_params_v1, zwp_linux_dmabuf_v1};
+use wayland_protocols::wp::viewporter::client::{wp_viewport, wp_viewporter};
 use wayland_protocols::xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_base};
+
+const DRM_FORMAT_XRGB8888: u32 = 0x3432_5258;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Kind {
+    Shm,
+    /// Screen-size dma-buf, CPU scaled.
+    Dma,
+    /// Frame-size dma-buf, scaled by the display (viewport).
+    Native,
+}
+
+enum Store {
+    Shm { _pool: wl_shm_pool::WlShmPool, _fd: OwnedFd, ptr: *mut u32, len: usize },
+    Dma(DumbBuf),
+}
 
 struct Buf {
     buffer: wl_buffer::WlBuffer,
-    _pool: wl_shm_pool::WlShmPool,
-    _fd: OwnedFd,
-    ptr: *mut u32,
-    len: usize,
+    store: Store,
+    /// Row stride in pixels.
+    stride: usize,
     busy: bool,
     /// What the area outside the game rect holds: Some(dst) when the borders
     /// were cleared for that layout.
@@ -30,14 +65,20 @@ struct Buf {
 
 impl Buf {
     fn px(&mut self) -> &mut [u32] {
-        unsafe { std::slice::from_raw_parts_mut(self.ptr, self.len / 4) }
+        let (ptr, len) = match &self.store {
+            Store::Shm { ptr, len, .. } => (*ptr, *len),
+            Store::Dma(d) => (d.ptr, d.len),
+        };
+        unsafe { std::slice::from_raw_parts_mut(ptr, len / 4) }
     }
 }
 
 impl Drop for Buf {
     fn drop(&mut self) {
         self.buffer.destroy();
-        unsafe { libc::munmap(self.ptr as *mut _, self.len) };
+        if let Store::Shm { ptr, len, .. } = self.store {
+            unsafe { libc::munmap(ptr as *mut _, len) };
+        }
     }
 }
 
@@ -48,6 +89,8 @@ struct State {
     wm: Option<xdg_wm_base::XdgWmBase>,
     seat: Option<wl_seat::WlSeat>,
     keyboard: Option<wl_keyboard::WlKeyboard>,
+    dmabuf: Option<zwp_linux_dmabuf_v1::ZwpLinuxDmabufV1>,
+    viewporter: Option<wp_viewporter::WpViewporter>,
     configured: bool,
     size: (u32, u32),
     activated: Option<bool>,
@@ -55,6 +98,9 @@ struct State {
     shown: bool,
     bufs: Vec<Buf>,
     events: Vec<PEvent>,
+    /// The answer to the last zwp_linux_buffer_params_v1.create: Some(buffer)
+    /// or None (failed).
+    created: Option<Option<wl_buffer::WlBuffer>>,
 }
 
 pub struct WaylandDisplay {
@@ -65,12 +111,21 @@ pub struct WaylandDisplay {
     surface: wl_surface::WlSurface,
     _xdg: xdg_surface::XdgSurface,
     _toplevel: xdg_toplevel::XdgToplevel,
+    viewport: Option<wp_viewport::WpViewport>,
+    /// The viewport destination last set (None: unset, the buffer's size).
+    dest: Option<(u32, u32)>,
+    /// The display device for dma-bufs; None: wl_shm.
+    card: Option<Card>,
     scaler: Scaler,
-    buf_size: (u32, u32),
+    bufs_key: (u32, u32, Kind),
     fallback: (u32, u32),
+    logged: Option<(u32, u32, Kind)>,
+    /// Game frames shown / dropped because every buffer was still held.
+    shown: u64,
+    dropped: u64,
 }
 
-fn shm_buffer(shm: &wl_shm::WlShm, w: u32, h: u32, idx: usize, qh: &QueueHandle<State>) -> Result<Buf, String> {
+fn shm_buffer(shm: &wl_shm::WlShm, w: u32, h: u32, qh: &QueueHandle<State>) -> Result<Buf, String> {
     let len = (w * h * 4) as usize;
     unsafe {
         let fd = libc::memfd_create(c"mortar-play".as_ptr(), libc::MFD_CLOEXEC);
@@ -86,8 +141,8 @@ fn shm_buffer(shm: &wl_shm::WlShm, w: u32, h: u32, idx: usize, qh: &QueueHandle<
             return Err(format!("mmap: {}", std::io::Error::last_os_error()));
         }
         let pool = shm.create_pool(fd.as_fd(), len as i32, qh, ());
-        let buffer = pool.create_buffer(0, w as i32, h as i32, (w * 4) as i32, wl_shm::Format::Xrgb8888, qh, idx);
-        Ok(Buf { buffer, _pool: pool, _fd: fd, ptr: ptr as *mut u32, len, busy: false, layout: None })
+        let buffer = pool.create_buffer(0, w as i32, h as i32, (w * 4) as i32, wl_shm::Format::Xrgb8888, qh, ());
+        Ok(Buf { buffer, store: Store::Shm { _pool: pool, _fd: fd, ptr: ptr as *mut u32, len }, stride: w as usize, busy: false, layout: None })
     }
 }
 
@@ -115,32 +170,110 @@ impl WaylandDisplay {
             }
             queue.blocking_dispatch(&mut state).map_err(|e| format!("Wayland: {e}"))?;
         }
-        eprintln!("mortar-play: Wayland {}x{}", state.size.0, state.size.1);
-        Ok(WaylandDisplay { conn, queue, qh, state, surface, _xdg: xdg, _toplevel: toplevel, scaler: Scaler::default(), buf_size: (0, 0), fallback: (w, h) })
+        let shm_only = std::env::var("MORTAR_PLAY_PRESENT").is_ok_and(|v| v == "shm");
+        let card = if shm_only || state.dmabuf.is_none() { None } else { Card::open() };
+        let viewport = state.viewporter.as_ref().map(|v| v.get_viewport(&surface, &qh, ()));
+        eprintln!(
+            "mortar-play: Wayland {}x{}, {}{}",
+            state.size.0,
+            state.size.1,
+            if card.is_some() { "dma-buf" } else { "wl_shm" },
+            if viewport.is_some() { " + viewporter" } else { "" }
+        );
+        Ok(WaylandDisplay {
+            conn,
+            queue,
+            qh,
+            state,
+            surface,
+            _xdg: xdg,
+            _toplevel: toplevel,
+            viewport,
+            dest: None,
+            card,
+            scaler: Scaler::default(),
+            bufs_key: (0, 0, Kind::Shm),
+            fallback: (w, h),
+            logged: None,
+            shown: 0,
+            dropped: 0,
+        })
     }
 
     fn screen(&self) -> (u32, u32) {
         if self.state.size.0 > 0 && self.state.size.1 > 0 { self.state.size } else { self.fallback }
     }
 
-    /// A released buffer of the current size (recreating the pair on resize).
-    fn free_buffer(&mut self) -> Option<usize> {
-        let (w, h) = self.screen();
-        if self.buf_size != (w, h) {
+    /// A dma-buf wl_buffer (params.create, answered by created or failed).
+    fn dma_buffer(&mut self, w: u32, h: u32) -> Result<Buf, String> {
+        let card = self.card.as_ref().ok_or("no display device")?;
+        let dmabuf = self.state.dmabuf.clone().ok_or("no zwp_linux_dmabuf_v1")?;
+        let d = card.alloc(w, h)?;
+        let params = dmabuf.create_params(&self.qh, ());
+        params.add(d.fd.as_fd(), 0, 0, d.pitch, 0, 0); // modifier: linear
+        params.create(w as i32, h as i32, DRM_FORMAT_XRGB8888, zwp_linux_buffer_params_v1::Flags::empty());
+        self.state.created = None;
+        for _ in 0..100 {
+            if self.state.created.is_some() {
+                break;
+            }
+            self.queue.blocking_dispatch(&mut self.state).map_err(|e| format!("Wayland: {e}"))?;
+        }
+        params.destroy();
+        let buffer = self.state.created.take().flatten().ok_or("the compositor refused the dma-buf")?;
+        let stride = (d.pitch / 4) as usize;
+        Ok(Buf { buffer, store: Store::Dma(d), stride, busy: false, layout: None })
+    }
+
+    /// A released buffer of `kind` and size (recreating the set on a change).
+    /// A dma-buf that can't be made switches this display to wl_shm for good
+    /// (the next call gets shm buffers).
+    fn free_buffer(&mut self, w: u32, h: u32, kind: Kind) -> Option<usize> {
+        let kind = if self.card.is_none() { Kind::Shm } else { kind };
+        if self.bufs_key != (w, h, kind) {
             self.state.bufs.clear();
-            let shm = self.state.shm.clone()?;
-            for i in 0..2 {
-                match shm_buffer(&shm, w, h, i, &self.qh) {
+            self.bufs_key = (0, 0, Kind::Shm);
+            let n = if kind == Kind::Shm { 2 } else { 3 };
+            for _ in 0..n {
+                let b = match kind {
+                    Kind::Shm => shm_buffer(self.state.shm.as_ref()?, w, h, &self.qh),
+                    _ => self.dma_buffer(w, h),
+                };
+                match b {
                     Ok(b) => self.state.bufs.push(b),
                     Err(e) => {
                         eprintln!("mortar-play: {e}");
+                        self.state.bufs.clear();
+                        if kind != Kind::Shm {
+                            eprintln!("mortar-play: no dma-buf presenting; using wl_shm");
+                            self.card = None;
+                            return self.free_buffer(w, h, Kind::Shm);
+                        }
                         return None;
                     }
                 }
             }
-            self.buf_size = (w, h);
+            self.bufs_key = (w, h, kind);
+        }
+        if self.logged != Some((w, h, kind)) {
+            eprintln!("mortar-play: presenting {kind:?} {w}x{h}");
+            self.logged = Some((w, h, kind));
         }
         self.state.bufs.iter().position(|b| !b.busy)
+    }
+
+    /// The viewport destination for the next commit (None: the buffer's size).
+    fn set_dest(&mut self, dest: Option<(u32, u32)>) {
+        if self.dest == dest {
+            return;
+        }
+        if let Some(v) = &self.viewport {
+            match dest {
+                Some((w, h)) => v.set_destination(w as i32, h as i32),
+                None => v.set_destination(-1, -1),
+            }
+        }
+        self.dest = dest;
     }
 
     fn commit(&mut self, i: usize, damage: Dst) {
@@ -172,14 +305,48 @@ impl Display for WaylandDisplay {
         self.screen()
     }
 
-    fn present_game(&mut self, f: &Frame, dst: Dst, _sharp: bool) {
+    fn present_game(&mut self, f: &Frame, dst: Dst, sharp: bool) {
         self.dispatch(None);
-        let Some(i) = self.free_buffer() else { return }; // compositor still has both: drop this frame
-        let stride = self.buf_size.0 as usize;
-        let full = Dst { x: 0, y: 0, w: self.buf_size.0, h: self.buf_size.1 };
+        if f.is_empty() {
+            return;
+        }
+        let (sw, sh) = self.screen();
+        let full = Dst { x: 0, y: 0, w: sw, h: sh };
+        // Smooth scaling of a picture that fills the screen: the frame at its
+        // own size, the display engine scales it (a soft Lanczos-2 filter).
+        // Letterboxed pictures would need the shell to place them on an
+        // overlay plane, and pixel-perfect ones need nearest: those are
+        // CPU scaled into a screen-size buffer.
+        if !sharp && dst == full && self.viewport.is_some() && self.card.is_some() {
+            let Some(i) = self.free_buffer(f.w, f.h, Kind::Native) else {
+                self.dropped += 1;
+                return;
+            };
+            if self.bufs_key.2 == Kind::Native {
+                let b = &mut self.state.bufs[i];
+                let (stride, w) = (b.stride, f.w as usize);
+                let px = b.px();
+                for (y, row) in f.px.chunks_exact(w).enumerate() {
+                    px[y * stride..y * stride + w].copy_from_slice(row);
+                }
+                self.set_dest(Some((dst.w, dst.h)));
+                self.commit(i, Dst { x: 0, y: 0, w: f.w, h: f.h });
+                self.shown += 1;
+                return;
+            }
+        }
+        let Some(i) = self.free_buffer(sw, sh, Kind::Dma) else {
+            self.dropped += 1; // all held: drop this frame
+            return;
+        };
+        self.set_dest(None);
         let b = &mut self.state.bufs[i];
+        let stride = b.stride;
         let damage = if b.layout != Some(dst) {
-            b.px().fill(0);
+            // write-only (dma-bufs are write-combined)
+            for row in b.px().chunks_mut(stride).take(sh as usize) {
+                row[..sw as usize].fill(0);
+            }
             b.layout = Some(dst);
             full
         } else {
@@ -188,17 +355,20 @@ impl Display for WaylandDisplay {
         let px = self.state.bufs[i].px();
         self.scaler.scale(f, dst, px, stride);
         self.commit(i, damage);
+        self.shown += 1;
     }
 
     fn present_ui(&mut self, ui: &Ui) {
         self.dispatch(None);
-        let Some(i) = self.free_buffer() else { return };
-        let (w, h) = self.buf_size;
+        let (w, h) = self.screen();
         if ui.pm.width() != w || ui.pm.height() != h {
             return; // the app re-renders at the new size
         }
+        let Some(i) = self.free_buffer(w, h, Kind::Dma) else { return };
+        self.set_dest(None);
+        let stride = self.state.bufs[i].stride;
         let px = self.state.bufs[i].px();
-        ui_to_xrgb(ui, px, w as usize);
+        ui_to_xrgb(ui, px, stride);
         self.state.bufs[i].layout = None;
         self.commit(i, Dst { x: 0, y: 0, w, h });
     }
@@ -213,7 +383,13 @@ impl Display for WaylandDisplay {
     }
 
     fn name(&self) -> String {
-        "wayland-shm".into()
+        if self.card.is_some() { "wayland-dmabuf".into() } else { "wayland-shm".into() }
+    }
+}
+
+impl Drop for WaylandDisplay {
+    fn drop(&mut self) {
+        eprintln!("mortar-play: {} game frames presented, {} dropped (no free buffer)", self.shown, self.dropped);
     }
 }
 
@@ -227,6 +403,9 @@ impl Dispatch<wl_registry::WlRegistry, ()> for State {
                 "wl_shm" => s.shm = Some(reg.bind(name, 1, qh, ())),
                 "xdg_wm_base" => s.wm = Some(reg.bind(name, version.min(6), qh, ())),
                 "wl_seat" if s.seat.is_none() => s.seat = Some(reg.bind(name, version.min(5), qh, ())),
+                // v3: format/modifier events, no feedback objects
+                "zwp_linux_dmabuf_v1" if version >= 2 => s.dmabuf = Some(reg.bind(name, version.min(3), qh, ())),
+                "wp_viewporter" => s.viewporter = Some(reg.bind(name, 1, qh, ())),
                 _ => {}
             }
         }
@@ -237,15 +416,32 @@ delegate_noop!(State: ignore wl_compositor::WlCompositor);
 delegate_noop!(State: ignore wl_surface::WlSurface);
 delegate_noop!(State: ignore wl_shm::WlShm);
 delegate_noop!(State: ignore wl_shm_pool::WlShmPool);
+delegate_noop!(State: ignore zwp_linux_dmabuf_v1::ZwpLinuxDmabufV1);
+delegate_noop!(State: wp_viewporter::WpViewporter);
+delegate_noop!(State: wp_viewport::WpViewport);
 
-impl Dispatch<wl_buffer::WlBuffer, usize> for State {
-    fn event(s: &mut Self, _: &wl_buffer::WlBuffer, ev: wl_buffer::Event, idx: &usize, _: &Connection, _: &QueueHandle<Self>) {
+impl Dispatch<wl_buffer::WlBuffer, ()> for State {
+    fn event(s: &mut Self, buf: &wl_buffer::WlBuffer, ev: wl_buffer::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
         if let wl_buffer::Event::Release = ev
-            && let Some(b) = s.bufs.get_mut(*idx)
+            && let Some(b) = s.bufs.iter_mut().find(|b| b.buffer == *buf)
         {
             b.busy = false;
         }
     }
+}
+
+impl Dispatch<zwp_linux_buffer_params_v1::ZwpLinuxBufferParamsV1, ()> for State {
+    fn event(s: &mut Self, _: &zwp_linux_buffer_params_v1::ZwpLinuxBufferParamsV1, ev: zwp_linux_buffer_params_v1::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
+        match ev {
+            zwp_linux_buffer_params_v1::Event::Created { buffer } => s.created = Some(Some(buffer)),
+            zwp_linux_buffer_params_v1::Event::Failed => s.created = Some(None),
+            _ => {}
+        }
+    }
+
+    event_created_child!(State, zwp_linux_buffer_params_v1::ZwpLinuxBufferParamsV1, [
+        zwp_linux_buffer_params_v1::EVT_CREATED_OPCODE => (wl_buffer::WlBuffer, ()),
+    ]);
 }
 
 impl Dispatch<xdg_wm_base::XdgWmBase, ()> for State {

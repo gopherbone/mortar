@@ -827,6 +827,12 @@ copies nothing and the CPU is idle.
   `MORTAR_SHELL_NO_OPAQUE_COPY=1` restores the generic path. Apps with
   subsurfaces or popups, and dmabuf clients, use the generic path.
 - wp_viewporter is supported (SDL3 sizes fullscreen windows with it).
+  A viewported dma-buf that covers the screen goes on the primary plane
+  with the plane's scaler doing the scaling (the A133 mixer's UI and VI
+  channels all have one): mortar-play sends PlayStation frames at their
+  own size (e.g. 320x240) with a 1024x768 destination and the shell copies
+  nothing. Under the GPU UI renderer the same buffer is sampled scaled
+  (the app image uses the viewport's destination size).
 - Output: DRM/KMS through Smithay's `DrmCompositor`, swapchain buffers from
   GBM (Mesa's kms_swrast on sun4i, i.e. dumb buffers that pixman maps). If
   libgbm cannot open the card (or `MORTAR_SHELL_ALLOCATOR=dumb`), plain KMS

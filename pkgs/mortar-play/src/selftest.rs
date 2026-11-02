@@ -21,6 +21,20 @@ pub struct Opts {
     pub press: Vec<(u64, String, u64)>,
     pub out: PathBuf,
     pub size: (u32, u32),
+    /// Start from the game's resume state (states/<system>/<game>.state.auto).
+    pub resume: bool,
+    /// Run at the game's frame rate (sleep to each frame's deadline) instead
+    /// of flat out, so threads and clocks behave as in play.
+    pub paced: bool,
+}
+
+#[derive(Serialize, Default)]
+pub struct ThreadCpu {
+    pub name: String,
+    /// CPU time per frame, ms (utime + stime; 10 ms tick resolution).
+    pub ms_per_frame: f64,
+    /// Share of one CPU core over the run's wall time.
+    pub load: f64,
 }
 
 #[derive(Serialize, Default)]
@@ -42,6 +56,15 @@ pub struct Report {
     /// the callback; this is the scale into a screen-sized buffer, as for
     /// wl_shm), ms.
     pub scale_ms: f64,
+    /// Whole-process CPU time per frame (all threads: the core's GPU/SPU
+    /// threads too), ms.
+    pub cpu_ms_per_frame: f64,
+    /// Per-thread CPU over the loop.
+    pub threads: Vec<ThreadCpu>,
+    /// Paced runs: frames whose work (run + scale) missed the frame's
+    /// deadline, and the wall time of the loop.
+    pub late_frames: u64,
+    pub wall_s: f64,
     pub shots: Vec<String>,
     pub distinct_colors: usize,
     pub audio_rms: f64,
@@ -71,6 +94,14 @@ pub fn run(cfg: &Config, sys_id: &str, rom: Option<&Path>, o: &Opts) -> Result<R
     let mut scaler = video::Scaler::default();
     let mut screen = vec![0u32; (o.size.0 * o.size.1) as usize];
     let mut samples: Vec<i16> = Vec::new();
+    if o.resume {
+        s.load_state(Slot::Auto).map_err(|e| format!("resume: {e}"))?;
+    }
+    let ticks0 = task_ticks();
+    let cpu0 = process_cpu();
+    let start = Instant::now();
+    let period = std::time::Duration::from_secs_f64(1.0 / s.fps().max(1.0));
+    let mut deadline = start + period;
     for frame in 1..=o.frames {
         for &(f, b, n) in &presses {
             if frame == f {
@@ -92,6 +123,16 @@ pub fn run(cfg: &Config, sys_id: &str, rom: Option<&Path>, o: &Opts) -> Result<R
             scaler.scale(&f, dst, &mut screen, o.size.0 as usize);
         }
         scale_time += t.elapsed().as_secs_f64();
+        if o.paced {
+            let now = Instant::now();
+            if now > deadline {
+                r.late_frames += 1;
+                deadline = now;
+            } else {
+                std::thread::sleep(deadline - now);
+            }
+            deadline += period;
+        }
         samples.extend_from_slice(s.audio());
         mixer.push(s.audio());
         if o.shots.contains(&frame) {
@@ -103,6 +144,18 @@ pub fn run(cfg: &Config, sys_id: &str, rom: Option<&Path>, o: &Opts) -> Result<R
             r.shots.push(p.to_string_lossy().into_owned());
         }
     }
+    r.wall_s = start.elapsed().as_secs_f64();
+    r.cpu_ms_per_frame = (process_cpu() - cpu0) * 1000.0 / o.frames.max(1) as f64;
+    let ticks1 = task_ticks();
+    let hz = unsafe { libc::sysconf(libc::_SC_CLK_TCK) }.max(1) as f64;
+    for (tid, (name, t1)) in &ticks1 {
+        let t0 = ticks0.get(tid).map_or(0, |v| v.1);
+        let secs = (t1 - t0) as f64 / hz;
+        if secs > 0.0 {
+            r.threads.push(ThreadCpu { name: name.clone(), ms_per_frame: secs * 1000.0 / o.frames.max(1) as f64, load: secs / r.wall_s.max(1e-9) });
+        }
+    }
+    r.threads.sort_by(|a, b| b.ms_per_frame.total_cmp(&a.ms_per_frame));
     r.frames = o.frames;
     r.ms_per_frame = run_time * 1000.0 / o.frames.max(1) as f64;
     r.core_load = r.ms_per_frame * s.fps() / 1000.0;
@@ -170,6 +223,33 @@ pub fn run(cfg: &Config, sys_id: &str, rom: Option<&Path>, o: &Opts) -> Result<R
     drop(s);
     let _ = std::fs::write(o.out.join("report.json"), serde_json::to_string_pretty(&r).unwrap_or_default());
     Ok(r)
+}
+
+/// Process CPU time (user + system, all threads), seconds.
+fn process_cpu() -> f64 {
+    let mut ru: libc::rusage = unsafe { std::mem::zeroed() };
+    unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut ru) };
+    let tv = |t: libc::timeval| t.tv_sec as f64 + t.tv_usec as f64 / 1e6;
+    tv(ru.ru_utime) + tv(ru.ru_stime)
+}
+
+/// Per-thread CPU ticks (Linux /proc/self/task; empty elsewhere): tid ->
+/// (name, utime + stime).
+fn task_ticks() -> std::collections::BTreeMap<u32, (String, u64)> {
+    let mut m = std::collections::BTreeMap::new();
+    let Ok(rd) = std::fs::read_dir("/proc/self/task") else { return m };
+    for e in rd.flatten() {
+        let Some(tid) = e.file_name().to_str().and_then(|t| t.parse::<u32>().ok()) else { continue };
+        let Ok(stat) = std::fs::read_to_string(e.path().join("stat")) else { continue };
+        // "tid (comm) state ppid ..." - comm may contain spaces; fields after ')'
+        let Some((head, rest)) = stat.rsplit_once(')') else { continue };
+        let name = head.split_once('(').map_or("", |x| x.1).to_string();
+        let f: Vec<&str> = rest.split_whitespace().collect();
+        // rest[0] is field 3 (state): utime is field 14, stime 15
+        let t = f.get(11).and_then(|v| v.parse::<u64>().ok()).unwrap_or(0) + f.get(12).and_then(|v| v.parse::<u64>().ok()).unwrap_or(0);
+        m.insert(tid, (name, t));
+    }
+    m
 }
 
 /// Load every system's core (no game) and check the option presets against

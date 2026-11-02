@@ -3,7 +3,7 @@
 //!
 //!   mortar-play [--config FILE] [--display auto|sdl|wayland|headless]
 //!   mortar-play run SYSTEM [ROM] [...]      play one game, quit with it
-//!   mortar-play selftest SYSTEM [ROM] --out DIR [--frames N] [--shots 60,120]
+//!   mortar-play selftest SYSTEM [ROM] --out DIR [--frames N] [--shots 60,120] [--resume] [--paced]
 //!   mortar-play check                       load every core, validate option presets
 //!   mortar-play make-test-rom OUT.nes       the built-in NES test program
 //!   mortar-play list --json                 the library as JSON (mortar-shell's Games)
@@ -29,7 +29,7 @@ mod video;
 use std::path::PathBuf;
 
 const USAGE: &str = "usage: mortar-play [run SYSTEM [ROM] | selftest SYSTEM [ROM]] [--config FILE] [--display auto|sdl|wayland|headless] [--size WxH] [--script STEPS]
-  selftest options: --out DIR --frames N --shots 60,120,300 [--press FRAME:BUTTON:FRAMES,...]";
+  selftest options: --out DIR --frames N --shots 60,120,300 [--press FRAME:BUTTON:FRAMES,...] [--resume] [--paced]";
 
 struct Args {
     cmd: Option<String>,
@@ -42,6 +42,8 @@ struct Args {
     frames: u64,
     shots: Vec<u64>,
     press: Vec<(u64, String, u64)>,
+    resume: bool,
+    paced: bool,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -56,6 +58,8 @@ fn parse_args() -> Result<Args, String> {
         frames: 300,
         shots: Vec::new(),
         press: Vec::new(),
+        resume: false,
+        paced: false,
     };
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
@@ -72,6 +76,8 @@ fn parse_args() -> Result<Args, String> {
             }
             "--script" => a.script = Some(val()?),
             "--json" => {}
+            "--resume" => a.resume = true,
+            "--paced" => a.paced = true,
             "--out" => a.out = Some(PathBuf::from(val()?)),
             "--frames" => a.frames = val()?.parse().map_err(|_| "--frames N")?,
             "--shots" => a.shots = val()?.split(',').filter_map(|s| s.trim().parse().ok()).collect(),
@@ -129,7 +135,7 @@ fn main() {
             std::process::exit(2);
         };
         let out = a.out.clone().unwrap_or_else(|| PathBuf::from("selftest-out"));
-        let opts = selftest::Opts { frames: a.frames, shots: a.shots.clone(), press: a.press.clone(), out, size: a.size };
+        let opts = selftest::Opts { frames: a.frames, shots: a.shots.clone(), press: a.press.clone(), out, size: a.size, resume: a.resume, paced: a.paced };
         match selftest::run(&cfg, sys, a.pos.get(1).map(PathBuf::from).as_deref(), &opts) {
             Ok(r) => {
                 println!("{}", serde_json::to_string_pretty(&r).unwrap_or_default());
