@@ -1,0 +1,80 @@
+Brick RTC: check that the clock ticks from a worker, not in probe.
+
+brick_rtc_verify_progress() sleeps 2 s, after a 500 ms sleep, in probe, which
+runs in the driver's initcall: 2.54 s of a 3.5 s kernel boot (initcall_debug,
+2026-11-02). Probe now finishes at once and a worker does the check; a clock
+that does not tick marks the time uncertain 2.5 s later.
+
+--- a/drivers/rtc/rtc-trimui-brick.c
++++ b/drivers/rtc/rtc-trimui-brick.c
+@@ -15,6 +15,7 @@
+ #include <linux/spinlock.h>
+ #include <linux/suspend.h>
+ #include <linux/sun50i-a133-ccu-sleep.h>
++#include <linux/workqueue.h>
+ 
+ #include "brick_radio_clocks.h"
+ 
+@@ -51,6 +52,7 @@
+ 	bool alarm_untrusted;
+ 	bool irq_ready;
+ 	bool pm_suspended, mmio_blocked, pm_fault, sleep_deep;
++	struct delayed_work verify_work;
+ };
+ 
+ /* Client callbacks own lock; noirq/IRQ state is protected by alarm_lock. */
+@@ -612,19 +614,33 @@
+ 		disable_irq_wake(chip->irq);
+ 	device_init_wakeup(dev, false);
+ }
++
++/*
++ * Whether the retained clock ticks takes 2.5 s to tell. Asking in probe held
++ * up the whole kernel boot, so ask from a worker. Keep invalid retained state
++ * writable, without pretending it is valid.
++ */
++static void brick_rtc_verify_work(struct work_struct *work)
++{
++	struct brick_rtc *chip = container_of(to_delayed_work(work),
++					      struct brick_rtc, verify_work);
++	int ret;
+ 
++	mutex_lock(&chip->lock);
++	ret = brick_rtc_verify_progress(chip);
++	if (ret) {
++		brick_rtc_begin_time_write(chip);
++		dev_warn(chip->rtc->dev.parent,
++			 "RTC time invalid (%d); explicit set_time required\n", ret);
++	}
++	mutex_unlock(&chip->lock);
++}
++
+ static int brick_rtc_register_time(struct platform_device *pdev, struct brick_rtc *chip)
+ {
+ 	struct device *dev = &pdev->dev;
+ 	struct rtc_device *rtc;
+ 	int ret;
+-
+-	/* Keep invalid retained state writable, without pretending it is valid. */
+-	msleep(500);
+-	ret = brick_rtc_verify_progress(chip);
+-	chip->time_uncertain = !!ret;
+-	if (ret)
+-		dev_warn(dev, "RTC time invalid (%d); explicit set_time required\n", ret);
+ 
+ 	ret = brick_rtc_check_alarm(chip);
+ 	chip->alarm_untrusted = !!ret;
+@@ -704,7 +720,12 @@
+ 	ret = brick_rtc_register_time(pdev, chip);
+ 	if (ret)
+ 		return ret;
+-	return brick_radio_clocks_register(dev, chip->base, &chip->radio_clocks);
++	ret = brick_radio_clocks_register(dev, chip->base, &chip->radio_clocks);
++	if (ret)
++		return ret;
++	INIT_DELAYED_WORK(&chip->verify_work, brick_rtc_verify_work);
++	queue_delayed_work(system_long_wq, &chip->verify_work, msecs_to_jiffies(500));
++	return 0;
+ }
+ 
+ static void brick_rtc_sync_state(struct device *dev)
