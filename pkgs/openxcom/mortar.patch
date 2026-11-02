@@ -312,10 +312,10 @@ index fbad036..0f3e542 100644
  	static const SDLKey SDLK_ANY;
 diff --git a/src/Engine/PadNav.cpp b/src/Engine/PadNav.cpp
 new file mode 100644
-index 0000000..bf41a8c
+index 0000000..b67f0e1
 --- /dev/null
 +++ b/src/Engine/PadNav.cpp
-@@ -0,0 +1,1601 @@
+@@ -0,0 +1,1683 @@
 +/*
 + * Mortar: gamepad navigation for the original UI. See PadNav.h.
 + * Part of OpenXcom; GNU GPL version 3 or later.
@@ -354,6 +354,7 @@ index 0000000..bf41a8c
 +#include "../Battlescape/Camera.h"
 +#include "../Geoscape/GeoscapeState.h"
 +#include "../Geoscape/Globe.h"
++#include "../Geoscape/DogfightState.h"
 +#include "../Geoscape/SelectDestinationState.h"
 +#include "../Geoscape/BuildNewBaseState.h"
 +#include "../Geoscape/BaseNameState.h"
@@ -416,7 +417,7 @@ index 0000000..bf41a8c
 +}
 +
 +PadNav::PadNav(Game *game) : _game(game), _active(true), _px(0), _py(0), _ctrlUntil(0), _state(0), _mode(GENERIC), _panel(false), _focus(0), _row(0),
-+	_pressedArrow(0), _pressedArrowButton(SDL_BUTTON_LEFT), _lastUnit(0), _lastTargeting(false), _enemy(0), _cell(0), _gx(0), _gy(0), _contact(0), _finishEdit(0), _finishState(0), _liftKey(0)
++	_pressedArrow(0), _pressedArrowButton(SDL_BUTTON_LEFT), _lastUnit(0), _lastTargeting(false), _enemy(0), _cell(0), _gx(0), _gy(0), _contact(0), _dogfight(0), _finishEdit(0), _finishState(0), _liftKey(0)
 +{
 +	for (int i = 0; i < BTN_COUNT; ++i)
 +	{
@@ -608,11 +609,11 @@ index 0000000..bf41a8c
 +
 +void PadNav::think()
 +{
-+	if (_game->_states.empty())
++	if (_game->_states.empty() || !_game->_init)
 +	{
-+		return;
++		return; // a new screen fills its lists when it starts: wait for that
 +	}
-+	State *s = _game->_states.back();
++	State *s = activeState();
 +	if (s != _state)
 +	{
 +		enterState(s);
@@ -714,6 +715,15 @@ index 0000000..bf41a8c
 +	}
 +	else
 +	{
++		SDLKey keys[4] = { Options::keyGeoUp, Options::keyGeoDown, Options::keyGeoLeft, Options::keyGeoRight };
++		for (int i = UP; i <= RIGHT; ++i)
++		{
++			if (_down[i] && !_rotating[i] && now - _downAt[i] >= 220)
++			{
++				keyEdge(keys[i], true);
++				_rotating[i] = true;
++			}
++		}
 +		// Don't let the view roll over a pole: the world would turn upside down.
 +		Globe *g = globe();
 +		if (g && (_rotating[UP] || _rotating[DOWN]))
@@ -729,7 +739,7 @@ index 0000000..bf41a8c
 +	if (_down[F2] && !_chord[F2] && now - _downAt[F2] >= HOLD_LOAD)
 +	{
 +		_chord[F2] = true;
-+		if (_mode == BATTLE || _mode == GLOBE) key(Options::keyQuickLoad);
++		if (_mode == BATTLE || _mode == GLOBE) { key(Options::keyQuickLoad); buzz(); }
 +	}
 +}
 +
@@ -809,6 +819,23 @@ index 0000000..bf41a8c
 +
 +/* ---------- which screen ---------- */
 +
++State *PadNav::activeState() const
++{
++	State *top = _game->_states.back();
++	// Dogfights aren't screens of their own: they live inside the Geoscape,
++	// which hands them its events. An open one is what the pad talks to.
++	if (GeoscapeState *geo = dynamic_cast<GeoscapeState*>(top))
++	{
++		std::vector<DogfightState*> open;
++		for (std::list<DogfightState*>::iterator i = geo->_dogfights.begin(); i != geo->_dogfights.end(); ++i)
++		{
++			if (!(*i)->isMinimized()) open.push_back(*i);
++		}
++		if (!open.empty()) return open[_dogfight % open.size()];
++	}
++	return top;
++}
++
 +TextEdit *PadNav::editing(State *s) const
 +{
 +	if (TextEdit *t = dynamic_cast<TextEdit*>(s->_modal))
@@ -838,18 +865,11 @@ index 0000000..bf41a8c
 +
 +void PadNav::enterState(State *s)
 +{
-+	_lastFocus.w = 0;
-+	if (_state != 0 && _focus != 0 && _mode != BATTLE && _mode != GLOBE && !dynamic_cast<TextList*>(_focus))
-+	{
-+		_lastFocus.x = _focus->getX();
-+		_lastFocus.y = _focus->getY();
-+		_lastFocus.w = _focus->getWidth();
-+		_lastFocus.h = _focus->getHeight();
-+	}
 +	if (_state != 0 && _focus != 0 && _mode != BATTLE && _mode != GLOBE)
 +	{
 +		_remembered[_state] = _focus;
 +	}
++	if (debugInput()) fprintf(stderr, "pad: state %s\n", typeid(*s).name());
 +	stopRotating();
 +	_state = s;
 +	_mode = modeOf(s);
@@ -1000,6 +1020,11 @@ index 0000000..bf41a8c
 +		return;
 +	}
 +	InteractiveSurface *best = 0;
++	// In a dogfight, the attack mode now in force.
++	if (DogfightState *d = dynamic_cast<DogfightState*>(_state))
++	{
++		if (d->_mode && std::find(v.begin(), v.end(), static_cast<InteractiveSurface*>(d->_mode)) != v.end()) best = d->_mode;
++	}
 +	// A list first, since that is what most list screens are for; then the
 +	// button Enter would press; then whatever comes first on screen.
 +	for (size_t i = 0; i < v.size() && !best; ++i) if (dynamic_cast<TextList*>(v[i])) best = v[i];
@@ -1012,6 +1037,7 @@ index 0000000..bf41a8c
 +	{
 +		for (size_t i = 0; i < v.size(); ++i)
 +		{
++			if (v.size() > 1 && dynamic_cast<TextEdit*>(v[i])) continue;
 +			int score = v[i]->getY() * 1000 + v[i]->getX();
 +			if (score < top) { top = score; best = v[i]; }
 +		}
@@ -1023,6 +1049,15 @@ index 0000000..bf41a8c
 +void PadNav::setFocus(InteractiveSurface *s)
 +{
 +	_focus = s;
++	// Kept by value: by the time the screen changes this widget may be gone.
++	_lastFocus.w = 0;
++	if (s && !dynamic_cast<TextList*>(s))
++	{
++		_lastFocus.x = s->getX();
++		_lastFocus.y = s->getY();
++		_lastFocus.w = s->getWidth();
++		_lastFocus.h = s->getHeight();
++	}
 +	if (debugInput() && s) fprintf(stderr, "pad: focus %d,%d %dx%d\n", s->getX(), s->getY(), s->getWidth(), s->getHeight());
 +	if (TextList *l = dynamic_cast<TextList*>(s))
 +	{
@@ -1143,6 +1178,14 @@ index 0000000..bf41a8c
 +
 +void PadNav::genericBack()
 +{
++	if (DogfightState *d = dynamic_cast<DogfightState*>(_state))
++	{
++		// Minimize, which the game allows at standoff range and explains otherwise.
++		movePointer(d->_btnMinimize->getX() + 6, d->_btnMinimize->getY() + 6);
++		click();
++		pointAtFocus();
++		return;
++	}
 +	if (ComboBox *c = dynamic_cast<ComboBox*>(_state->_modal))
 +	{
 +		c->toggle();
@@ -1247,6 +1290,11 @@ index 0000000..bf41a8c
 +		break;
 +	case L1:
 +	case R1:
++		if (dynamic_cast<DogfightState*>(_state))
++		{
++			_dogfight += b == R1 ? 1 : 3; // the game allows four at once
++			break;
++		}
 +		if (handlesKey(b == L1 ? Options::keyGeoLeft : Options::keyGeoRight)) key(b == L1 ? Options::keyGeoLeft : Options::keyGeoRight);
 +		else if (handlesKey(b == L1 ? Options::keyBattlePrevUnit : Options::keyBattleNextUnit)) key(b == L1 ? Options::keyBattlePrevUnit : Options::keyBattleNextUnit);
 +		break;
@@ -1472,7 +1520,7 @@ index 0000000..bf41a8c
 +		else key(b == L2 ? Options::keyBattlePrevUnit : Options::keyBattleNextUnit);
 +		break;
 +	case F1:
-+		key(Options::keyQuickSave);
++		key(Options::keyQuickSave); buzz();
 +		break;
 +	default:
 +		break;
@@ -1546,9 +1594,11 @@ index 0000000..bf41a8c
 +	case LEFT:
 +	case RIGHT:
 +	{
-+		SDLKey keys[4] = { Options::keyGeoUp, Options::keyGeoDown, Options::keyGeoLeft, Options::keyGeoRight };
-+		keyEdge(keys[b], true);
-+		_rotating[b] = true;
++		// A tap nudges, for placing things exactly; holding turns the globe (think).
++		double step = 0.06 / (g->_zoom + 1);
++		double lat = g->_cenLat + (b == UP ? -step : b == DOWN ? step : 0);
++		lat = std::max(-1.45, std::min(1.45, lat));
++		g->center(g->_cenLon + (b == LEFT ? -step : b == RIGHT ? step : 0), lat);
 +		break;
 +	}
 +	case L2:
@@ -1581,10 +1631,23 @@ index 0000000..bf41a8c
 +		}
 +		break;
 +	case START:
-+		if (geo) key(Options::keyGeoIntercept);
++		if (geo)
++		{
++			// A minimized dogfight comes back first; else the Intercept list.
++			for (std::list<DogfightState*>::iterator i = geo->_dogfights.begin(); i != geo->_dogfights.end(); ++i)
++			{
++				if ((*i)->isMinimized())
++				{
++					movePointer((*i)->_btnMinimizedIcon->getX() + 16, (*i)->_btnMinimizedIcon->getY() + 10);
++					click();
++					return;
++				}
++			}
++			key(Options::keyGeoIntercept);
++		}
 +		break;
 +	case F1:
-+		if (geo) key(Options::keyQuickSave);
++		if (geo) key(Options::keyQuickSave); buzz();
 +		break;
 +	default:
 +		break;
@@ -1753,19 +1816,24 @@ index 0000000..bf41a8c
 +{
 +	BaseView *v = baseView();
 +	if (!v) return;
++	int size = std::max(1, v->_selSize);
++	_gx = std::min(_gx, 6 - size);
++	_gy = std::min(_gy, 6 - size);
 +	movePointer(v->getX() + _gx * GRID + GRID / 2, v->getY() + _gy * GRID + GRID / 2);
 +}
 +
 +void PadNav::basePress(Btn b)
 +{
 +	BasescapeState *s = dynamic_cast<BasescapeState*>(_state);
++	BaseView *view = baseView();
++	int size = view ? std::max(1, view->_selSize) : 1;
 +	switch (b)
 +	{
 +	case UP: _gy = std::max(0, _gy - 1); basePoint(); break;
-+	case DOWN: _gy = std::min(5, _gy + 1); basePoint(); break;
++	case DOWN: _gy = std::min(6 - size, _gy + 1); basePoint(); break;
 +	case LEFT: _gx = std::max(0, _gx - 1); basePoint(); break;
 +	case RIGHT:
-+		if (_gx < 5) { _gx++; basePoint(); }
++		if (_gx < 6 - size) { _gx++; basePoint(); }
 +		else if (s) { _panel = true; _focus = 0; chooseFocus(); }
 +		break;
 +	case A: basePoint(); click(); break;
@@ -1786,7 +1854,7 @@ index 0000000..bf41a8c
 +		}
 +		break;
 +	case F1:
-+		key(Options::keyQuickSave);
++		key(Options::keyQuickSave); buzz();
 +		break;
 +	default: break;
 +	}
@@ -1867,7 +1935,7 @@ index 0000000..bf41a8c
 +
 +void PadNav::blit(Surface *screen)
 +{
-+	if (!_active || _state == 0 || _game->_states.back() != _state)
++	if (!_active || _state == 0 || _game->_states.empty() || activeState() != _state)
 +	{
 +		return;
 +	}
@@ -1886,7 +1954,7 @@ index 0000000..bf41a8c
 +	if (_mode == INVENTORY && !_panel)
 +	{
 +		InventoryState *s = inventory();
-+		if (s && !_cells.empty() && !s->_inv->getSelectedItem())
++		if (s && !_cells.empty())
 +		{
 +			const Cell &c = _cells[_cell];
 +			shade(screen, s->_inv->getX() + c.cx, s->_inv->getY() + c.cy, c.w, c.h);
@@ -1896,9 +1964,12 @@ index 0000000..bf41a8c
 +	if (_mode == BASE && !_panel)
 +	{
 +		BaseView *v = baseView();
-+		if (v && dynamic_cast<BasescapeState*>(_state))
++		if (v)
 +		{
-+			shade(screen, v->getX() + _gx * GRID, v->getY() + _gy * GRID, GRID, GRID);
++			// When placing, the whole footprint: the game's own marker is a
++			// thin blinking outline, easy to lose on this screen.
++			int size = std::max(1, v->_selSize);
++			shade(screen, v->getX() + _gx * GRID, v->getY() + _gy * GRID, size * GRID, size * GRID);
 +		}
 +		return;
 +	}
@@ -1914,15 +1985,26 @@ index 0000000..bf41a8c
 +		return;
 +	}
 +	shade(screen, _focus->getX(), _focus->getY(), _focus->getWidth(), _focus->getHeight());
++	TextButton *tb = dynamic_cast<TextButton*>(_focus);
++	ImageButton *ib = dynamic_cast<ImageButton*>(_focus);
++	if ((tb && tb->_group) || (ib && ib->_group))
++	{
++		// The chosen one of a group is lit as well: frame the one in focus.
++		Uint8 k = (Uint8)nearestColour(screen, 255, 194, 61);
++		Sint16 x = _focus->getX(), y = _focus->getY();
++		Uint16 w = _focus->getWidth(), h = _focus->getHeight();
++		SDL_Rect r[4] = { {x, y, w, 1}, {x, (Sint16)(y + h - 1), w, 1}, {x, y, 1, h}, {(Sint16)(x + w - 1), y, 1, h} };
++		for (int i = 0; i < 4; ++i) screen->drawRect(&r[i], k);
++	}
 +}
 +
 +}
 diff --git a/src/Engine/PadNav.h b/src/Engine/PadNav.h
 new file mode 100644
-index 0000000..5cdd515
+index 0000000..079bd88
 --- /dev/null
 +++ b/src/Engine/PadNav.h
-@@ -0,0 +1,165 @@
+@@ -0,0 +1,168 @@
 +#pragma once
 +/*
 + * Mortar: gamepad navigation for the original UI.
@@ -1936,6 +2018,7 @@ index 0000000..5cdd515
 + */
 +#include <SDL.h>
 +#include <map>
++#include <list>
 +#include <vector>
 +#include "../Battlescape/Position.h"
 +
@@ -2011,6 +2094,7 @@ index 0000000..5cdd515
 +	int _gx, _gy;
 +	// Globe
 +	int _contact;
++	int _dogfight;
 +	// Naming
 +	TextEdit *_finishEdit;
 +	State *_finishState;
@@ -2030,6 +2114,7 @@ index 0000000..5cdd515
 +	void keyEdge(SDLKey sym, bool down);
 +
 +	// which screen
++	State *activeState() const;
 +	void enterState(State *s);
 +	Mode modeOf(State *s) const;
 +	TextEdit *editing(State *s) const;
@@ -2124,6 +2209,18 @@ index 7f06179..c117f55 100644
  private:
  	Base *_base;
  	Globe *_globe;
+diff --git a/src/Geoscape/DogfightState.h b/src/Geoscape/DogfightState.h
+index 20008c8..3d17c76 100644
+--- a/src/Geoscape/DogfightState.h
++++ b/src/Geoscape/DogfightState.h
+@@ -43,6 +43,7 @@ class CraftWeaponProjectile;
+  */
+ class DogfightState : public State
+ {
++	friend class PadNav;
+ private:
+ 	GeoscapeState *_state;
+ 	Timer *_craftDamageAnimTimer;
 diff --git a/src/Geoscape/GeoscapeState.h b/src/Geoscape/GeoscapeState.h
 index 84e8ac5..bdde42c 100644
 --- a/src/Geoscape/GeoscapeState.h
@@ -2245,7 +2342,7 @@ index 84045d6..9e453ed 100644
  	Window *_window;
  	Text *_txtMaster;
 diff --git a/src/Menu/OptionsControlsState.cpp b/src/Menu/OptionsControlsState.cpp
-index 0bb4131..6a28a11 100644
+index 0bb4131..95a2d12 100644
 --- a/src/Menu/OptionsControlsState.cpp
 +++ b/src/Menu/OptionsControlsState.cpp
 @@ -17,6 +17,7 @@
@@ -2266,7 +2363,7 @@ index 0bb4131..6a28a11 100644
 +		static const char *const rows[][2] = {
 +			{"EVERYWHERE", ""}, {"A", "Press"}, {"B", "Back or cancel"}, {"START", "OK"}, {"SELECT", "Next group of controls"}, {"L1 R1", "Previous, next"}, {"L2 R2", "Page"}, {"F1", "Quicksave"}, {"F2 hold", "Quickload"}, {"", ""},
 +			{"BATTLESCAPE", ""}, {"D-pad", "Tile cursor; two directions step along the grid"}, {"A", "Select, walk (A again confirms), fire"}, {"B", "Cancel, or back to the soldier"}, {"X", "Kneel"}, {"Y", "Turn to the cursor, open doors"}, {"L1 R1", "Left hand, right hand"}, {"L2 R2", "Soldiers; aiming: aliens"}, {"START", "Inventory"}, {"START hold", "End turn"}, {"SELECT", "Bottom panel"}, {"SEL+Up Dn", "Level"}, {"SEL+Lt Rt", "Next alien"}, {"SEL+X", "Reload"}, {"SEL+A", "Run or strafe"}, {"", ""},
-+			{"GEOSCAPE", ""}, {"D-pad", "Turn the globe"}, {"A", "Open what's under the reticle"}, {"L1 R1", "Previous, next contact"}, {"L2 R2", "Zoom"}, {"X", "Time faster"}, {"Y", "Back to 5 seconds"}, {"START", "Intercept"}, {"SELECT", "Buttons"}, {"", ""},
++			{"GEOSCAPE", ""}, {"D-pad", "Turn the globe"}, {"A", "Open what's under the reticle"}, {"L1 R1", "Previous, next contact"}, {"L2 R2", "Zoom"}, {"X", "Time faster"}, {"Y", "Back to 5 seconds"}, {"START", "Intercept, or reopen a dogfight"}, {"DOGFIGHT", ""}, {"D-pad A", "Attack mode, weapons"}, {"B", "Minimize"}, {"L1 R1", "Other dogfights"}, {"SELECT", "Buttons"}, {"", ""},
 +			{"INVENTORY", ""}, {"A", "Pick up, place"}, {"B", "Put back, or leave"}, {"X", "Unload"}, {"Y", "Auto-place"}, {"L1 R1", "Soldiers"}, {"L2 R2", "Scroll ground"}, {"START", "Done"}, {"", ""},
 +			{"BASE", ""}, {"D-pad", "Facility grid"}, {"SELECT", "Buttons"}, {"X", "Facility's other action"}, {"L1 R1", "Bases"}, {"", ""},
 +			{"LISTS", ""}, {"Left Right", "Less, more"}, {"X", "All or none"}, {"X+Up Dn", "Reorder, where a list can"},

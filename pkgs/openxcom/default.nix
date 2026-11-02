@@ -24,7 +24,9 @@
 #                +Left/Right aliens, +X reload, +A run or strafe.
 #   Geoscape     D-pad turns the globe under a reticle, A opens what's under it,
 #                L1/R1 contacts, L2/R2 zoom, X faster, Y 5 seconds, START
-#                intercept, SELECT the buttons.
+#                intercept (or reopen a minimized dogfight), SELECT the buttons.
+#   Dogfight     Takes focus when it opens: D-pad and A for attack mode and
+#                weapons, B minimize, L1/R1 other dogfights.
 #   Inventory    A pick up/place, B put back, X unload, Y auto-place, L1/R1
 #                soldiers, L2/R2 scroll ground, START done.
 #   Base         D-pad facility grid, SELECT buttons, X the facility's other
