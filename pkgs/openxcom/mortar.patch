@@ -312,10 +312,10 @@ index fbad036..0f3e542 100644
  	static const SDLKey SDLK_ANY;
 diff --git a/src/Engine/PadNav.cpp b/src/Engine/PadNav.cpp
 new file mode 100644
-index 0000000..b67f0e1
+index 0000000..460d094
 --- /dev/null
 +++ b/src/Engine/PadNav.cpp
-@@ -0,0 +1,1683 @@
+@@ -0,0 +1,1765 @@
 +/*
 + * Mortar: gamepad navigation for the original UI. See PadNav.h.
 + * Part of OpenXcom; GNU GPL version 3 or later.
@@ -325,6 +325,7 @@ index 0000000..b67f0e1
 +#include <climits>
 +#include <cstdio>
 +#include <cstdlib>
++#include <fstream>
 +#include <typeinfo>
 +#include <unistd.h>
 +#include "Game.h"
@@ -417,7 +418,7 @@ index 0000000..b67f0e1
 +}
 +
 +PadNav::PadNav(Game *game) : _game(game), _active(true), _px(0), _py(0), _ctrlUntil(0), _state(0), _mode(GENERIC), _panel(false), _focus(0), _row(0),
-+	_pressedArrow(0), _pressedArrowButton(SDL_BUTTON_LEFT), _lastUnit(0), _lastTargeting(false), _enemy(0), _cell(0), _gx(0), _gy(0), _contact(0), _dogfight(0), _finishEdit(0), _finishState(0), _liftKey(0)
++	_pressedArrow(0), _pressedArrowButton(SDL_BUTTON_LEFT), _lastUnit(0), _lastTargeting(false), _enemy(0), _cell(0), _gx(0), _gy(0), _contact(0), _dogfight(0), _finishEdit(0), _finishState(0), _liftKey(0), _hintText(0), _hint(0), _hintShown(false)
 +{
 +	for (int i = 0; i < BTN_COUNT; ++i)
 +	{
@@ -432,6 +433,12 @@ index 0000000..b67f0e1
 +			SDL_JoystickOpen(i);
 +		}
 +		SDL_JoystickEventState(SDL_ENABLE);
++	}
++	std::ifstream seen((Options::getConfigFolder() + "pad-hints.txt").c_str());
++	std::string line;
++	while (std::getline(seen, line))
++	{
++		_hintsSeen.insert(line);
 +	}
 +	// The pad spells names with up/down/left/right: the engine's own mode.
 +	Options::keyboardMode = KEYBOARD_OFF;
@@ -520,6 +527,7 @@ index 0000000..b67f0e1
 +
 +void PadNav::press(Btn b)
 +{
++	dismissHint();
 +	think(); // a screen that just changed gets its focus first
 +	if (debugInput()) fprintf(stderr, "pad: press %d mode %d panel %d state %s focus %p\n", (int)b, (int)_mode, (int)_panel, typeid(*_state).name(), (void*)_focus);
 +	if (_mode == TEXT)
@@ -914,6 +922,74 @@ index 0000000..b67f0e1
 +	{
 +		chooseFocus();
 +	}
++	armHint(s);
++}
++
++/* ---------- the one-line hints ---------- */
++
++void PadNav::armHint(State *s)
++{
++	const char *id = 0, *text = 0;
++	if (dynamic_cast<BattlescapeState*>(s)) { id = "battle"; text = "A walk   Y turn   X kneel   L1 R1 hands   hold START end turn"; }
++	else if (dynamic_cast<InventoryState*>(s)) { id = "inventory"; text = "A pick up, place   Y auto-place   L1 R1 soldiers   START done"; }
++	else if (dynamic_cast<GeoscapeState*>(s)) { id = "geoscape"; text = "Hold D-pad turn   A open   L1 R1 contacts   L2 R2 zoom   X time"; }
++	else if (dynamic_cast<SelectDestinationState*>(s)) { id = "destination"; text = "Hold D-pad turn   L1 R1 contacts   L2 R2 zoom   A choose"; }
++	else if (dynamic_cast<BuildNewBaseState*>(s)) { id = "newbase"; text = "Hold D-pad turn   Tap to nudge   L2 R2 zoom   A place base"; }
++	else if (dynamic_cast<BasescapeState*>(s)) { id = "base"; text = "D-pad facilities   SELECT buttons   L1 R1 bases"; }
++	else if (dynamic_cast<PlaceFacilityState*>(s)) { id = "place"; text = "D-pad move   A build   B cancel"; }
++	else if (dynamic_cast<DogfightState*>(s)) { id = "dogfight"; text = "D-pad, A attack mode   B minimize at standoff range"; }
++	else if (dynamic_cast<CraftSoldiersState*>(s)) { id = "reorder"; text = "A add, remove   X + Up Down reorder   START OK"; }
++	else if (TextList *l = dynamic_cast<TextList*>(_focus))
++	{
++		if (l->_arrowPos != -1 && !dynamic_cast<ModListState*>(s)) { id = "list"; text = "Left Right less, more   X all or none   START OK"; }
++	}
++	dismissHint();
++	if (id && !_hintsSeen.count(id))
++	{
++		_hintId = id;
++		_hintText = text;
++	}
++}
++
++void PadNav::dismissHint()
++{
++	if (_hintShown)
++	{
++		// Only a line you've had the chance to read counts as seen.
++		_hintsSeen.insert(_hintId);
++		std::ofstream seen((Options::getConfigFolder() + "pad-hints.txt").c_str(), std::ios::app);
++		seen << _hintId << std::endl;
++	}
++	delete _hint;
++	_hint = 0;
++	_hintText = 0;
++	_hintShown = false;
++}
++
++void PadNav::drawHint(Surface *screen)
++{
++	if (_hintText == 0) return;
++	if (_hint == 0)
++	{
++		_hint = new Text(screen->getWidth(), 9, 0, 0);
++		_hint->setPalette(screen->getPalette());
++		_hint->initText(_game->getMod()->getFont("FONT_BIG"), _game->getMod()->getFont("FONT_SMALL"), _game->getLanguage());
++		_hint->setSmall();
++		_hint->setColor((Uint8)nearestColour(screen, 255, 194, 61));
++		_hint->setHighContrast(true);
++		_hint->setText(_hintText);
++	}
++	// Under the map in battle; elsewhere along the bottom of the screen.
++	int y = screen->getHeight() - 10;
++	if (BattlescapeState *b = battle()) y = b->_map->_visibleMapHeight - 10;
++	int w = _hint->getTextWidth();
++	int x = (screen->getWidth() - w) / 2;
++	SDL_Rect band = { (Sint16)std::max(0, x - 3), (Sint16)y, (Uint16)std::min(screen->getWidth(), w + 6), 10 };
++	screen->drawRect(&band, (Uint8)nearestColour(screen, 0, 0, 0));
++	_hint->setX(x);
++	_hint->setY(y + 2);
++	_hint->blit(screen);
++	_hintShown = true;
 +}
 +
 +/* ---------- generic focus ---------- */
@@ -1939,6 +2015,12 @@ index 0000000..b67f0e1
 +	{
 +		return;
 +	}
++	drawFocus(screen);
++	drawHint(screen);
++}
++
++void PadNav::drawFocus(Surface *screen)
++{
 +	if (_mode == TEXT) return;
 +	if (_mode == GLOBE && !_panel)
 +	{
@@ -2001,10 +2083,10 @@ index 0000000..b67f0e1
 +}
 diff --git a/src/Engine/PadNav.h b/src/Engine/PadNav.h
 new file mode 100644
-index 0000000..079bd88
+index 0000000..909a0c7
 --- /dev/null
 +++ b/src/Engine/PadNav.h
-@@ -0,0 +1,168 @@
+@@ -0,0 +1,183 @@
 +#pragma once
 +/*
 + * Mortar: gamepad navigation for the original UI.
@@ -2020,6 +2102,8 @@ index 0000000..079bd88
 +#include <map>
 +#include <list>
 +#include <vector>
++#include <set>
++#include <string>
 +#include "../Battlescape/Position.h"
 +
 +namespace OpenXcom
@@ -2036,6 +2120,7 @@ index 0000000..079bd88
 +class InventoryState;
 +class BaseView;
 +class RuleInventory;
++class Text;
 +
 +class PadNav
 +{
@@ -2113,6 +2198,17 @@ index 0000000..079bd88
 +	void key(SDLKey sym);
 +	void keyEdge(SDLKey sym, bool down);
 +
++	// One line of help, the first time you reach each kind of screen. It goes
++	// on your next press and doesn't come back.
++	std::set<std::string> _hintsSeen;
++	std::string _hintId;
++	const char *_hintText;
++	Text *_hint;
++	bool _hintShown;
++	void armHint(State *s);
++	void dismissHint();
++	void drawHint(Surface *screen);
++
 +	// which screen
 +	State *activeState() const;
 +	void enterState(State *s);
@@ -2169,6 +2265,7 @@ index 0000000..079bd88
 +	Uint8 _lift[256];
 +	Uint32 _liftKey;
 +	int nearestColour(Surface *s, int r, int g, int b) const;
++	void drawFocus(Surface *screen);
 +	void shade(Surface *screen, int x, int y, int w, int h);
 +};
 +

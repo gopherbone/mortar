@@ -33,6 +33,9 @@
 #                action, L1/R1 bases.
 #   Lists        Left/Right less/more, X all or none, X+Up/Down reorder.
 #
+# A one-line hint shows the first time you reach each kind of screen and goes
+# on your next press; what has been seen is in pad-hints.txt beside options.cfg.
+#
 # Leaving saves the game (Load Game, the autosave). Time stops while another
 # app is on screen.
 {
