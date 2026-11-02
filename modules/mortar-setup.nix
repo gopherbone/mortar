@@ -232,7 +232,6 @@ in
           "systemd-user-sessions.service"
           "systemd-logind.service"
         ];
-        before = lib.optional greeterOn "greetd.service";
         conflicts = [ "getty@tty1.service" ];
         restartIfChanged = false;
         environment.MORTAR_UI_THEME = if shellOn then config.mortar.shell.theme else "light";
@@ -257,11 +256,20 @@ in
         };
       };
 
-      # The greeter waits for the setup screens to finish.
-      # (no start timeout: setup takes as long as it takes)
+      # On first boot the greeter waits for the setup screens to finish
+      # (no start timeout: setup takes as long as it takes). Not with
+      # After=mortar-setup-ui: that unit waits for mortar-setupd, sshd and the
+      # network, and an ordering holds on every boot, also when the condition
+      # skips the screens. So the shell would never start before them.
       systemd.services.greetd = mkIf greeterOn {
-        after = [ "mortar-setup-ui.service" ];
-        serviceConfig.ExecStartPre = [ "${exe} wait-ui" ];
+        after = [ "mortar-setup-apply.service" ];
+        serviceConfig.ExecStartPre = [
+          (pkgs.writeShellScript "mortar-greetd-first-boot" ''
+            [ -e /var/lib/mortar-setup/done ] && exit 0
+            ${systemctl} start mortar-setup-ui.service
+            exec ${exe} wait-ui
+          '')
+        ];
         serviceConfig.TimeoutStartSec = "infinity";
       };
     })
