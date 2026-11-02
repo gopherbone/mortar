@@ -233,6 +233,13 @@ in
           "systemd-logind.service"
         ];
         conflicts = [ "getty@tty1.service" ];
+        # A unit-level condition, not only the ExecCondition below: systemd
+        # applies TTYVHangup to /dev/tty1 for every Exec line, ExecCondition
+        # included. greetd no longer waits for this unit, so on a normal boot
+        # that hangup could hit greetd's session worker as it started, leaving
+        # a dead screen. This way a set-up Brick never touches tty1 here. (On
+        # first boot greetd starts this unit itself before it touches tty1.)
+        unitConfig.ConditionPathExists = "!/var/lib/mortar-setup/done";
         restartIfChanged = false;
         environment.MORTAR_UI_THEME = if shellOn then config.mortar.shell.theme else "light";
         serviceConfig = {
@@ -262,7 +269,7 @@ in
       # network, and an ordering holds on every boot, also when the condition
       # skips the screens. So the shell would never start before them.
       systemd.services.greetd = mkIf greeterOn {
-        after = [ "mortar-setup-apply.service" ];
+        after = [ "mortar-setup-apply.service" "systemd-logind.service" ];
         serviceConfig.ExecStartPre = [
           (pkgs.writeShellScript "mortar-greetd-first-boot" ''
             [ -e /var/lib/mortar-setup/done ] && exit 0
