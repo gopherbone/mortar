@@ -9,7 +9,7 @@ use crate::apps::{Apps, LaunchEnv};
 use crate::config::{Config, GamepadMode};
 use crate::osk::{self, Osk, OskOut, PadKey, Tap};
 use crate::router::{Receiver, Routed, Router};
-use crate::shellui::{Pace, ShellUi, Toast};
+use crate::shellui::{LauncherInfo, Pace, ShellUi, Toast};
 
 use mortar_ui::gfx::{Fonts, Rect, Ui};
 use mortar_ui::input::{codes, map_evdev_key, Button, Repeater};
@@ -237,6 +237,9 @@ pub struct Shell {
     /// When `about` was read (it changes slowly, and its battery health,
     /// cycle count and battery temperature are I2C reads from the PMIC).
     pub about_at: Instant,
+    /// The launcher as the UI sees it (`view_parts`, several times a
+    /// frame): when it was made, which entries were running, the list.
+    pub launcher_cache: std::cell::RefCell<Option<LauncherCache>>,
 }
 
 impl Shell {
@@ -390,6 +393,7 @@ impl Shell {
             widget_out,
             about: crate::about::About::read(),
             about_at: Instant::now(),
+            launcher_cache: Default::default(),
         };
         shell.apply_prefs();
         shell.refresh_timezone();
@@ -1574,3 +1578,6 @@ delegate_seat!(Shell);
 delegate_output!(Shell);
 delegate_xdg_shell!(Shell);
 smithay::delegate_viewporter!(Shell);
+
+/// When the launcher list was made, which entries were running, the list.
+pub type LauncherCache = (Instant, Vec<bool>, std::rc::Rc<[LauncherInfo]>);

@@ -264,11 +264,17 @@ impl Shell {
     /// Keep the library and pictures fresh while the MENU shows; take the
     /// workers' answers.
     pub fn games_poll(&mut self) {
-        let Some(gc) = self.cfg.games.clone() else { return };
+        // (every tick: nothing here is copied or built unless needed)
+        if self.cfg.games.is_none() || self.games.is_none() {
+            return;
+        }
         let wants = self.sui.wants_games();
-        let wanted = self.with_view(|ui, v| ui.wanted_pics(v));
+        let wanted = if self.sui.menu_open() { self.with_view(|ui, v| ui.wanted_pics(v)) } else { Vec::new() };
         let Some(g) = self.games.as_mut() else { return };
-        if wants && g.last_list.is_none_or(|t| t.elapsed() >= LIST_EVERY) {
+        if wants
+            && g.last_list.is_none_or(|t| t.elapsed() >= LIST_EVERY)
+            && let Some(gc) = self.cfg.games.as_ref()
+        {
             g.last_list = Some(Instant::now());
             let _ = g.lib_tx.send(LibJob::List(gc.list.clone()));
         }

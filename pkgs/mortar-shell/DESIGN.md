@@ -789,7 +789,7 @@ draw it:
   they changed (`damage.rs`): the buffer drawn into still holds the frame
   before last, so each item's fingerprint (its geometry, colour, text and
   the clip over it) and covered box are compared with what that buffer
-  got; the differing boxes mark 32 px cells, merged into at most 12
+  got; the differing boxes mark 32 px cells, merged into at most 6
   rectangles, and each rectangle is cleared and drawn again, scissored,
   with only the items that touch it (exactly the clips of a full frame).
   On the cross that is the pattern tiles that moved, a few percent of the

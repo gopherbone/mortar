@@ -175,7 +175,7 @@ pub struct Grid {
 
 const CELL: f32 = 32.0;
 /// At most this many rectangles (each is a scissored pass over the items).
-const MAX_RECTS: usize = 12;
+const MAX_RECTS: usize = 6;
 /// More of the screen than this: just draw it all.
 const MOST: f32 = 0.6;
 

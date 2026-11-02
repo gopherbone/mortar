@@ -94,6 +94,8 @@ pub fn read_volume_with(get: &[String]) -> Option<(u8, bool)> {
 
 /// The MENU backdrop is blurred again at most this often.
 pub const BLUR_EVERY: Duration = Duration::from_millis(66);
+/// How long the launcher list is reused while nothing starts or stops.
+const LAUNCHER_FRESH: Duration = Duration::from_secs(3);
 
 /// Settings > About and Home's storage and battery-health lines are read
 /// again at most this often.
@@ -206,7 +208,7 @@ impl Shell {
     }
 
     /// What the UI is told, in owned form (see `with_view`).
-    pub fn view_parts(&self) -> (Vec<RunningInfo>, Vec<LauncherInfo>) {
+    pub fn view_parts(&self) -> (Vec<RunningInfo>, std::rc::Rc<[LauncherInfo]>) {
         let area = self.app_area();
         let running = self
             .apps
@@ -247,25 +249,41 @@ impl Shell {
                 }
             })
             .collect();
-        let launcher = self
+        (running, self.launcher_view())
+    }
+
+    /// The launcher entries: made again when one starts or stops running,
+    /// and every few seconds (an entry's required file may come or go);
+    /// otherwise the same list (this runs several times a frame).
+    fn launcher_view(&self) -> std::rc::Rc<[LauncherInfo]> {
+        let running: Vec<bool> = self.cfg.apps.iter().map(|e| self.apps.by_entry(&e.id).is_some()).collect();
+        if let Some((at, r, l)) = self.launcher_cache.borrow().as_ref()
+            && *r == running
+            && at.elapsed() < LAUNCHER_FRESH
+        {
+            return l.clone();
+        }
+        let launcher: std::rc::Rc<[LauncherInfo]> = self
             .cfg
             .apps
             .iter()
-            .filter(|e| e.available())
-            .map(|e| {
+            .zip(&running)
+            .filter(|(e, _)| e.available())
+            .map(|(e, run)| {
                 let art = self.art_for(Some(&e.id), &e.name, e.icon);
                 LauncherInfo {
                     id: e.id.clone(),
                     name: e.name.clone(),
                     description: e.description.clone(),
                     art,
-                    running: self.apps.by_entry(&e.id).is_some(),
+                    running: *run,
                     category: e.category.unwrap_or_else(|| crate::config::Category::guess(art, &e.id, &e.name)),
                     single_instance: e.single_instance,
                 }
             })
             .collect();
-        (running, launcher)
+        *self.launcher_cache.borrow_mut() = Some((Instant::now(), running, launcher.clone()));
+        launcher
     }
 
     pub fn keyboard_app(&self) -> bool {
@@ -284,7 +302,7 @@ impl Shell {
         let dash = crate::shellui::Dash { attention: &attention, widgets: &self.cfg.home.widgets, outputs: &self.widget_out, about: Some(&self.about) };
         let v = View {
             running: &running,
-            launcher: &launcher,
+            launcher: &launcher[..],
             sys: &self.sys,
             volume: self.volume,
             current: self.visible_app(),
