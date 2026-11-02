@@ -73,6 +73,7 @@
             # with the user's own disc; the entry hides until the ISO is there.
             mortar.apps.acgc.enable = true;
             mortar.shell.categories.acgc = "games";
+            mortar.shell.categories.littlexm = "music";
             mortar.greeter.enable = true;
             mortar.greeter.sessions = {
               games = {
@@ -95,6 +96,13 @@
                 icon = "pad";
                 order = 22;
                 command = "exec ${config.mortar.gpu.sdlRun}/bin/mortar-sdl-run ${config.mortar.apps.choochootracker.package}/bin/choochootracker";
+              };
+              littlexm = lib.mkIf config.mortar.apps.littlexm.enable {
+                name = "Little XM";
+                description = "Tracker · FastTracker XM";
+                icon = "pad";
+                order = 23;
+                command = "exec ${config.mortar.gpu.sdlRun}/bin/mortar-sdl-run ${config.mortar.apps.littlexm.package}/bin/little-xm-tracker";
               };
               # PICO-8 is not in the system closure: `mortar pico8` installs
               # it into its own profile; the entry hides until then.
