@@ -196,6 +196,21 @@ buildLinux (
       # /lib/firmware/*.zst must be loadable (XR829 firmware etc.)
       FW_LOADER_COMPRESS = yes;
       FW_LOADER_COMPRESS_ZSTD = yes;
+      # --- CPU frequency ---
+      # The defconfig boots with the `userspace` governor and nothing ever
+      # set a speed, so the A53s sat at the 1008 MHz boot OPP. schedutil
+      # follows the scheduler's load (up to the 1992 MHz OPP, 1.25 V via
+      # vdd-cpu); `performance` for benchmarks. The cpu-thermal zone's
+      # passive trips (58/63 C, step_wise on cpufreq) cap the clock when
+      # hot: on 2026-11-01, two cores spinning for 10 minutes at the
+      # 1992 MHz setpoint averaged 63 C (peak 71 C) with the clock held at
+      # 1992/1800/1608 MHz ~47/49/5% of the time. A PlayStation game ran
+      # 1.6x faster per frame at 1992 MHz than at 1008 MHz.
+      CPU_FREQ_GOV_SCHEDUTIL = yes;
+      CPU_FREQ_GOV_PERFORMANCE = yes;
+      CPU_FREQ_DEFAULT_GOV_SCHEDUTIL = yes;
+      CPU_FREQ_DEFAULT_GOV_USERSPACE = no;
+
       # console=tty0 on the panel
       VT = yes;
       VT_CONSOLE = yes;
