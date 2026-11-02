@@ -58,7 +58,13 @@ impl NetWorker {
                 sh.put(Some(st));
             };
             loop {
-                match rx.recv_timeout(Duration::from_secs(1)) {
+                // asleep until a page shows (set_active sends a request)
+                let next = if sh.active.load(Ordering::Acquire) {
+                    rx.recv_timeout(Duration::from_secs(1))
+                } else {
+                    rx.recv().map_err(|_| RecvTimeoutError::Disconnected)
+                };
+                match next {
                     Ok(req) => {
                         if let Err(e) = client.act(req) {
                             tracing::warn!("setup service: {e}");
@@ -136,7 +142,13 @@ impl MixerWorker {
                 }
             };
             loop {
-                match rx.recv_timeout(Duration::from_secs(1)) {
+                // asleep while nothing looks (set_active and set_slow wake it)
+                let next = if sh.active.load(Ordering::Acquire) || sl.load(Ordering::Acquire) {
+                    rx.recv_timeout(Duration::from_secs(1))
+                } else {
+                    rx.recv().map_err(|_| RecvTimeoutError::Disconnected)
+                };
+                match next {
                     Ok(MixJob::Run(argv)) => {
                         // run every queued change, then look once
                         super::state::run_quiet(&argv);
@@ -165,7 +177,10 @@ impl MixerWorker {
     }
 
     pub fn set_slow(&self, on: bool) {
-        self.slow.store(on, Ordering::Release);
+        let was = self.slow.swap(on, Ordering::AcqRel);
+        if on && !was {
+            let _ = self.tx.send(MixJob::Refresh);
+        }
     }
 
     pub fn set_active(&mut self, on: bool) {
