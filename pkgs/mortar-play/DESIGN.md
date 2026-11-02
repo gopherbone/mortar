@@ -64,51 +64,65 @@ modules/mortar-play.nix  curated systems, presets, dirs, launcher entries
 
 The core's frame is converted to XRGB8888 in the video callback (a copy of
 at most 640x480; a dupe frame keeps the previous one), rotated if the core
-asked (vertical arcade games), then laid out on the 1024x768 screen:
+asked (vertical arcade games), then laid out on the 1024x768 screen.
 
-| mode | what | default for |
-|---|---|---|
-| `aspect` | as large as fits at the core's display aspect ratio | NES, SNES, MD, SMS, PCE, PS1, arcade |
-| `integer` | whole multiples, square pixels (pixel perfect) | GB/GBC (5x = 800x720), GBA (4x = 960x640), GG, Lynx, NGP, WS |
-| `integer-aspect` | whole multiple vertically, width from the aspect | (option; even scanlines for 224/240-line systems) |
-| `fill` | stretch | - |
+**Display** (`video::View`: a filter and a fit) is the user's choice:
+◀▶ on the Display row of the in-game menu or of the shell's game panel
+steps through them and applies at once; A keeps the choice for the game,
+X for all the system's games (`src/display.rs`, kept in
+`<stateDir>/display.json`, a game's own choice over its system's, over the
+system's default `scaling` / `aspect` in modules/mortar-play.nix).
+
+| filter | what | inside the shell | CPU per frame (PS1 320x240, 1008 MHz) | default for |
+|---|---|---|---|---|
+| `smooth` | bilinear-like | the frame at its own size, the display plane scales | 0.27 ms (a copy) | - |
+| `sharp-bilinear` | nearest to the largest whole multiple, then smooth: crisp and even | x3 (960x720) on the CPU, the plane does the last 1.07x | 2.2 ms | PS1 |
+| `sharp` | nearest to the full size | CPU scaled to the screen, scanned out | 2.6 ms | NES, SNES, MD, SMS, PCE, arcade, 2600 |
+| `integer` | whole multiples only, black borders (pixel perfect) | CPU scaled to the screen, scanned out | 2.5 ms | GB/GBC (5x), GBA (4x), GG, Lynx, NGP, WS |
+
+Fit: `fit` keeps the core's display aspect ratio (integer: whole multiples
+vertically, the width from the aspect, so square-pixel systems get whole
+multiples both ways); `stretch` fills the screen (integer: whole multiples
+on each axis). The display engine's scaler has one filter (polyphase
+Lanczos-2 coefficients fixed in the sun8i driver, no nearest mode), so
+everything sharp is nearest on the CPU first; smooth and sharp bilinear at
+640x480 (no whole multiple fits) cost nothing in the shell or the
+frontend.
 
 Presenters:
 
 - **Inside mortar-shell** (WAYLAND_DISPLAY set): a minimal Wayland client
   (`platform/wayland.rs`, wayland-client in pure Rust), one fullscreen
-  xdg_toplevel. As in gamescope, the game is drawn at its own size and the
-  display scales it; nothing is composited. Buffers, best first:
-  1. **native** (`sharp = false` systems whose picture fills the screen:
-     the PlayStation, 4:3 on a 4:3 panel): the core's frame at its own
-     size (256..640 x 240/480) is copied into a KMS dumb buffer
-     (`platform/dumb.rs`: sun4i-drm, CMA, linear XRGB8888, shared as a
-     zwp_linux_dmabuf_v1 buffer; three of them) with a wp_viewport
-     destination of 1024x768. The shell puts it straight on the primary
-     plane and the display engine's scaler (a soft Lanczos-2 filter:
-     gamescope's "linear" with a touch of sharpness) scales it: ~0.3 MB
-     copied per frame, nothing in the shell.
-  2. **screen-size dma-buf** (pixel-perfect systems, letterboxed pictures,
-     the menus): the CPU nearest scaler writes into a 1024x768 dumb buffer
-     that the shell scans out unscaled, so the shell's copy is gone. The
-     mapping is write-combined, so the scaler only ever writes (each
-     source row is gathered once into a cached row, then copied to every
-     screen row that repeats it).
+  xdg_toplevel. As in gamescope, the game is drawn at (about) its own size
+  and the display scales it; nothing is composited. Buffers, best first:
+  1. **plane-scaled** (smooth, sharp bilinear): the core's frame (sharp
+     bilinear: first scaled up by a whole multiple, nearest) is copied into
+     a KMS dumb buffer (`platform/dumb.rs`: sun4i-drm, CMA, linear
+     XRGB8888, shared as a zwp_linux_dmabuf_v1 buffer; three of them) with
+     a wp_viewport destination of 1024x768. Letterboxed pictures get black
+     borders in the buffer in the same proportion, so the buffer always
+     covers the screen. The shell puts it straight on the primary plane and
+     the display engine's scaler (a soft Lanczos-2 filter) scales it.
+  2. **screen-size dma-buf** (sharp, integer, the menus): the CPU nearest
+     scaler writes into a 1024x768 dumb buffer that the shell scans out
+     unscaled, so the shell copies nothing. The mapping is write-combined,
+     so the scaler only ever writes (each source row is gathered once into
+     a cached row, then copied to every screen row that repeats it).
   3. **wl_shm** (no display device, e.g. the sandbox tests, a refused
      dma-buf, or `MORTAR_PLAY_PRESENT=shm`): two memfd buffers, CPU scaled;
      the shell copies the damaged rectangle into scanout.
 
-  Only the game rectangle is damaged after the first frame of a layout,
+  Only the changed rectangle is damaged after the first frame of a layout,
   and if every buffer is still held the frame is dropped rather than
-  waited for. Why not SDL's Wayland backend: it renders through EGL
-  (mortar-wlegl on the PowerVR inside the shell), and a texture upload
-  plus a full-screen quad a frame is more work than handing the display
-  a 0.3 MB buffer.
+  waited for (the count is logged at exit). Why not SDL's Wayland backend:
+  it renders through EGL (mortar-wlegl on the PowerVR inside the shell),
+  and a texture upload plus a full-screen quad a frame is more work than
+  handing the display a 0.3 MB buffer.
 - **Standalone** (greeter session, `mortar-sdl-run`, so SDL's vivante
   backend on the PowerVR GPU; or KMSDRM + llvmpipe as the fallback; or the
   macOS window for development): SDL3 renderer, the native frame is
   uploaded to a streaming texture (at most 640x480x4) and scaled by the
-  GPU, nearest or linear (`sharp`).
+  GPU, linear for smooth, nearest for the rest.
 - **Headless**: the same CPU scaler into memory, for screenshots/tests.
 
 ### Audio
@@ -206,7 +220,9 @@ the "All systems" entry. What the frontend does for that:
   discs, fast-forward), `save_state` / `load_state` (slot 1-4 or "auto";
   loading leaves the in-game menu), `reset`, `fast_forward` (true, false
   or "toggle": runs at `fastForwardSpeed` until switched off, held R2 still
-  works), `change_disc` ("next"), `quit` (writes `auto` and SRAM, replies
+  works), `change_disc` ("next"), `display` (`"step": ±1` for the next or
+  previous choice, `"keep": "game"|"system"`; `list_states` reports it as
+  `display`: label, key, scope), `quit` (writes `auto` and SRAM, replies
   `{"saved": …}`, exits; `"quiet": true` for the shell's hibernation).
   Replies are `{"ok": true, …}` or `{"ok": false, "error": …}`.
 - **"Saved" toast.** When a game ends with its resume state written (menu
@@ -240,6 +256,8 @@ lime selection, Instrument Serif titles), rendered on the CPU into a
   a resume state, picture on the right.
 - **In-game menu**: Resume, Save state, Load state (←/→ picks the slot; the
   picture shows the slot's thumbnail and age), Change disc (multi-disc),
+  Display (←/→ steps through the scaling choices; A keeps it for the
+  game, X for all the system's games),
   Reset, Save and quit.
 - **Messages**: missing BIOS (required: can't start; optional, e.g. the PS1
   with its HLE BIOS: warned once per run, "Play anyway"), core load errors,
@@ -255,7 +273,7 @@ lime selection, Instrument Serif titles), rendered on the CPU into a
 | Super Nintendo | snes9x2005-plus | non-commercial | the fast snes9x branch with the blargg APU |
 | Mega Drive, Master System, Game Gear | genesis-plus-gx | non-commercial | |
 | PC Engine (+CD) | beetle-pce-fast | GPL-2.0 | syscard3.pce for CD |
-| PlayStation | pcsx-rearmed | GPL-2.0 | dynarec, threaded GPU + SPU, auto frameskip; display-scaled native frames; HLE BIOS unless scph*.bin |
+| PlayStation | pcsx-rearmed | GPL-2.0 | dynarec, threaded GPU + SPU, auto frameskip; sharp bilinear (nearest x3, the display plane finishes); HLE BIOS unless scph*.bin |
 | Arcade / Neo Geo | fbneo | non-commercial | zips as-is; neogeo.zip for Neo Geo |
 | Atari 2600 | stella2014 | GPL-2.0 | |
 | Atari Lynx | handy | zlib | needs lynxboot.img |
@@ -289,10 +307,11 @@ column is `mortar-play selftest` on the device (`ms_per_frame`,
 | fbneo | 30-80% | | CPS1/2 and Neo Geo fine; heavier boards (CPS3, Cave SH-3) not |
 | handy | 15-25% | | |
 
-Frontend overhead per frame: native PlayStation frames are a ~0.3 MB
-copy into a dma-buf the display scales; pixel-perfect systems are a CPU
-nearest scale into a screen-size dma-buf (~2-3 MB written; 2.6 ms at
-1008 MHz, 2.1 ms at 1992 MHz); the shell copies nothing in either case.
+Frontend overhead per frame, by Display filter (see Video): smooth is a
+~0.3 MB copy into a dma-buf the display scales (0.27 ms at 1008 MHz);
+sharp bilinear a nearest x3 into 960x720 (2.2 ms); sharp and integer a
+nearest scale to the screen (~2-3 MB written; 2.5-2.6 ms at 1008 MHz,
+2.1 ms at 1992 MHz). The shell copies nothing in any of them.
 Audio resampling ~0.1 ms; the SDL/GPU path uploads at most 1.2 MB.
 
 ### PlayStation, measured (2026-11-01)
@@ -323,7 +342,8 @@ In the shell (the same game and state as a shell client, 30 s at
 | before: wl_shm, CPU scale, shell copies | 24.5% | 21.4% | 10.5% | 2.5% | 59% |
 | wl_shm with the write-only scaler | 26.1% | 21.2% | 13.5% | 3.2% | 64% |
 | screen-size dma-buf (CPU scale, scanout) | 4.3% | 21.1% | 13.3% | 2.6% | 41% |
-| native 320x240 dma-buf + viewport (plane scaler) | 4.5% | 14.6% | 13.9% | 2.7% | 36% |
+| smooth: native 320x240 dma-buf + viewport (plane scaler) | 4.5% | 14.6% | 13.9% | 2.7% | 36% |
+| sharp bilinear: 960x720 (nearest x3) + plane | 4.3% | 19.8% | 10.5% | 2.3% | 37% |
 
 Every frame of the last two went straight to the panel (the shell's
 `scanout_frames` counted them all); debugfs showed the primary plane with a
@@ -366,7 +386,7 @@ parallel-n64 in GLES2 mode):
 
 ## Testing
 
-- `cargo test`: options parsing/presets, pixel formats, layouts, scaler,
+- `cargo test`: options parsing/presets, pixel formats, layouts and Display choices (kept per game / system), scaler,
   rotation, thumbnails, resampler length/pitch/transparency, DRC
   direction and drift, button maps, chords, config parsing, library scan
   (cue/m3u hiding), zip extraction, recents, script parsing.
@@ -382,7 +402,8 @@ parallel-n64 in GLES2 mode):
   pausing under the shell's MENU, the in-game menu, closing with the resume
   state; then games as apps with two copies of the built-in test program:
   `list --json`, MENU > Games and the NES page, a game started from it
-  (its title), the game panel (save to slot 1, its picture, load it), the
+  (its title), the game panel (save to slot 1, its picture, Display stepped and kept
+  for the game, load the slot), the
   save before suspend (`ctl save-games`), the screenshot combo, a second
   game putting the first to sleep (`maxGames` = 1), waking it, starting it
   again (switches, no second copy), X with the "Saved" toast. Screenshots

@@ -277,6 +277,7 @@ fn state(shell: &Shell) -> String {
             "pictures": g.view.thumbs.len(),
             "status": g.view.status.iter().map(|(u, s)| (u.to_string(), json!({
                 "slots": s.slots.iter().map(|x| x.is_some()).collect::<Vec<_>>(), "fast_forward": s.fast_forward,
+                "display": s.display.as_ref().map(|d| json!({"label": d.label, "scope": d.scope})),
             }))).collect::<serde_json::Map<_, _>>(),
         })),
         "menu_pages": shell.sui.menu_pages().iter().map(|s| s.name()).collect::<Vec<_>>(),

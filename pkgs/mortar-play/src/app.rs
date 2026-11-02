@@ -415,6 +415,7 @@ impl App {
                     "slots": slots, "auto": slot(Slot::Auto),
                     "discs": discs, "fast_forward": ff_on,
                     "can_save": s.saves.is_some(),
+                    "display": display_json(s),
                 })
             }
             Request::SaveState { slot } => match parse_slot(&slot).and_then(|n| s.save_state(slot_of(n))) {
@@ -458,6 +459,21 @@ impl App {
                 match s.core.disk_next() {
                     Some(i) => json!({ "ok": true, "disc": i + 1, "of": s.core.disk_count().map(|d| d.1).unwrap_or(0) }),
                     None => err("this game has one disc".into()),
+                }
+            }
+            Request::Display { step, keep } => {
+                if let Some(n) = step {
+                    s.step_view(n.signum());
+                }
+                let kept = match keep.as_deref() {
+                    None => Ok(()),
+                    Some("game") => s.keep_view(true),
+                    Some("system") => s.keep_view(false),
+                    Some(k) => Err(format!("display: keep \"game\" or \"system\", not \"{k}\"")),
+                };
+                match kept {
+                    Ok(()) => json!({ "ok": true, "display": display_json(s) }),
+                    Err(e) => err(e),
                 }
             }
             Request::Quit { .. } => unreachable!(),
@@ -522,8 +538,8 @@ impl App {
         if new_frame || self.headless {
             let f = s.display_frame();
             let (sw, sh) = self.pf.display.size();
-            let dst = video::layout(s.sys.scaling, f.w, f.h, s.aspect(), sw, sh);
-            self.pf.display.present_game(&f, dst, s.sys.sharp);
+            let dst = video::layout(s.view, f.w, f.h, s.aspect(), sw, sh);
+            self.pf.display.present_game(&f, dst, s.view.filter);
         }
         s.tick_autosave();
         if s.host().shutdown {
@@ -682,6 +698,7 @@ impl App {
         {
             v.push((MenuAction::Disc, "Change disc".into(), Some(format!("Disc {} of {n}", i + 1))));
         }
+        v.push((MenuAction::Display, "Display".into(), Some(display_desc(s))));
         v.push((MenuAction::Reset, "Reset".into(), None));
         v.push((MenuAction::Quit, "Save and quit".into(), Some("Resumes here next time".into())));
         v
@@ -714,6 +731,10 @@ impl App {
                     toast(&mut self.menu, format!("Disc {} inserted", i + 1));
                 }
             }
+            MenuAction::Display => match s.keep_view(true) {
+                Ok(()) => toast(&mut self.menu, format!("{} kept for this game", s.view.label())),
+                Err(e) => toast(&mut self.menu, e),
+            },
             MenuAction::Reset => {
                 s.reset();
                 self.resume();
@@ -810,10 +831,26 @@ impl App {
                 _ => {}
             },
             Screen::Menu => {
-                let n = self.menu_items().len();
+                let items = self.menu_items();
+                let n = items.len();
+                let on_display = items.get(self.menu.list.sel).is_some_and(|i| i.0 == MenuAction::Display);
                 match b {
                     Button::Up => self.menu.list.up(n),
                     Button::Down => self.menu.list.down(n),
+                    Button::Left | Button::Right if on_display => {
+                        if let Some(s) = self.session.as_mut() {
+                            s.step_view(if b == Button::Right { 1 } else { -1 });
+                        }
+                    }
+                    Button::X if on_display => {
+                        if let Some(s) = self.session.as_mut() {
+                            let t = match s.keep_view(false) {
+                                Ok(()) => format!("{} kept for all {} games", s.view.label(), s.sys.name),
+                                Err(e) => e,
+                            };
+                            self.menu.toast = Some((t, Instant::now()));
+                        }
+                    }
                     Button::Left => self.menu.slot = (self.menu.slot + SLOTS - 1) % SLOTS,
                     Button::Right => self.menu.slot = (self.menu.slot + 1) % SLOTS,
                     Button::A => self.menu_select(),
@@ -990,6 +1027,7 @@ impl App {
                     game: &name,
                     items: &items,
                     slot: self.menu.slot,
+                    display: s.view.label(),
                     picture,
                     aspect,
                     caption,
@@ -1002,6 +1040,25 @@ impl App {
             Screen::Playing => return,
         }
         self.pf.display.present_ui(&self.ui);
+    }
+}
+
+/// The Display choice for the shell's game panel.
+fn display_json(s: &Session) -> serde_json::Value {
+    serde_json::json!({
+        "label": s.view.label(), "key": s.view.key(), "scope": s.view_scope.name(),
+        "system_name": s.sys.name,
+    })
+}
+
+/// Where the Display choice comes from, for the menu row.
+fn display_desc(s: &Session) -> String {
+    use crate::display::Scope;
+    match s.view_scope {
+        Scope::Default => format!("{} default", s.sys.name),
+        Scope::System => format!("Kept for all {} games", s.sys.name),
+        Scope::Game => "Kept for this game".into(),
+        Scope::Session => "A: keep for this game · X: for all".into(),
     }
 }
 

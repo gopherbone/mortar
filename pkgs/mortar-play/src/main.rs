@@ -16,6 +16,7 @@ mod app;
 mod audio;
 mod config;
 mod control;
+mod display;
 mod input;
 mod library;
 mod lr;
@@ -29,7 +30,7 @@ mod video;
 use std::path::PathBuf;
 
 const USAGE: &str = "usage: mortar-play [run SYSTEM [ROM] | selftest SYSTEM [ROM]] [--config FILE] [--display auto|sdl|wayland|headless] [--size WxH] [--script STEPS]
-  selftest options: --out DIR --frames N --shots 60,120,300 [--press FRAME:BUTTON:FRAMES,...] [--resume] [--paced]";
+  selftest options: --out DIR --frames N --shots 60,120,300 [--press FRAME:BUTTON:FRAMES,...] [--resume] [--paced] [--view FILTER/FIT]";
 
 struct Args {
     cmd: Option<String>,
@@ -44,6 +45,7 @@ struct Args {
     press: Vec<(u64, String, u64)>,
     resume: bool,
     paced: bool,
+    view: Option<String>,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -60,6 +62,7 @@ fn parse_args() -> Result<Args, String> {
         press: Vec::new(),
         resume: false,
         paced: false,
+        view: None,
     };
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
@@ -78,6 +81,7 @@ fn parse_args() -> Result<Args, String> {
             "--json" => {}
             "--resume" => a.resume = true,
             "--paced" => a.paced = true,
+            "--view" => a.view = Some(val()?),
             "--out" => a.out = Some(PathBuf::from(val()?)),
             "--frames" => a.frames = val()?.parse().map_err(|_| "--frames N")?,
             "--shots" => a.shots = val()?.split(',').filter_map(|s| s.trim().parse().ok()).collect(),
@@ -135,7 +139,7 @@ fn main() {
             std::process::exit(2);
         };
         let out = a.out.clone().unwrap_or_else(|| PathBuf::from("selftest-out"));
-        let opts = selftest::Opts { frames: a.frames, shots: a.shots.clone(), press: a.press.clone(), out, size: a.size, resume: a.resume, paced: a.paced };
+        let opts = selftest::Opts { frames: a.frames, shots: a.shots.clone(), press: a.press.clone(), out, size: a.size, resume: a.resume, paced: a.paced, view: a.view.clone() };
         match selftest::run(&cfg, sys, a.pos.get(1).map(PathBuf::from).as_deref(), &opts) {
             Ok(r) => {
                 println!("{}", serde_json::to_string_pretty(&r).unwrap_or_default());

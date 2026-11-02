@@ -26,6 +26,8 @@ pub struct Opts {
     /// Run at the game's frame rate (sleep to each frame's deadline) instead
     /// of flat out, so threads and clocks behave as in play.
     pub paced: bool,
+    /// Display choice to measure (else the game's own).
+    pub view: Option<String>,
 }
 
 #[derive(Serialize, Default)]
@@ -50,11 +52,14 @@ pub struct Report {
     pub frames: u64,
     /// Average wall time of retro_run, ms (no presentation): the core's cost.
     pub ms_per_frame: f64,
+    /// The Display choice measured.
+    pub view: String,
     /// Share of one CPU core at the game's frame rate.
     pub core_load: f64,
-    /// Average cost of the CPU presenter's work per frame (convert done in
-    /// the callback; this is the scale into a screen-sized buffer, as for
-    /// wl_shm), ms.
+    /// Average CPU cost of the Wayland presenter's work per frame for the
+    /// Display choice (`view`): smooth copies the frame, sharp bilinear
+    /// pre-scales it by a whole multiple, sharp / integer scale it to the
+    /// screen; ms. (The core's frame conversion is in `ms_per_frame`.)
     pub scale_ms: f64,
     /// Whole-process CPU time per frame (all threads: the core's GPU/SPU
     /// threads too), ms.
@@ -94,6 +99,9 @@ pub fn run(cfg: &Config, sys_id: &str, rom: Option<&Path>, o: &Opts) -> Result<R
     let mut scaler = video::Scaler::default();
     let mut screen = vec![0u32; (o.size.0 * o.size.1) as usize];
     let mut samples: Vec<i16> = Vec::new();
+    if let Some(v) = &o.view {
+        s.view = video::View::parse(v).ok_or_else(|| format!("--view {v}: smooth|sharp|sharp-bilinear|integer[/fit|stretch]"))?;
+    }
     if o.resume {
         s.load_state(Slot::Auto).map_err(|e| format!("resume: {e}"))?;
     }
@@ -118,9 +126,21 @@ pub fn run(cfg: &Config, sys_id: &str, rom: Option<&Path>, o: &Opts) -> Result<R
         run_time += t.elapsed().as_secs_f64();
         let t = Instant::now();
         {
+            // the CPU work of the Wayland presenter for this Display choice
             let f = s.display_frame();
-            let dst = video::layout(sys.scaling, f.w, f.h, s.aspect(), o.size.0, o.size.1);
-            scaler.scale(&f, dst, &mut screen, o.size.0 as usize);
+            let dst = video::layout(s.view, f.w, f.h, s.aspect(), o.size.0, o.size.1);
+            match s.view.filter {
+                video::Filter::Smooth => {
+                    for (y, row) in f.px.chunks_exact(f.w.max(1) as usize).enumerate() {
+                        screen[y * f.w as usize..(y + 1) * f.w as usize].copy_from_slice(row);
+                    }
+                }
+                video::Filter::SharpBilinear => {
+                    let k = video::prescale(video::Filter::SharpBilinear, f.w, f.h, dst);
+                    scaler.scale(&f, video::Dst { x: 0, y: 0, w: f.w * k, h: f.h * k }, &mut screen, (f.w * k) as usize);
+                }
+                _ => scaler.scale(&f, dst, &mut screen, o.size.0 as usize),
+            }
         }
         scale_time += t.elapsed().as_secs_f64();
         if o.paced {
@@ -137,7 +157,7 @@ pub fn run(cfg: &Config, sys_id: &str, rom: Option<&Path>, o: &Opts) -> Result<R
         mixer.push(s.audio());
         if o.shots.contains(&frame) {
             let f = s.display_frame().into_owned();
-            let full = video::compose(&f, sys.scaling, s.aspect(), o.size.0, o.size.1);
+            let full = video::compose(&f, s.view, s.aspect(), o.size.0, o.size.1);
             let p = o.out.join(format!("frame-{frame:05}.png"));
             full.save_png(&p)?;
             f.save_png(&o.out.join(format!("frame-{frame:05}-native.png")))?;
@@ -157,6 +177,7 @@ pub fn run(cfg: &Config, sys_id: &str, rom: Option<&Path>, o: &Opts) -> Result<R
     }
     r.threads.sort_by(|a, b| b.ms_per_frame.total_cmp(&a.ms_per_frame));
     r.frames = o.frames;
+    r.view = s.view.key();
     r.ms_per_frame = run_time * 1000.0 / o.frames.max(1) as f64;
     r.core_load = r.ms_per_frame * s.fps() / 1000.0;
     r.scale_ms = scale_time * 1000.0 / o.frames.max(1) as f64;

@@ -56,15 +56,23 @@ let
         core = mkOption { type = types.package; description = "The libretro core (from pkgs.libretro)."; };
         options = mkOption { type = types.attrsOf types.str; default = { }; description = "Core option presets (key = value)."; };
         scaling = mkOption {
-          type = types.enum [ "aspect" "integer" "integer-aspect" "fill" ];
-          default = "aspect";
+          type = types.enum [ "smooth" "sharp" "sharp-bilinear" "integer" ];
+          default = "sharp";
           description = ''
-            aspect: as large as fits at the display aspect ratio; integer:
-            whole multiples, square pixels (pixel perfect); integer-aspect:
-            whole multiple vertically, width from the aspect ratio; fill.
+            The default picture; Display in the in-game menu and the shell's
+            game panel overrides it per game or per system (kept in the
+            state directory). smooth: bilinear (inside the shell the display
+            engine scales the game's own frame: no CPU); sharp: nearest
+            neighbour to the full size; sharp-bilinear: nearest to the largest
+            whole multiple, then a smooth finish (crisp and even); integer:
+            whole multiples only, black borders (pixel perfect).
           '';
         };
-        sharp = mkOption { type = types.bool; default = true; description = "Nearest-neighbour scaling (else bilinear on the GPU path)."; };
+        aspect = mkOption {
+          type = types.enum [ "fit" "stretch" ];
+          default = "fit";
+          description = "fit: the core's display aspect ratio; stretch: the whole screen (integer: whole multiples on each axis).";
+        };
         controls = mkOption {
           type = types.attrsOf types.str;
           default = { };
@@ -197,11 +205,10 @@ let
       # the log); rebuilding it with -mcpu=cortex-a53 measured the same
       # (2.09 vs 2.10 ms/frame), so the cached build stays.
       core = lr.pcsx-rearmed;
-      scaling = "aspect";
+      # crisp but even: nearest x3 for 320x240 (x1 for 640x480), the display
+      # engine scales the rest (plain smooth looked a little soft)
+      scaling = "sharp-bilinear";
       fastForward = "f2";
-      # smooth: the frame goes to the shell at its own size and the display
-      # engine scales it to 4:3 (no CPU scaling; mortar-play DESIGN.md)
-      sharp = false;
       # Option names and values as this pcsx-rearmed (r26) declares them:
       # GPU thread is enabled/disabled/auto (no sync/async here), the SPU
       # IRQ option is gone. Frameskip "auto" only skips drawing when
@@ -302,7 +309,7 @@ let
       inherit (cfg) audioLatencyMs autosaveSeconds autoResume theme hotkeys;
       systems = lib.mapAttrsToList (id: s: {
         inherit id;
-        inherit (s) name tag folders extensions options scaling sharp controls fastForward bios keepArchives noContent order;
+        inherit (s) name tag folders extensions options scaling aspect controls fastForward bios keepArchives noContent order;
         core = coreFile s.core;
       }) enabled;
     }

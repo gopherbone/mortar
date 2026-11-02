@@ -174,7 +174,17 @@ runCommand "mortar-play-shell-test"
     wait_for ".games.status[\"$A\"].slots[0] == true"
     sleep 0.5
     shot 14-saved
+    echo "== Display in the game panel: step to the next choice, keep it for the game"
     ctl press down
+    ctl press down
+    wait_for ".games.status[\"$A\"].display.scope == \"default\""
+    ctl press right
+    wait_for ".games.status[\"$A\"].display.scope == \"session\""
+    ctl press a
+    wait_for ".games.status[\"$A\"].display.scope == \"game\""
+    jq -e '.games["nes/mortar-test"]' $R/states/display.json >/dev/null || fail "display not kept for the game"
+    shot 14b-display
+    ctl press up
     ctl press a
     log_has "state loaded"
     wait_for '.overlay == false'

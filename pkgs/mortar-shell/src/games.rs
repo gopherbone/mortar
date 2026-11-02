@@ -157,6 +157,10 @@ pub enum GameCmd {
     /// Fast-forward on / off (None: toggle).
     FastForward(Option<bool>),
     NextDisc,
+    /// Display (scaling): the next (+1) or previous (-1) choice, live.
+    Display(i32),
+    /// Keep the current Display choice for this game (true) or the system.
+    KeepDisplay(bool),
     /// Write the resume state and exit (`quiet`: no "Saved" toast; the
     /// shell is putting the game to sleep).
     Quit { quiet: bool },
@@ -174,6 +178,8 @@ impl GameCmd {
             GameCmd::FastForward(None) => json!({"cmd": "fast_forward", "on": "toggle"}),
             GameCmd::FastForward(Some(on)) => json!({"cmd": "fast_forward", "on": on}),
             GameCmd::NextDisc => json!({"cmd": "change_disc", "to": "next"}),
+            GameCmd::Display(step) => json!({"cmd": "display", "step": step}),
+            GameCmd::KeepDisplay(game) => json!({"cmd": "display", "keep": if *game { "game" } else { "system" }}),
             GameCmd::Quit { quiet } => json!({"cmd": "quit", "quiet": quiet}),
         }
         .to_string()
@@ -194,6 +200,25 @@ pub struct GameStatus {
     pub discs: Option<(u32, u32)>,
     pub fast_forward: bool,
     pub can_save: bool,
+    /// Display (scaling), when the game reports it.
+    pub display: Option<DisplayInfo>,
+}
+
+/// A game's Display choice: "Sharp bilinear", kept for "game" / "system" /
+/// "default" / "session" (changed, not kept), and its system's name.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct DisplayInfo {
+    pub label: String,
+    pub scope: String,
+    pub system_name: String,
+}
+
+impl DisplayInfo {
+    pub fn parse(v: &serde_json::Value) -> Option<DisplayInfo> {
+        let s = |k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or_default().to_string();
+        v.get("label")?.as_str()?;
+        Some(DisplayInfo { label: s("label"), scope: s("scope"), system_name: s("system_name") })
+    }
 }
 
 impl GameStatus {
@@ -213,6 +238,7 @@ impl GameStatus {
         st.discs = v.get("discs").and_then(|d| d.as_array()).and_then(|d| Some((d.first()?.as_u64()? as u32, d.get(1)?.as_u64()? as u32)));
         st.fast_forward = v.get("fast_forward").and_then(|f| f.as_bool()).unwrap_or(false);
         st.can_save = v.get("can_save").and_then(|f| f.as_bool()).unwrap_or(true);
+        st.display = v.get("display").and_then(DisplayInfo::parse);
         Some(st)
     }
     /// More than one disc: the panel offers Change disc.

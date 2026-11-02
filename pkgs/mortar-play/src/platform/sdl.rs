@@ -4,7 +4,7 @@
 use super::{Display, PEvent};
 use crate::audio::AudioOut;
 use crate::input::{AxisLatch, Button, brick_raw_button, from_sdl_gamepad};
-use crate::video::{Dst, Frame};
+use crate::video::{Filter, Dst, Frame};
 use mortar_ui::gfx::Ui;
 use sdl3::audio::{AudioDevice, AudioFormat, AudioSpec, AudioStreamOwner};
 use sdl3::event::{Event, WindowEvent};
@@ -293,7 +293,9 @@ impl Display for SdlDisplay {
         self.logical
     }
 
-    fn present_game(&mut self, f: &Frame, dst: Dst, sharp: bool) {
+    fn present_game(&mut self, f: &Frame, dst: Dst, filter: Filter) {
+        // sharp bilinear: nearest here (the GPU path has no pre-scale)
+        let sharp = filter != Filter::Smooth;
         if f.is_empty() {
             return;
         }

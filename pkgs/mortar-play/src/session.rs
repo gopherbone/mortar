@@ -77,6 +77,10 @@ pub struct Session {
     pub frames: u64,
     /// Set when the auto state was loaded at start.
     pub resumed: bool,
+    /// The Display choice in effect, and where it comes from.
+    pub view: crate::video::View,
+    pub view_scope: crate::display::Scope,
+    display_file: PathBuf,
 }
 
 impl Session {
@@ -100,6 +104,8 @@ impl Session {
         };
         core.load_game(content.as_deref())?;
         let saves = rom.map(|p| SavePaths::new(cfg, sys, p));
+        let display_file = crate::display::path(cfg);
+        let (view, view_scope) = crate::display::Prefs::load(&display_file).resolve(sys, rom);
         let mut s = Session {
             core,
             sys: sys.clone(),
@@ -111,12 +117,27 @@ impl Session {
             autosave_every: Duration::from_secs(cfg.autosave_seconds.max(1) as u64),
             frames: 0,
             resumed: false,
+            view,
+            view_scope,
+            display_file,
         };
         s.load_sram();
         if cfg.auto_resume && s.has_state(Slot::Auto) {
             s.resumed = s.load_state(Slot::Auto).is_ok();
         }
         Ok(s)
+    }
+
+    /// ◀▶ on Display: the next / previous choice, for this session.
+    pub fn step_view(&mut self, step: i32) {
+        self.view = self.view.step(step);
+        self.view_scope = crate::display::Scope::Session;
+    }
+
+    /// Keep the current Display choice for this game or the whole system.
+    pub fn keep_view(&mut self, for_game: bool) -> Result<(), String> {
+        self.view_scope = crate::display::Prefs::keep(&self.display_file, &self.sys, self.game.as_deref(), self.view, for_game)?;
+        Ok(())
     }
 
     pub fn host(&self) -> &Host {

@@ -369,6 +369,24 @@ impl Shell {
                 }
                 self.sui.show_toast(Toast { sub: name, ..Toast::info(format!("Disc {i} of {n}")) });
             }
+            (GameCmd::Display(_), Ok(v)) => {
+                if let Some(st) = g.view.status.get_mut(&uid) {
+                    st.display = v.get("display").and_then(crate::games::DisplayInfo::parse);
+                }
+                self.ui_dirty = true;
+            }
+            (GameCmd::KeepDisplay(game), Ok(v)) => {
+                let d = v.get("display").and_then(crate::games::DisplayInfo::parse);
+                let msg = match &d {
+                    Some(d) if game => format!("{} kept for this game", d.label),
+                    Some(d) => format!("{} kept for all {} games", d.label, d.system_name),
+                    None => "Display kept".to_string(),
+                };
+                if let Some(st) = g.view.status.get_mut(&uid) {
+                    st.display = d;
+                }
+                self.sui.show_toast(Toast { sub: name, sound: None, ..Toast::info(msg) });
+            }
             (GameCmd::Load(n), Ok(_)) => tracing::info!(uid, slot = n + 1, "state loaded"),
             (GameCmd::Quit { .. } | GameCmd::SaveAuto | GameCmd::Reset, Ok(_)) => {}
             (GameCmd::ListStates, Err(e)) => tracing::warn!(uid, "list_states: {e}"),

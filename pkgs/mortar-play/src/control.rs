@@ -10,6 +10,8 @@
 //!   {"cmd":"reset"}
 //!   {"cmd":"fast_forward","on":true|false|"toggle"}
 //!   {"cmd":"change_disc","to":"next"}
+//!   {"cmd":"display","step":1}       next (-1: previous) Display choice, this session
+//!   {"cmd":"display","keep":"game"}  keep the current one for the game ("system": all its games)
 //!   {"cmd":"quit","quiet":false}    writes `auto`, replies, then exits
 //!
 //! Replies: {"ok":true,...} or {"ok":false,"error":"..."}. The socket is
@@ -52,6 +54,14 @@ pub enum Request {
     Quit {
         #[serde(default)]
         quiet: bool,
+    },
+    /// Display (scaling): step through the choices and/or keep one. The
+    /// reply carries the result as `display` (as in list_states).
+    Display {
+        #[serde(default)]
+        step: Option<i32>,
+        #[serde(default)]
+        keep: Option<String>,
     },
 }
 
@@ -169,6 +179,8 @@ mod tests {
         assert_eq!(p(r#"{"cmd":"quit"}"#).unwrap(), Request::Quit { quiet: false });
         assert_eq!(p(r#"{"cmd":"quit","quiet":true}"#).unwrap(), Request::Quit { quiet: true });
         assert_eq!(p(r#"{"cmd":"change_disc","to":"next"}"#).unwrap(), Request::ChangeDisc { to: Some("next".into()) });
+        assert_eq!(p(r#"{"cmd":"display","step":-1}"#).unwrap(), Request::Display { step: Some(-1), keep: None });
+        assert_eq!(p(r#"{"cmd":"display","keep":"system"}"#).unwrap(), Request::Display { step: None, keep: Some("system".into()) });
         assert!(p(r#"{"cmd":"format_disk"}"#).is_err());
         assert_eq!(parse_slot(&SlotArg::N(1)), Ok(Some(0)));
         assert_eq!(parse_slot(&SlotArg::N(4)), Ok(Some(3)));

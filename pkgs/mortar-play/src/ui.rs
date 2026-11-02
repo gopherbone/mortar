@@ -229,6 +229,7 @@ pub enum MenuAction {
     Save,
     Load,
     Disc,
+    Display,
     Reset,
     Quit,
 }
@@ -239,6 +240,8 @@ pub struct MenuView<'a> {
     pub game: &'a str,
     pub items: &'a [(MenuAction, String, Option<String>)],
     pub slot: u8,
+    /// The Display choice's name ("Sharp bilinear").
+    pub display: String,
     /// Picture on the right: the slot's thumbnail, or the paused game.
     pub picture: Option<&'a Frame>,
     pub aspect: f32,
@@ -247,7 +250,12 @@ pub struct MenuView<'a> {
 }
 
 pub fn game_menu(ui: &mut Ui, v: &MenuView, list: &mut ListState) {
-    let hints = [hint("←/→", "Slot"), hint("B", "Resume"), hint("A", "Select")];
+    let on_display = v.items.get(list.sel).is_some_and(|i| i.0 == MenuAction::Display);
+    let hints = if on_display {
+        vec![hint("←/→", "Display"), hint("B", "Resume"), hint("A", "Keep for game"), hint("X", "For all")]
+    } else {
+        vec![hint("←/→", "Slot"), hint("B", "Resume"), hint("A", "Select")]
+    };
     let body = toolkit::frame(ui, v.status, &hints);
     let gap = ui.cq(4.0);
     let lw = (body.w - gap) * 0.46;
@@ -265,6 +273,7 @@ pub fn game_menu(ui: &mut Ui, v: &MenuView, list: &mut ListState) {
         .map(|(i, (a, title, desc))| {
             let value = match a {
                 MenuAction::Save | MenuAction::Load => RowValue::Text(format!("‹ slot {} ›", v.slot + 1)),
+                MenuAction::Display => RowValue::Text(format!("‹ {} ›", v.display)),
                 _ => RowValue::None,
             };
             let mut r = Row::new(title, value);

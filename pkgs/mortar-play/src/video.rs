@@ -4,7 +4,7 @@
 //! for presenters without a GPU (Wayland shm, headless screenshots).
 
 use crate::lr::ffi;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// A frame in XRGB8888 (one u32 per pixel, top byte ignored), tightly packed.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -159,20 +159,91 @@ pub fn rgb1555(p: u16) -> u32 {
     (r << 3 | r >> 2) << 16 | (g << 3 | g >> 2) << 8 | (b << 3 | b >> 2)
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+/// How the picture is scaled (the user picks it per system or per game;
+/// the system's default is in modules/mortar-play.nix).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
-pub enum Scaling {
-    /// As large as fits, at the core's display aspect ratio.
+pub enum Filter {
+    /// Bilinear-like: inside the shell the display engine scales the frame
+    /// (free); elsewhere the GPU's linear filter.
+    Smooth,
+    /// Nearest neighbour to the full size (crisp, uneven pixels at
+    /// non-integer ratios).
     #[default]
-    Aspect,
-    /// Largest whole multiple of the core's pixels (square pixels): pixel
-    /// perfect, may leave borders.
+    #[serde(alias = "aspect", alias = "fill")] // the old scaling names
+    Sharp,
+    /// Nearest to the largest whole multiple, then a smooth finish: crisp
+    /// and even.
+    SharpBilinear,
+    /// Whole multiples only, centred, black borders: pixel perfect.
+    #[serde(alias = "integer-aspect")]
     Integer,
-    /// Integer scale vertically, width from the aspect ratio: no uneven
-    /// rows (scanlines stay even), columns follow the aspect.
-    IntegerAspect,
-    /// Stretch to the whole screen.
-    Fill,
+}
+
+/// The picture's shape.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Fit {
+    /// The core's display aspect ratio.
+    #[default]
+    Fit,
+    /// The whole screen (Integer: whole multiples on each axis).
+    Stretch,
+}
+
+/// Filter + fit: what the Display setting chooses.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct View {
+    pub filter: Filter,
+    pub fit: Fit,
+}
+
+impl View {
+    /// The choices, in the order ◀▶ steps through them.
+    pub const ALL: [View; 7] = [
+        View { filter: Filter::SharpBilinear, fit: Fit::Fit },
+        View { filter: Filter::Smooth, fit: Fit::Fit },
+        View { filter: Filter::Sharp, fit: Fit::Fit },
+        View { filter: Filter::Integer, fit: Fit::Fit },
+        View { filter: Filter::SharpBilinear, fit: Fit::Stretch },
+        View { filter: Filter::Smooth, fit: Fit::Stretch },
+        View { filter: Filter::Sharp, fit: Fit::Stretch },
+    ];
+
+    pub fn label(self) -> String {
+        let f = match self.filter {
+            Filter::Smooth => "Smooth",
+            Filter::Sharp => "Sharp",
+            Filter::SharpBilinear => "Sharp bilinear",
+            Filter::Integer => "Integer",
+        };
+        if self.fit == Fit::Stretch { format!("{f} · stretch") } else { f.to_string() }
+    }
+
+    /// "sharp-bilinear/fit" (the saved form).
+    pub fn key(self) -> String {
+        let f = match self.filter {
+            Filter::Smooth => "smooth",
+            Filter::Sharp => "sharp",
+            Filter::SharpBilinear => "sharp-bilinear",
+            Filter::Integer => "integer",
+        };
+        format!("{f}/{}", if self.fit == Fit::Stretch { "stretch" } else { "fit" })
+    }
+
+    pub fn parse(s: &str) -> Option<View> {
+        let (f, a) = s.split_once('/').unwrap_or((s, "fit"));
+        let filter = serde_json::from_value(serde_json::Value::String(f.into())).ok()?;
+        let fit = serde_json::from_value(serde_json::Value::String(a.into())).ok()?;
+        Some(View { filter, fit })
+    }
+
+    /// The next (`step` > 0) or previous choice.
+    pub fn step(self, step: i32) -> View {
+        let n = View::ALL.len() as i32;
+        let i = View::ALL.iter().position(|v| *v == self).map_or(0, |i| i as i32);
+        View::ALL[(i + step).rem_euclid(n) as usize]
+    }
 }
 
 /// Destination rectangle on the screen (whole pixels).
@@ -186,7 +257,7 @@ pub struct Dst {
 
 /// Where a `fw` x `fh` frame with display aspect `aspect` (0 = square
 /// pixels) goes on a `sw` x `sh` screen.
-pub fn layout(mode: Scaling, fw: u32, fh: u32, aspect: f32, sw: u32, sh: u32) -> Dst {
+pub fn layout(view: View, fw: u32, fh: u32, aspect: f32, sw: u32, sh: u32) -> Dst {
     if fw == 0 || fh == 0 || sw == 0 || sh == 0 {
         return Dst::default();
     }
@@ -196,25 +267,33 @@ pub fn layout(mode: Scaling, fw: u32, fh: u32, aspect: f32, sw: u32, sh: u32) ->
         let h = w / a;
         if h <= sh as f32 { (sw, (h.round() as u32).min(sh)) } else { (((sh as f32 * a).round() as u32).min(sw), sh) }
     };
-    let (w, h) = match mode {
-        Scaling::Fill => (sw, sh),
-        Scaling::Aspect => fit_aspect(aspect),
-        Scaling::Integer => {
-            let k = (sw / fw).min(sh / fh);
-            if k == 0 { fit_aspect(fw as f32 / fh as f32) } else { (fw * k, fh * k) }
-        }
-        Scaling::IntegerAspect => {
-            let k = sh / fh;
-            if k == 0 {
-                fit_aspect(aspect)
-            } else {
-                let h = fh * k;
-                let w = ((h as f32 * aspect).round() as u32).min(sw);
-                (w, h)
+    let (w, h) = match (view.filter, view.fit) {
+        (Filter::Integer, Fit::Fit) => {
+            // whole multiples vertically (even scanlines), the width from
+            // the aspect ratio (square-pixel systems: whole multiples too)
+            let mut k = sh / fh;
+            while k > 0 && (fh as f32 * k as f32 * aspect).round() as u32 > sw {
+                k -= 1;
             }
+            if k == 0 { fit_aspect(aspect) } else { (((fh * k) as f32 * aspect).round() as u32, fh * k) }
         }
+        (Filter::Integer, Fit::Stretch) => {
+            let (kx, ky) = (sw / fw, sh / fh);
+            if kx == 0 || ky == 0 { (sw, sh) } else { (fw * kx, fh * ky) }
+        }
+        (_, Fit::Stretch) => (sw, sh),
+        (_, Fit::Fit) => fit_aspect(aspect),
     };
     Dst { x: (sw - w) / 2, y: (sh - h) / 2, w, h }
+}
+
+/// Sharp bilinear: the whole multiple the frame is pre-scaled by (nearest)
+/// before the smooth finish to `dst`; 1 means no pre-scale.
+pub fn prescale(filter: Filter, fw: u32, fh: u32, dst: Dst) -> u32 {
+    match filter {
+        Filter::SharpBilinear if fw > 0 && fh > 0 => (dst.w / fw).min(dst.h / fh).max(1),
+        _ => 1,
+    }
 }
 
 /// Nearest-neighbour scaler into a 32-bit destination buffer (`stride` in
@@ -261,9 +340,9 @@ impl Scaler {
 }
 
 /// The whole screen for a frame: black borders plus the scaled frame.
-pub fn compose(f: &Frame, mode: Scaling, aspect: f32, sw: u32, sh: u32) -> Frame {
+pub fn compose(f: &Frame, view: View, aspect: f32, sw: u32, sh: u32) -> Frame {
     let mut out = Frame::new(sw, sh);
-    let dst = layout(mode, f.w, f.h, aspect, sw, sh);
+    let dst = layout(view, f.w, f.h, aspect, sw, sh);
     Scaler::default().scale(f, dst, &mut out.px, sw as usize);
     out
 }
@@ -287,28 +366,61 @@ mod tests {
         assert_eq!(f.px, vec![0xff0000, 0x00ff00, 0x0000ff, 0]);
     }
 
+    fn v(filter: Filter, fit: Fit) -> View {
+        View { filter, fit }
+    }
+
     #[test]
     fn layouts() {
+        let int = v(Filter::Integer, Fit::Fit);
         // GB 160x144 on 1024x768: integer 5x
-        assert_eq!(layout(Scaling::Integer, 160, 144, 0.0, 1024, 768), Dst { x: 112, y: 24, w: 800, h: 720 });
+        assert_eq!(layout(int, 160, 144, 0.0, 1024, 768), Dst { x: 112, y: 24, w: 800, h: 720 });
+        // GBA 240x160 (3:2): 4x
+        assert_eq!(layout(int, 240, 160, 1.5, 1024, 768), Dst { x: 32, y: 64, w: 960, h: 640 });
         // SNES 256x224 at 4:3: full screen
-        assert_eq!(layout(Scaling::Aspect, 256, 224, 4.0 / 3.0, 1024, 768), Dst { x: 0, y: 0, w: 1024, h: 768 });
-        // GBA 240x160 aspect 3:2: full width
-        assert_eq!(layout(Scaling::Aspect, 240, 160, 1.5, 1024, 768), Dst { x: 0, y: 42, w: 1024, h: 683 });
-        // NES 256x240 integer-aspect: 3x vertical (720), 960 wide
-        assert_eq!(layout(Scaling::IntegerAspect, 256, 240, 4.0 / 3.0, 1024, 768), Dst { x: 32, y: 24, w: 960, h: 720 });
+        assert_eq!(layout(v(Filter::Sharp, Fit::Fit), 256, 224, 4.0 / 3.0, 1024, 768), Dst { x: 0, y: 0, w: 1024, h: 768 });
+        // GBA aspect 3:2: full width
+        assert_eq!(layout(v(Filter::Smooth, Fit::Fit), 240, 160, 1.5, 1024, 768), Dst { x: 0, y: 42, w: 1024, h: 683 });
+        // NES 256x240 integer at 4:3: 3x vertical (720), 960 wide
+        assert_eq!(layout(int, 256, 240, 4.0 / 3.0, 1024, 768), Dst { x: 32, y: 24, w: 960, h: 720 });
+        // PS1 320x240: 3x
+        assert_eq!(layout(int, 320, 240, 4.0 / 3.0, 1024, 768), Dst { x: 32, y: 24, w: 960, h: 720 });
+        // integer stretch: whole multiples on each axis
+        assert_eq!(layout(v(Filter::Integer, Fit::Stretch), 256, 240, 4.0 / 3.0, 1024, 768), Dst { x: 0, y: 24, w: 1024, h: 720 });
         // vertical arcade 224x288 at 3:4
-        let d = layout(Scaling::Aspect, 224, 288, 0.75, 1024, 768);
+        let d = layout(v(Filter::Smooth, Fit::Fit), 224, 288, 0.75, 1024, 768);
         assert_eq!((d.w, d.h), (576, 768));
-        assert_eq!(layout(Scaling::Fill, 10, 10, 1.0, 1024, 768).w, 1024);
+        assert_eq!(layout(v(Filter::Smooth, Fit::Stretch), 10, 10, 1.0, 1024, 768).w, 1024);
+        // larger than the screen: falls back to fitting
+        assert_eq!(layout(int, 2000, 1000, 2.0, 1024, 768).w, 1024);
+    }
+
+    #[test]
+    fn views() {
+        assert_eq!(View::parse("sharp-bilinear/fit"), Some(v(Filter::SharpBilinear, Fit::Fit)));
+        assert_eq!(View::parse("smooth"), Some(v(Filter::Smooth, Fit::Fit)));
+        assert_eq!(View::parse("bogus/fit"), None);
+        for x in View::ALL {
+            assert_eq!(View::parse(&x.key()), Some(x));
+        }
+        let a = View::ALL[0];
+        assert_eq!(a.step(1).step(-1), a);
+        assert_eq!(a.step(-1), View::ALL[View::ALL.len() - 1]);
+        assert_eq!(v(Filter::SharpBilinear, Fit::Stretch).label(), "Sharp bilinear · stretch");
+        // sharp bilinear pre-scales PS1 320x240 by 3 for 1024x768, 640x480 not at all
+        let full = Dst { x: 0, y: 0, w: 1024, h: 768 };
+        assert_eq!(prescale(Filter::SharpBilinear, 320, 240, full), 3);
+        assert_eq!(prescale(Filter::SharpBilinear, 640, 480, full), 1);
+        assert_eq!(prescale(Filter::Smooth, 320, 240, full), 1);
     }
 
     #[test]
     fn scaler_nearest() {
         let f = Frame { w: 2, h: 2, px: vec![1, 2, 3, 4] };
-        let out = compose(&f, Scaling::Integer, 0.0, 4, 4);
+        let int = v(Filter::Integer, Fit::Fit);
+        let out = compose(&f, int, 0.0, 4, 4);
         assert_eq!(out.px, vec![1, 1, 2, 2, 1, 1, 2, 2, 3, 3, 4, 4, 3, 3, 4, 4]);
-        let out = compose(&f, Scaling::Integer, 0.0, 6, 4);
+        let out = compose(&f, int, 0.0, 6, 4);
         assert_eq!(&out.px[0..6], &[0, 1, 1, 2, 2, 0]);
     }
 

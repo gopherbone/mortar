@@ -9,9 +9,10 @@
 //!   a resume state exists), the selected one's picture on the right; L1/R1
 //!   page through, A plays.
 //! - The game panel (Y on a game in Running): Save state and Load state
-//!   (◀▶ pick one of four slots, each with its picture and age), Reset,
-//!   Fast-forward, Change disc (multi-disc games), Quit. A sleeping game has
-//!   Wake and Close.
+//!   (◀▶ pick one of four slots, each with its picture and age), Display
+//!   (◀▶ steps through the scaling choices, applied live; A keeps it for
+//!   the game, X for all the system's games), Reset, Fast-forward, Change
+//!   disc (multi-disc games), Quit. A sleeping game has Wake and Close.
 //!
 //! A child module of `shellui` next to `cross`.
 
@@ -48,6 +49,7 @@ enum PItem {
     Reset,
     Ff,
     Disc,
+    Display,
     Quit,
     Wake,
     Close,
@@ -61,6 +63,7 @@ impl PItem {
             PItem::Reset => "Reset",
             PItem::Ff => "Fast-forward",
             PItem::Disc => "Change disc",
+            PItem::Display => "Display",
             PItem::Quit => "Quit",
             PItem::Wake => "Wake",
             PItem::Close => "Close",
@@ -213,7 +216,11 @@ fn panel_items(uid: u32, v: &View) -> Vec<PItem> {
         return vec![PItem::Wake, PItem::Close];
     }
     let st = v.games.and_then(|g| g.status.get(&uid));
-    let mut it = vec![PItem::Save, PItem::Load, PItem::Reset, PItem::Ff];
+    let mut it = vec![PItem::Save, PItem::Load];
+    if st.is_some_and(|s| s.display.is_some()) {
+        it.push(PItem::Display);
+    }
+    it.extend([PItem::Reset, PItem::Ff]);
     if st.is_some_and(|s| s.multi_disc()) {
         it.push(PItem::Disc);
     }
@@ -400,6 +407,14 @@ impl ShellUi {
                 p.slot = if b == Button::Right { (p.slot + 1) % n } else { (p.slot + n - 1) % n };
                 self.fx(Sfx::Tick, Some(Haptic::Tick));
             }
+            Button::Left | Button::Right if it == PItem::Display => {
+                self.out.push(Out::GameCtl(uid, GameCmd::Display(if b == Button::Right { 1 } else { -1 })));
+                self.fx(Sfx::Tick, Some(Haptic::Tick));
+            }
+            Button::X if it == PItem::Display && !repeat => {
+                self.out.push(Out::GameCtl(uid, GameCmd::KeepDisplay(false)));
+                self.fx(Sfx::Tab, Some(Haptic::Tick));
+            }
             Button::B | Button::Y if !repeat => self.close_gpanel(),
             Button::A if !repeat => {
                 let slot = p.slot;
@@ -442,6 +457,10 @@ impl ShellUi {
                 self.out.push(Out::GameCtl(uid, GameCmd::NextDisc));
                 self.fx(Sfx::Tab, Some(Haptic::Tick));
             }
+            PItem::Display => {
+                self.out.push(Out::GameCtl(uid, GameCmd::KeepDisplay(true)));
+                self.fx(Sfx::Tab, Some(Haptic::Tick));
+            }
             PItem::Quit | PItem::Close => {
                 self.close_gpanel();
                 self.close_from_menu(uid, v);
@@ -458,6 +477,10 @@ impl ShellUi {
             let mut h = vec![("▲▼", "Choose")];
             if it.slots() {
                 h.push(("◀▶", "Slot"));
+            }
+            if it == PItem::Display {
+                h.extend([("◀▶", "Display"), ("A", "Keep for game"), ("X", "For all"), ("B", "Back")]);
+                return Some(h);
             }
             h.extend([("A", "Select"), ("B", "Back")]);
             return Some(h);
@@ -673,6 +696,7 @@ impl ShellUi {
                 PItem::Save | PItem::Load => format!("◀ Slot {} ▶", p.slot + 1),
                 PItem::Ff => (if st.is_some_and(|s| s.fast_forward) { "On" } else { "Off" }).to_string(),
                 PItem::Disc => st.and_then(|s| s.discs).map(|(i, n)| format!("Disc {i} of {n}")).unwrap_or_default(),
+                PItem::Display => st.and_then(|s| s.display.as_ref()).map(|d| format!("◀ {} ▶", d.label)).unwrap_or_default(),
                 _ => String::new(),
             };
             if !val.is_empty() {

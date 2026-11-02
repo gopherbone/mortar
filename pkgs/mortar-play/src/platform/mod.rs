@@ -14,7 +14,7 @@
 
 use crate::audio::{AudioOut, NullAudio};
 use crate::input::Button;
-use crate::video::{Dst, Frame, Scaler};
+use crate::video::{Dst, Filter, Frame, Scaler};
 use mortar_ui::gfx::Ui;
 use std::time::Duration;
 
@@ -38,8 +38,8 @@ pub enum PEvent {
 pub trait Display {
     /// Logical screen size the UI and layouts use.
     fn size(&self) -> (u32, u32);
-    /// Show a game frame in `dst` (black around it).
-    fn present_game(&mut self, f: &Frame, dst: Dst, sharp: bool);
+    /// Show a game frame in `dst` (black around it), scaled with `filter`.
+    fn present_game(&mut self, f: &Frame, dst: Dst, filter: Filter);
     /// Show a full-screen UI canvas.
     fn present_ui(&mut self, ui: &Ui);
     /// Window-system events (Wayland); SDL events come through `Platform`.
@@ -79,7 +79,7 @@ impl Display for Headless {
     fn size(&self) -> (u32, u32) {
         (self.screen.w, self.screen.h)
     }
-    fn present_game(&mut self, f: &Frame, dst: Dst, _sharp: bool) {
+    fn present_game(&mut self, f: &Frame, dst: Dst, _filter: Filter) {
         self.screen.px.fill(0);
         let stride = self.screen.w as usize;
         self.scaler.scale(f, dst, &mut self.screen.px, stride);

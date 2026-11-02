@@ -41,7 +41,7 @@ let
         extensions = [ "nes" "fds" "unf" "unif" ];
         core = core libretro.fceumm;
         options = { fceumm_sndquality = "Low"; fceumm_overscan_v_top = "8"; fceumm_overscan_v_bottom = "8"; };
-        scaling = "integer-aspect";
+        scaling = "integer";
         order = 10;
       }
       {

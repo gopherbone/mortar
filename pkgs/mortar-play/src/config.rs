@@ -5,7 +5,7 @@
 //! configurable from the device itself by design.
 
 use crate::input::{Button, GAME_BUTTONS, PadId};
-use crate::video::Scaling;
+use crate::video::{Filter, Fit, View};
 use serde::Deserialize;
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -92,10 +92,12 @@ pub struct System {
     pub core: String,
     /// Core option presets (key -> value).
     pub options: BTreeMap<String, String>,
-    pub scaling: Scaling,
-    /// Nearest-neighbour (sharp) vs bilinear filtering where the presenter
-    /// has a choice (GPU path).
-    pub sharp: bool,
+    /// The default picture (Display in the menus overrides it per system
+    /// or per game; `crate::display`): smooth / sharp / sharp-bilinear /
+    /// integer.
+    pub scaling: Filter,
+    /// fit (the display aspect ratio) or stretch.
+    pub aspect: Fit,
     /// Brick button -> RetroPad button ("none" to unbind). Unlisted buttons
     /// map to the RetroPad button of the same name.
     pub controls: HashMap<String, String>,
@@ -119,8 +121,8 @@ impl Default for System {
             extensions: Vec::new(),
             core: String::new(),
             options: BTreeMap::new(),
-            scaling: Scaling::Aspect,
-            sharp: true,
+            scaling: Filter::Sharp,
+            aspect: Fit::Fit,
             controls: HashMap::new(),
             fast_forward: String::new(),
             bios: Vec::new(),
@@ -162,6 +164,11 @@ impl Config {
 }
 
 impl System {
+    /// The default Display choice (before the user's saved ones).
+    pub fn view(&self) -> View {
+        View { filter: self.scaling, fit: self.aspect }
+    }
+
     /// The RetroPad button for each Brick button, after this system's
     /// remaps and with the fast-forward button taken out.
     pub fn pad_map(&self, hot: &Hotkeys) -> HashMap<Button, PadId> {
@@ -217,7 +224,7 @@ mod tests {
           "romDirs": ["/r"], "hotkeys": {"fastForward": "r2"},
           "systems": [
             {"id": "psx", "name": "PlayStation", "core": "x.so", "order": 5, "fastForward": "f2",
-             "controls": {"l2": "l2", "y": "none"}, "scaling": "integer-aspect",
+             "controls": {"l2": "l2", "y": "none"}, "scaling": "sharp-bilinear", "aspect": "stretch",
              "bios": [{"files": ["SCPH5501.BIN", "scph1001.bin"], "required": false}]},
             {"id": "gb", "name": "Game Boy", "core": "y.so", "order": 1, "controls": {"x": "a"}}
           ]}"#;
@@ -233,7 +240,8 @@ mod tests {
         assert_eq!(m[&Button::X], PadId::A);
         assert!(!m.contains_key(&Button::R2), "R2 is fast-forward");
         let psx = c.system("psx").unwrap();
-        assert_eq!(psx.scaling, Scaling::IntegerAspect);
+        assert_eq!(psx.view(), View { filter: Filter::SharpBilinear, fit: Fit::Stretch });
+        assert_eq!(gb.view(), View { filter: Filter::Sharp, fit: Fit::Fit });
         let m = psx.pad_map(&c.hotkeys);
         assert_eq!(m[&Button::R2], PadId::R2);
         assert!(!m.contains_key(&Button::Y));

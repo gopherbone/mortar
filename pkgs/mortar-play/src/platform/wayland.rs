@@ -8,15 +8,16 @@
 //! Buffers, best first (as gamescope does it: the game at its own size, the
 //! display scales, nothing is composited):
 //!
-//! - **native** (smooth systems whose picture fills the screen, e.g. the
-//!   PlayStation at 4:3): the core's frame at its own size (320x240,
-//!   640x480, ...) in a KMS dumb buffer (a dma-buf, `dumb.rs`), with a
-//!   wp_viewport destination of the whole screen. The shell puts it on the
-//!   primary plane and the display engine's scaler scales it: the frontend
-//!   copies ~0.3 MB a frame and the shell nothing.
-//! - **screen-size dma-buf** (pixel-perfect systems, letterboxed pictures,
-//!   the menus): the CPU nearest scaler writes straight into a screen-size
-//!   dumb buffer, which the shell scans out unscaled (no copy in the shell).
+//! - **plane-scaled** (Display smooth / sharp bilinear): the core's frame
+//!   at its own size (sharp bilinear: first nearest-scaled by a whole
+//!   multiple), with black borders in proportion when letterboxed, in a KMS
+//!   dumb buffer (a dma-buf, `dumb.rs`) with a wp_viewport destination of
+//!   the whole screen. The shell puts it on the primary plane and the
+//!   display engine's scaler scales it: for smooth the frontend copies
+//!   ~0.3 MB a frame and the shell nothing.
+//! - **screen-size dma-buf** (sharp, integer, the menus): the CPU nearest
+//!   scaler writes straight into a screen-size dumb buffer, which the shell
+//!   scans out unscaled (no copy in the shell).
 //! - **wl_shm** (no display device, e.g. the sandbox tests, or
 //!   MORTAR_PLAY_PRESENT=shm): two shared-memory buffers, scaled on the CPU;
 //!   the shell copies the damaged area into scanout.
@@ -26,7 +27,7 @@
 
 use super::dumb::{Card, DumbBuf};
 use super::{Display, PEvent, ui_to_xrgb};
-use crate::video::{Dst, Frame, Scaler};
+use crate::video::{self, Dst, Filter, Frame, Scaler};
 use mortar_ui::gfx::Ui;
 use std::os::fd::{AsFd, FromRawFd, OwnedFd};
 use std::time::Duration;
@@ -305,32 +306,53 @@ impl Display for WaylandDisplay {
         self.screen()
     }
 
-    fn present_game(&mut self, f: &Frame, dst: Dst, sharp: bool) {
+    fn present_game(&mut self, f: &Frame, dst: Dst, filter: Filter) {
         self.dispatch(None);
-        if f.is_empty() {
+        if f.is_empty() || dst.w == 0 || dst.h == 0 {
             return;
         }
         let (sw, sh) = self.screen();
         let full = Dst { x: 0, y: 0, w: sw, h: sh };
-        // Smooth scaling of a picture that fills the screen: the frame at its
-        // own size, the display engine scales it (a soft Lanczos-2 filter).
-        // Letterboxed pictures would need the shell to place them on an
-        // overlay plane, and pixel-perfect ones need nearest: those are
-        // CPU scaled into a screen-size buffer.
-        if !sharp && dst == full && self.viewport.is_some() && self.card.is_some() {
-            let Some(i) = self.free_buffer(f.w, f.h, Kind::Native) else {
+        // Smooth and sharp bilinear: the display engine scales (its filter is
+        // a soft Lanczos-2). The buffer holds the frame (sharp bilinear: first
+        // scaled up by a whole multiple, nearest) with black borders in the
+        // same proportion as on screen, so it always covers the whole screen
+        // and goes on the primary plane. Sharp and integer need nearest all
+        // the way: CPU scaled into a screen-size buffer.
+        if matches!(filter, Filter::Smooth | Filter::SharpBilinear) && self.viewport.is_some() && self.card.is_some() {
+            let k = video::prescale(filter, f.w, f.h, dst);
+            let (cw, ch) = (f.w * k, f.h * k);
+            let pad = |c: u32, s: u32, d: u32| -> u32 { (((c as u64 * s as u64 + d as u64 / 2) / d as u64) as u32).max(c) };
+            let (bw, bh) = (pad(cw, sw, dst.w), pad(ch, sh, dst.h));
+            let Some(i) = self.free_buffer(bw, bh, Kind::Native) else {
                 self.dropped += 1;
                 return;
             };
             if self.bufs_key.2 == Kind::Native {
+                let inner = Dst { x: (bw - cw) / 2, y: (bh - ch) / 2, w: cw, h: ch };
                 let b = &mut self.state.bufs[i];
-                let (stride, w) = (b.stride, f.w as usize);
-                let px = b.px();
-                for (y, row) in f.px.chunks_exact(w).enumerate() {
-                    px[y * stride..y * stride + w].copy_from_slice(row);
+                let stride = b.stride;
+                let damage = if b.layout != Some(inner) {
+                    for row in b.px().chunks_mut(stride).take(bh as usize) {
+                        row[..bw as usize].fill(0);
+                    }
+                    b.layout = Some(inner);
+                    Dst { x: 0, y: 0, w: bw, h: bh }
+                } else {
+                    inner
+                };
+                let px = self.state.bufs[i].px();
+                if k == 1 {
+                    let w = f.w as usize;
+                    for (y, row) in f.px.chunks_exact(w).enumerate() {
+                        let o = (inner.y as usize + y) * stride + inner.x as usize;
+                        px[o..o + w].copy_from_slice(row);
+                    }
+                } else {
+                    self.scaler.scale(f, inner, px, stride);
                 }
-                self.set_dest(Some((dst.w, dst.h)));
-                self.commit(i, Dst { x: 0, y: 0, w: f.w, h: f.h });
+                self.set_dest(Some((sw, sh)));
+                self.commit(i, damage);
                 self.shown += 1;
                 return;
             }
