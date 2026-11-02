@@ -12,6 +12,7 @@ mod config;
 mod damage;
 mod games;
 mod haptics;
+mod homeart;
 mod patterns;
 mod mixer;
 mod motion;

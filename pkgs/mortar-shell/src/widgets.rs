@@ -130,17 +130,17 @@ impl Widget {
 }
 
 /// The dashboard without any configuration: a quiet one (the big clock,
-/// the battery inline under it, and tiles only while they have something
-/// to say). Wi-Fi, storage and scripts are there to add.
+/// the date under it, and tiles only while they have something
+/// to say; the battery is in the status bar). Battery, Wi-Fi, storage and
+/// scripts are there to add.
 pub fn defaults() -> Vec<Widget> {
-    [Kind::Clock, Kind::NeedsYou, Kind::NowPlaying, Kind::Recent, Kind::Battery].into_iter().map(Widget::new).collect()
+    [Kind::Clock, Kind::NeedsYou, Kind::NowPlaying, Kind::Recent].into_iter().map(Widget::new).collect()
 }
 
 impl Kind {
-    /// Not a tile: the clock is the dashboard's heading and the battery a
-    /// small item in the line under it.
+    /// Not a tile: the clock is the dashboard's heading.
     pub fn inline(self) -> bool {
-        matches!(self, Kind::Clock | Kind::Battery)
+        matches!(self, Kind::Clock)
     }
 }
 
@@ -359,7 +359,7 @@ mod tests {
         assert_eq!(w[2].label(), "Now playing");
         assert!(serde_json::from_str::<Widget>(r#"{"kind":"weather"}"#).is_err());
         assert!(serde_json::from_str::<Widget>(r#"{"kind":"clock","colour":1}"#).is_err());
-        assert_eq!(defaults().len(), 5);
+        assert_eq!(defaults().len(), 4);
         // `continue` is the old name of `recent`
         assert_eq!(serde_json::from_str::<Widget>(r#"{"kind":"continue"}"#).unwrap().kind, Kind::Recent);
     }

@@ -113,6 +113,7 @@ pub(super) enum OptK {
     Motion,
     ReduceMotion,
     Screensaver,
+    HomeArt,
     UiSounds,
     Haptics,
     SleepMode,
@@ -406,6 +407,7 @@ fn opt_values(k: OptK, prefs: &Prefs, v: &View) -> (Vec<&'static str>, usize) {
         OptK::Motion => (Preset::ALL.iter().map(|p| p.name()).collect(), Preset::ALL.iter().position(|p| *p == prefs.motion).unwrap_or(0)),
         OptK::ReduceMotion => onoff(prefs.reduce_motion),
         OptK::Screensaver => (SAVER_LABELS.to_vec(), SAVER_CHOICES.iter().position(|m| *m == prefs.screensaver).unwrap_or(2)),
+        OptK::HomeArt => (crate::homeart::Kind::ALL.iter().map(|k| k.name()).collect(), crate::homeart::Kind::ALL.iter().position(|k| *k == prefs.home_art).unwrap_or(0)),
         OptK::UiSounds => onoff(prefs.sounds),
         OptK::Haptics => onoff(prefs.haptics),
         OptK::SleepMode => (vec!["Suspend", "Screen off"], if prefs.suspend { 0 } else { 1 }),
@@ -523,7 +525,7 @@ impl ShellUi {
             SubKind::Wifi => wifi_rows(v),
             SubKind::Bluetooth => bt_rows(v),
             SubKind::Mixer => Vec::new(),
-            SubKind::Display => vec![SRow::Level(Lv::Brightness), SRow::Opt(OptK::Palette), SRow::Opt(OptK::Motion), SRow::Opt(OptK::ReduceMotion), SRow::Opt(OptK::Screensaver)],
+            SubKind::Display => vec![SRow::Level(Lv::Brightness), SRow::Opt(OptK::Palette), SRow::Opt(OptK::Motion), SRow::Opt(OptK::ReduceMotion), SRow::Opt(OptK::Screensaver), SRow::Opt(OptK::HomeArt)],
             SubKind::Sound => vec![SRow::Level(Lv::Volume), SRow::Link(SubKind::Mixer), SRow::Opt(OptK::UiSounds), SRow::Level(Lv::UiVolume), SRow::Opt(OptK::Haptics)],
             SubKind::TimeZone => tz_regions(&self.tz_zones),
             SubKind::TzCities => tz_cities(&self.tz_zones, s.region.as_deref().unwrap_or("")),
@@ -685,6 +687,11 @@ impl ShellUi {
                     OptK::Screensaver => {
                         let i = SAVER_CHOICES.iter().position(|m| *m == p.screensaver).unwrap_or(2);
                         p.screensaver = SAVER_CHOICES[(i + 1) % SAVER_CHOICES.len()];
+                    }
+                    OptK::HomeArt => {
+                        let all = crate::homeart::Kind::ALL;
+                        let i = all.iter().position(|k| *k == p.home_art).unwrap_or(0);
+                        p.home_art = all[(i + 1) % all.len()];
                     }
                     OptK::UiSounds => p.sounds = !p.sounds,
                     OptK::Haptics => p.haptics = !p.haptics,
@@ -1193,6 +1200,7 @@ impl ShellUi {
             SRow::Opt(OptK::Motion) => ("Motion".into(), "How the springs feel".into()),
             SRow::Opt(OptK::ReduceMotion) => ("Reduce motion".into(), "No overshoot; patterns stand still".into()),
             SRow::Opt(OptK::Screensaver) => ("Screensaver".into(), "The cross's pattern fills the screen when idle".into()),
+            SRow::Opt(OptK::HomeArt) => ("Home pattern".into(), "The mosaic by the clock; it moves a while after a press".into()),
             SRow::Opt(OptK::UiSounds) => ("UI sounds".into(), "Clicks, swooshes, the chime".into()),
             SRow::Opt(OptK::Haptics) => ("Vibration".into(), "A tick on every move".into()),
             SRow::Opt(OptK::SleepMode) => ("Sleep mode".into(), if p.suspend { "Saves the battery · apps pause".into() } else { "Apps keep running · uses more battery".into() }),

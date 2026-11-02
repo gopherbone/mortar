@@ -340,29 +340,17 @@ impl ShellUi {
     /// focused one shows).
     pub(super) fn draw_dash(&self, b: &mut B, pal: &Pal, v: &View, focus: bool) {
         let ws = self.widgets(v);
+        // the pattern, right of the clock (under everything else)
+        if self.prefs.home_art != crate::homeart::Kind::Off {
+            self.art.draw(b, pal, crate::homeart::hour_of(&v.sys.time));
+        }
         if ws.iter().any(|w| w.kind == Kind::Clock) {
             let clock = ts(Face::SerifItalic, 216.0, pal.ink).line_height(0.86).tracking(-0.025);
             b.text(GX - 8.0, CLOCK_Y, &v.sys.time, &clock);
             // the line under it: date and host, then the battery (inline)
             let st = ts(Face::Mono400, 19.0, pal.soft).tracking(0.06);
             let y = CLOCK_Y + 196.0;
-            let mut x = GX + b.text(GX, y, &date_line(v.host), &st);
-            if ws.iter().any(|w| w.kind == Kind::Battery)
-                && let Some(p) = v.sys.battery
-            {
-                x += b.text(x, y, "  ·  ", &st);
-                // a small battery: body, level, cap
-                let (bw, bh) = (30.0, 14.0);
-                let by = y + st.line_px() / 2.0 - bh / 2.0;
-                b.frame(x, by, bw, bh, 1.2, pal.soft);
-                let fill = if v.sys.charging || p > 15 { pal.soft } else if p > 5 { pal.yellow } else { pal.orange };
-                b.rect(x + 2.5, by + 2.5, (bw - 5.0) * p.min(100) as f32 / 100.0, bh - 5.0, fill);
-                b.rect(x + bw + 1.0, by + 4.0, 3.0, bh - 8.0, pal.soft);
-                x += bw + 12.0;
-                // (charging: the line under it says so)
-                let txt = format!("{p}%");
-                b.text(x, y, &txt, &st);
-            }
+            b.text(GX, y, &date_line(v.host), &st);
             if v.sys.plugged {
                 self.draw_charge_line(b, pal, v, GX, y + 40.0);
             }
@@ -404,7 +392,26 @@ impl ShellUi {
         let small = ts(Face::Mono400, 15.0, pal.soft);
         match w.kind {
             // inline (draw_dash)
-            Kind::Clock | Kind::Battery => {}
+            Kind::Clock => {}
+            Kind::Battery => {
+                self.tile(b, pal, r, None, on);
+                label(b, pal.soft, &w.label());
+                let val = ts(Face::SerifItalic, 38.0, pal.ink).line_height(1.0);
+                match v.sys.battery {
+                    Some(p) => {
+                        b.text(r.x + pad, y_val, &format!("{p}%"), &val);
+                        let (bx, bw) = (r.x + pad, r.w - 2.0 * pad);
+                        b.rect(bx, y_bar, bw, 3.0, with_a(pal.ink, 0.15));
+                        b.rect(bx, y_bar, bw * p.min(100) as f32 / 100.0, 3.0, if v.sys.charging || p > 15 { pal.ink } else { pal.orange });
+                        let sub = if v.sys.charging { "charging" } else if v.sys.plugged { "on power" } else { "on battery" };
+                        b.text(r.x + pad, y_sub, sub, &small);
+                    }
+                    None => {
+                        b.text(r.x + pad, y_val, "—", &val);
+                        b.text(r.x + pad, y_sub, "no battery", &small);
+                    }
+                }
+            }
             Kind::Recent => {
                 let Some(rc) = self.recent(v) else { return };
                 self.tile(b, pal, r, None, on);

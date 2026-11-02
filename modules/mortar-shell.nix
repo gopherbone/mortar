@@ -715,8 +715,8 @@ in
       '';
       description = ''
         The dashboard's widgets (home: full screen, the top of the MENU's stack), in reading order on a 4 x 2 grid under the clock (null:
-        clock, needs-you, now-playing, recent, battery: a quiet one; tiles
-        with nothing to say are left out, the clock and battery are not tiles).
+        clock, needs-you, now-playing, recent: a quiet one; tiles
+        with nothing to say are left out, the clock is not a tile).
         Tiles that do not fit are left out.
       '';
     };

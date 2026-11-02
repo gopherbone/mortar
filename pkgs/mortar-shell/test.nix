@@ -196,7 +196,8 @@ runCommand "mortar-shell-headless-test"
     wait_for '[.widgets[] | select(. != null)] | .[0].value == "42"'
     sleep 0.3
     shot 01-home
-    jq -e '.ui.pace == "Idle"' <(ctl state) >/dev/null || echo "FAIL: home at rest is not idle" >> $out/result
+    # idle between the pattern's changes (one every 3 s, eased over 0.45 s)
+    wait_for '.ui.pace == "Idle"'
 
     echo "== Home is not a launcher: A, B and MENU stay on the dashboard; ▶ Apps, A starts weston-fullscreen"
     ctl press a

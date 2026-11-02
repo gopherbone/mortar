@@ -296,6 +296,7 @@ fn state(shell: &Shell) -> String {
         "ui": {
             "layer": shell.ui_layer(),
             "booting": shell.sui.booting(),
+            "home_art_steps": shell.sui.art_steps(),
             "pace": format!("{:?}", shell.sui.pace(shell.visible_app().is_some())),
             "renderer": if shell.gpu_ui { "gpu" } else { "cpu" },
             "prefs": serde_json::to_value(&shell.sui.prefs).unwrap_or_default(),

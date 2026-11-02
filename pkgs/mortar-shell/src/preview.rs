@@ -247,7 +247,8 @@ pub fn run(o: &Opts) -> Result<(), String> {
     let dir = mortar_ui::gfx::font_dir();
     let typo = Typo::new(Fonts::load(&dir)?);
     let mut demo = Demo { pix: stand_ins(&dir)? };
-    let mut sys = Sys::demo(Some("08:42".into()));
+    // MORTAR_PREVIEW_TIME=HH:MM: the clock (home's pattern follows the hour)
+    let mut sys = Sys::demo(Some(std::env::var("MORTAR_PREVIEW_TIME").unwrap_or_else(|_| "08:42".into())));
     sys.ssh_sessions = 1;
     sys.battery = Some(if s_low(&o.screen) { 12 } else { 84 });
     sys.charging = o.screen == "home-charging";
@@ -259,7 +260,14 @@ pub fn run(o: &Opts) -> Result<(), String> {
     let screensaver = if o.screen.starts_with("saver") { 30 } else { Prefs::default().screensaver };
     // no first-time tips over the screens (the "tip" screen shows one)
     let tips_seen = ["menu", "keyboard", "game", "controls"].map(String::from).to_vec();
-    let prefs = Prefs { night: o.night, screensaver, tips_seen, ..Prefs::default() };
+    // home-sun, home-truchet, home-life, home-off: that pattern
+    let home_art = match o.screen.as_str() {
+        "home-truchet" => crate::homeart::Kind::Truchet,
+        "home-life" => crate::homeart::Kind::Life,
+        "home-off" => crate::homeart::Kind::Off,
+        _ => crate::homeart::Kind::Sun,
+    };
+    let prefs = Prefs { night: o.night, screensaver, tips_seen, home_art, ..Prefs::default() };
     let s = o.screen.as_str();
     let mut ui = ShellUi::new(prefs, s == "boot");
     let over_app = s.starts_with("menu")
@@ -336,7 +344,7 @@ pub fn run(o: &Opts) -> Result<(), String> {
     let v0 = mk(current, 0.0);
     settle(&mut ui, &v0, 0.05);
     match s {
-        "boot" | "home" | "home-default" | "home-custom" | "home-attention" | "home-empty" | "nothing-running" | "home-charging" | "home-low" | "app" => {}
+        "boot" | "home" | "home-sun" | "home-truchet" | "home-life" | "home-off" | "home-default" | "home-custom" | "home-attention" | "home-empty" | "nothing-running" | "home-charging" | "home-low" | "app" => {}
         // home, A: into the dashboard's tiles
         "home-tiles" => {
             ui.button(Button::A, false, &v0);
@@ -523,7 +531,7 @@ pub fn run(o: &Opts) -> Result<(), String> {
         }
         other => {
             return Err(format!(
-                "unknown preview screen '{other}' (boot, home (the stack on the dashboard, Claude needs you), home-tiles (A: in its tiles), home-down (the last app, the dashboard above), home-default (no one needs you), home-custom (Wi-Fi, storage, scripts), home-attention, home-empty or nothing-running, home-charging, home-low, app, tip, running, running-attention, running-dash (the dashboard over the app), menu-open (MENU from the app: use --frames), cross-apps, cross-attention, home-menu (the cross over home), menu-games, menu-music, games, games-system, game-panel, game-asleep, cross-settings, menu-adjust, menu-options, cross-games, cross-music, cross-switch (Apps to Games: use --frames), saver-apps, saver-games, saver-music, saver-settings, saver-exit, page-display, page-display-adjust, page-sound, page-mixer, page-wifi, page-bluetooth, page-timezone, page-timezone-cities, page-updates, page-about, page-controls, page-power, page-power-confirm, remote, setup-wifi, setup-bluetooth, launch, close, swap, osd, osd-mute, osd-bri, osd-home, toast, achievement, flash, osk, osk-chips, osk-chips-focus, power)"
+                "unknown preview screen '{other}' (boot, home (the stack on the dashboard, Claude needs you), home-tiles (A: in its tiles), home-down (the last app, the dashboard above), home-default (no one needs you), home-custom (Wi-Fi, storage, scripts), home-sun, home-truchet, home-life, home-off (its pattern; MORTAR_PREVIEW_TIME=HH:MM; --frames to see it change), home-attention, home-empty or nothing-running, home-charging, home-low, app, tip, running, running-attention, running-dash (the dashboard over the app), menu-open (MENU from the app: use --frames), cross-apps, cross-attention, home-menu (the cross over home), menu-games, menu-music, games, games-system, game-panel, game-asleep, cross-settings, menu-adjust, menu-options, cross-games, cross-music, cross-switch (Apps to Games: use --frames), saver-apps, saver-games, saver-music, saver-settings, saver-exit, page-display, page-display-adjust, page-sound, page-mixer, page-wifi, page-bluetooth, page-timezone, page-timezone-cities, page-updates, page-about, page-controls, page-power, page-power-confirm, remote, setup-wifi, setup-bluetooth, launch, close, swap, osd, osd-mute, osd-bri, osd-home, toast, achievement, flash, osk, osk-chips, osk-chips-focus, power)"
             ))
         }
     }

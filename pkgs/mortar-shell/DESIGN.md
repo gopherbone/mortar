@@ -31,6 +31,7 @@ pkgs/mortar-shell/
   src/attention.rs   "Needs you": apps asking for attention
   src/about.rs       version, generation, storage, battery health, temperature
   src/patterns.rs    the cross's background patterns (mosaics: zig-zags, Life, a scope, Truchet tiles)
+  src/homeart.rs     home's pattern by the clock (sun and moon, Truchet, Life)
   src/mixer.rs       PipeWire output streams from pw-dump (the Mixer)
   src/radio.rs       Wi-Fi / Bluetooth on/off (rfkill)
   src/motion.rs      springs and the Bouncy/Calm/Snappy presets
@@ -196,8 +197,9 @@ blocks with 1 px ink outlines, isometric illustrations.
     cross). Selected, it is full screen: no card frame, inset or accent
     strip, edge to edge on the plain ground under the status bar and
     over the hint bar. A reduced presence: the big serif clock (216 px,
-    the focal point), the line under it (date, host and, inline, a small
-    battery and its level), then only the tiles that have something to
+    the focal point), the date and host under it (the battery is the
+    status bar's), home's pattern to its right (below), then only the
+    tiles that have something to
     say, on a 4 x 2 grid (224 x 126 px, 2x1 tiles 464 px wide; see "Home
     widgets" below): ink text and thin outlines on the ground, Needs you
     the only yellow one. By default: Needs you (only while something
@@ -236,6 +238,21 @@ blocks with 1 px ink outlines, isometric illustrations.
     and background apps' commits redraw
     nothing); a widget update changes only its tile (`damage.rs`); only
     the charging line under the date moves, while it charges.
+  - Home's pattern (`homeart.rs`, Settings > Display > Home pattern):
+    a 15 x 9 block of mosaic tiles right of the clock (the cross's
+    language: solid palette tiles on a 28 px grid, 4 px grout), its
+    colours by the hour (yellow and lime by day, orange and pink at dawn
+    and dusk, lavender and ink at night). Sun (the default): a sun of
+    tiles that crosses the block over the day, rising and setting, its
+    rays blinking one at a time; at night a crescent moon and stars.
+    Truchet: quiet squares with quarter discs, one turning a quarter at a
+    time. Life: a small colony on the block. It is calm and cheap: on
+    the full-screen dashboard, for 45 s after a press, one change every
+    3 s, eased in over 0.45 s at the pattern pace (30 fps): about 14
+    frames a change, ~210 frames in the first minute after a press,
+    then still (0 frames) until the next press; each change damages only
+    tiles in the block (a unit test). Reduce motion or Off: still. (The
+    idle screensaver stays the cross's; home idles at 0 frames.)
 - Launch: the app grows out of its MENU row, its card or its dashboard
   tile in its accent colour (whoosh, double haptic) and fades in once
   its first buffer arrives; if it is slow, the accent fills the screen
@@ -342,7 +359,8 @@ blocks with 1 px ink outlines, isometric illustrations.
     Bluetooth rows. L1/R1 page through long lists. B or ◀ goes back one
     page.
     - Display: Brightness, Palette (Day/Night), Motion
-      (Bouncy/Calm/Snappy), Reduce motion, Screensaver.
+      (Bouncy/Calm/Snappy), Reduce motion, Screensaver, Home pattern
+      (Sun/Truchet/Life/Off).
     - Sound: Volume, Mixer ›, UI sounds, UI sound level, Vibration.
     - Time zone: the regions, then a region's cities with their local
       time and offset (CURRENT marked); A on a city (or UTC) sets it and
@@ -564,9 +582,8 @@ the dashboard's tiles in reading order; each takes a 1x1 or 2x1 slot on
 a 4 x 2 grid under the clock, placed first-fit (a 2x1 that does not fit at the end of a
 row goes to the next one and a later 1x1 fills the gap; what does not
 fit is left out). Only tiles with something to say are placed; the
-clock and the battery are not tiles. Default: clock, needs-you,
-now-playing, recent, battery; Wi-Fi, storage and scripts are there to
-add. Kinds:
+clock is not a tile. Default: clock, needs-you, now-playing, recent;
+battery, Wi-Fi, storage and scripts are there to add. Kinds:
 
 | kind | default size | shows | A |
 |---|---|---|---|
@@ -574,7 +591,7 @@ add. Kinds:
 | `recent` | 2x1 | Recently closed: the newest entry on screen lately (`recent` in prefs) that is not running, else mortar-play's most recent game; a game's resume picture; none: left out (`continue`, the old name, still parses) | start it again (a game resumes) |
 | `needs-you` | 2x1 | apps waiting for you (yellow, the only coloured tile); none: left out | switch to the first |
 | `now-playing` | 2x1 | the app making sound and its level; none: left out | switch to it |
-| `battery` | — | inline in the line under the clock: a small battery and its level (charging) | — |
+| `battery` | 1x1 | level, a thin bar, charging (the status bar shows it anyway) | — |
 | `wifi` | 1x1 | on / off / offline, the network | — |
 | `storage` | 1x1 | free space, a bar, of how much | — |
 | `command` | 1x1 | a script's output (its accent a small square); none yet: left out | `open`, if set |

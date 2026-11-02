@@ -105,6 +105,8 @@ pub struct Prefs {
     /// The MENU's screensaver: seconds idle on the cross before its
     /// pattern fills the screen (0: never).
     pub screensaver: u32,
+    /// Home's pattern (Settings > Display): sun, truchet, life or off.
+    pub home_art: crate::homeart::Kind,
     /// First-time tips already shown (TIPS ids).
     pub tips_seen: Vec<String>,
     /// Entries on screen lately, newest first (Recently closed).
@@ -123,6 +125,7 @@ impl Default for Prefs {
             suspend: false,
             idle_minutes: 0,
             screensaver: 60,
+            home_art: crate::homeart::Kind::Sun,
             tips_seen: Vec::new(),
             recent: Vec::new(),
         }
@@ -497,6 +500,9 @@ const BOOT_END: [(f32, f32); 4] = [(362.0, 166.0), (512.0, 166.0), (362.0, 316.0
 
 /// The charging line's highlight moves this long after the last press.
 const DRIFT_SECS: f64 = 30.0;
+/// Home's pattern changes every ART_EVERY s for ART_AWAKE s after a press.
+const ART_EVERY: f64 = 3.0;
+const ART_AWAKE: f64 = 45.0;
 
 /// How often the compositor should redraw.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -523,6 +529,9 @@ pub struct ShellUi {
     /// The app just sent home: its frosted picture fades out behind the
     /// stack (1 -> 0).
     leaving: Option<(u32, Spring)>,
+    /// Home's pattern, and when it next changes (UI time).
+    art: crate::homeart::HomeArt,
+    art_next: f64,
     lp: Spring,
     /// The veil over the blurred backdrop: FROST_VEIL, raised over dark
     /// backdrops so ink-soft text keeps 4.5:1 (`set_backdrop`).
@@ -564,6 +573,8 @@ impl ShellUi {
             charging_home: false,
             home: home::Home::default(),
             leaving: None,
+            art: crate::homeart::HomeArt::new(crate::homeart::Kind::Sun),
+            art_next: 0.0,
             lp: Spring::new(0.0),
             veil: Spring::new(FROST_VEIL),
             trans: None,
@@ -638,6 +649,26 @@ impl ShellUi {
     /// on its way there, nothing over it).
     pub fn dash_selected(&self) -> bool {
         self.menu.as_ref().is_some_and(|m| !m.closing && !m.on_cross() && m.run_sel == 0 && m.ctx.is_none() && m.top().is_none() && m.gpanel.is_none())
+    }
+
+    /// The dashboard is full screen (home at rest on it, nothing over it).
+    fn dash_full(&self) -> bool {
+        self.page.is_none()
+            && self.sleep.is_none()
+            && self.power.is_none()
+            && self.trans.is_none()
+            && self.menu.as_ref().is_some_and(|m| !m.closing && m.page_x.x < 0.01 && m.run_scroll.x.abs() < 0.02 && m.top().is_none())
+    }
+
+    /// Home's pattern changes now and then: on the full-screen dashboard,
+    /// for ART_AWAKE s after the last press; then it holds still.
+    fn art_awake(&self) -> bool {
+        self.prefs.home_art != crate::homeart::Kind::Off && !self.prefs.reduce_motion && self.t - self.last_input < ART_AWAKE && self.dash_full()
+    }
+
+    /// Home's pattern steps taken (`ctl state`).
+    pub fn art_steps(&self) -> u64 {
+        self.art.steps
     }
 
     /// In the dashboard's tiles (for `ctl state`).
@@ -821,6 +852,10 @@ impl ShellUi {
         if self.saver_on && self.saver_p >= 1.0 && !self.prefs.reduce_motion && self.t - self.saver_full > SAVER_DIM {
             return Pace::Ambient;
         }
+        // home's pattern easing a change in
+        if self.art.moving() && self.dashboard_visible() {
+            return Pace::Pattern;
+        }
         // the cross's pattern moves while it shows (Reduce motion: still)
         if !self.prefs.reduce_motion && self.page.is_none() && self.menu.as_ref().is_some_and(|m| m.pattern_visible()) {
             return Pace::Pattern;
@@ -848,6 +883,10 @@ impl ShellUi {
         }
         if self.drifting() {
             take(self.drift_until - self.t);
+        }
+        // home's pattern: its next change
+        if self.art_awake() && self.art_next > 0.0 {
+            take(self.art_next - self.t);
         }
         d.map(|v| v.max(0.0))
     }
@@ -903,6 +942,7 @@ impl ShellUi {
         self.charging_home = v.sys.charging && self.dashboard_visible();
         self.sync_home(v);
         self.ensure_home(v);
+        self.step_art(dt as f32);
         let p = self.params();
         {
             let mut s = self.springs_mut();
@@ -932,6 +972,31 @@ impl ShellUi {
         }
         if self.leaving.as_ref().is_some_and(|l| l.1.x < 0.01) {
             self.leaving = None;
+            self.dirty = true;
+        }
+    }
+
+    /// Home's pattern: the kind chosen in Settings; a change every
+    /// ART_EVERY s while awake, each eased in over a moment.
+    fn step_art(&mut self, dt: f32) {
+        if self.art.kind != self.prefs.home_art {
+            self.art = crate::homeart::HomeArt::new(self.prefs.home_art);
+            self.dirty = true;
+        }
+        if self.art.moving() {
+            self.art.ease(dt);
+            self.dirty = true;
+        }
+        if !self.art_awake() {
+            // the next press starts a fresh wait
+            self.art_next = 0.0;
+            return;
+        }
+        if self.art_next == 0.0 {
+            self.art_next = self.t + ART_EVERY;
+        } else if self.t >= self.art_next {
+            self.art.step();
+            self.art_next = self.t + ART_EVERY;
             self.dirty = true;
         }
     }
@@ -2088,7 +2153,7 @@ mod tests {
         let mut ws = crate::widgets::defaults();
         ws.push(crate::widgets::Widget { title: Some("Up".into()), command: vec!["true".into()], ..crate::widgets::Widget::new(crate::widgets::Kind::Command) });
         let mut outs: Vec<Option<crate::widgets::Output>> = vec![None; ws.len()];
-        outs[5] = Some(crate::widgets::parse_output("3 days"));
+        outs[4] = Some(crate::widgets::parse_output("3 days"));
         let mk = |o: &[Option<crate::widgets::Output>]| -> Scene {
             let v = View { dash: Dash { widgets: &ws, outputs: o, ..Dash::default() }, ..view(&r, &l, &sys, None) };
             let mut ui = ShellUi::new(quiet(), false);
@@ -2119,9 +2184,9 @@ mod tests {
             let v = View { dash: Dash { widgets: &ws, outputs: &outs, ..Dash::default() }, ..view(&r, &l, &sys, None) };
             let mut ui = ShellUi::new(quiet(), false);
             settle(&mut ui, &v);
-            ui.dash_tile_rect(&v, 5).expect("the command tile shows")
+            ui.dash_tile_rect(&v, 4).expect("the command tile shows")
         };
-        outs[5] = Some(crate::widgets::parse_output("4 days"));
+        outs[4] = Some(crate::widgets::parse_output("4 days"));
         let mut g = crate::damage::Grid::new(W, H);
         g.diff(&a, &infos(&mk(&outs)));
         let rects = g.rects().expect("a small change");
@@ -2129,6 +2194,63 @@ mod tests {
         for rc in rects {
             let inside = rc[0] >= tile[0] - 32.0 && rc[1] >= tile[1] - 32.0 && rc[0] + rc[2] <= tile[0] + tile[2] + 32.0 && rc[1] + rc[3] <= tile[1] + tile[3] + 32.0;
             assert!(inside, "{rc:?} outside the tile {tile:?}");
+        }
+        // a change of home's pattern (each kind): only inside its block
+        for kind in [crate::homeart::Kind::Sun, crate::homeart::Kind::Truchet, crate::homeart::Kind::Life] {
+            let v = View { dash: Dash { widgets: &ws, outputs: &outs, ..Dash::default() }, ..view(&r, &l, &sys, None) };
+            let mut ui = ShellUi::new(Prefs { home_art: kind, ..quiet() }, false);
+            settle(&mut ui, &v);
+            let before = infos(&ui.build(&typo, &v, W, H));
+            ui.art.step();
+            ui.art.ease(0.2);
+            let mut g = crate::damage::Grid::new(W, H);
+            g.diff(&before, &infos(&ui.build(&typo, &v, W, H)));
+            let rects = g.rects().expect("a small change");
+            assert!(!rects.is_empty(), "{kind:?} changed");
+            let (x0, y0) = (crate::homeart::X0, crate::homeart::Y0);
+            let (x1, y1) = (x0 + crate::homeart::COLS as f32 * 28.0, y0 + crate::homeart::ROWS as f32 * 28.0);
+            for rc in rects {
+                assert!(rc[0] >= x0 - 40.0 && rc[1] >= y0 - 40.0 && rc[0] + rc[2] <= x1 + 40.0 && rc[1] + rc[3] <= y1 + 40.0, "{kind:?}: {rc:?} outside the pattern");
+            }
+        }
+    }
+
+    /// Home's pattern: a change every few seconds for a while after a
+    /// press, each eased in over a few frames, then still: no frames.
+    #[test]
+    fn home_art_moves_a_while_then_holds_still() {
+        let sys = Sys::demo(Some("10:30".into()));
+        let l = launcher();
+        let r = [run(5, "m8")];
+        let v = view(&r, &l, &sys, None);
+        for kind in [crate::homeart::Kind::Sun, crate::homeart::Kind::Truchet, crate::homeart::Kind::Life, crate::homeart::Kind::Off] {
+            let mut ui = ShellUi::new(Prefs { home_art: kind, ..quiet() }, false);
+            settle(&mut ui, &v);
+            // a press, then two minutes at 30 frames a second, counting the
+            // frames the compositor would draw (pace not idle)
+            ui.button(Button::B, false, &v);
+            let (mut first, mut second) = (0, 0);
+            for i in 0..3600 {
+                ui.step(1.0 / 30.0, &v);
+                if ui.pace(false) != Pace::Idle {
+                    if i < 1800 { first += 1 } else { second += 1 }
+                }
+            }
+            eprintln!("home pattern {kind:?}: {} changes; frames: {first} in the first minute after a press, {second} in the next", ui.art_steps());
+            assert_eq!(second, 0, "{kind:?}: still after a while");
+            if kind == crate::homeart::Kind::Off {
+                assert_eq!((first, ui.art_steps()), (0, 0));
+            } else {
+                assert!((14..=16).contains(&ui.art_steps()), "{kind:?}: a change every 3 s for 45 s");
+                assert!(first <= 16 * 15, "{kind:?}: {first} frames");
+            }
+            // Reduce motion: never
+            let mut ui = ShellUi::new(Prefs { home_art: kind, reduce_motion: true, ..quiet() }, false);
+            settle(&mut ui, &v);
+            for _ in 0..600 {
+                ui.step(1.0 / 30.0, &v);
+            }
+            assert_eq!(ui.art_steps(), 0);
         }
     }
 

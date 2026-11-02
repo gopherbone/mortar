@@ -44,7 +44,7 @@ Not yet: deep suspend (it resumes with a fuzzy panel, see modules/trimui-brick.n
 
 The Brick boots straight into the shell (as `brick`); the greeter appears
 after Log out (Settings › Power) or if the shell keeps failing. Home is a
-quiet full-screen dashboard: a big clock, the date and battery, and only
+quiet full-screen dashboard: a big clock and the date, a small mosaic by the hour (Settings › Display › Home pattern), and only
 what has something to say: **Needs you** (apps waiting for you, e.g. a
 Claude approval), what is playing, **Recently closed** (A starts it again);
 Wi-Fi, storage and scripts can be added (`mortar.shell.home.widgets`).
