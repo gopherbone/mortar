@@ -30,6 +30,8 @@
 # Controls on the Brick (no analog sticks), by label:
 #   D-pad          main stick (walk; hold B to run)
 #   L2 + D-pad     GameCube D-pad (letter / pattern editors, tool switching)
+#   L2 + X/B/Y/A   C-stick up / down / left / right (by position; camera,
+#                  diary pages)
 #   A B X Y        A B X Y
 #   L1 R1          L R
 #   R2             Z
@@ -92,6 +94,11 @@ stdenv.mkDerivation {
     if [ "\$(cat .build 2>/dev/null)" != "$out" ]; then
       rm -f shader_binaries.bin
       echo "$out" > .build
+    fi
+    # Without them the game compiles its shaders before the window appears
+    # (~20 s): say so inside mortar-shell (\$MORTAR_APP: started by the shell).
+    if [ ! -e shader_binaries.bin ] && [ -n "\''${MORTAR_APP:-}" ] && command -v mortar-shell >/dev/null; then
+      mortar-shell toast --sound none --secs 20 "Animal Crossing" "Preparing graphics, about 20 s (first start only)" >/dev/null 2>&1 || true
     fi
     exec $out/libexec/acgc/AnimalCrossing "\$@"
     EOF

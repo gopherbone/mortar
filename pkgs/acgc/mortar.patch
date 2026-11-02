@@ -17,7 +17,9 @@ TARGET_MORTAR (pkgs/acgc/CMakeLists.txt defines it with TARGET_ANDROID):
 - pc_gx_texture.c: the Switch build's compact texture formats and mip
   chains (decoded on the main thread; no decode thread).
 - pc_keybindings.c, pc_pad.c, pc_pause_menu.c: Brick buttons by label; the
-  D-pad drives the main stick, L2 + D-pad is the GameCube D-pad.
+  D-pad drives the main stick, L2 + D-pad is the GameCube D-pad, L2 + the
+  face buttons the C-stick (documented in keybindings.ini).
+- neosthread.c: no [NEOS_OUT] audio diagnostic every second.
 - pc_vi.c: ACGC_FPS=1 logs the frame rate.
 
 diff -ruN a/include/libultra/libultra.h b/include/libultra/libultra.h
@@ -349,7 +351,7 @@ diff -ruN a/pc/src/pc_gx_texture.c b/pc/src/pc_gx_texture.c
      }
 diff -ruN a/pc/src/pc_keybindings.c b/pc/src/pc_keybindings.c
 --- a/pc/src/pc_keybindings.c	2026-11-01 23:49:37
-+++ b/pc/src/pc_keybindings.c	2026-11-01 23:49:52
++++ b/pc/src/pc_keybindings.c	2026-11-02 01:59:44
 @@ -34,6 +34,19 @@
  /* Back/Select is reserved for opening the PC pause menu, so it is not a
   * default here. Triggers: LT=L, RT=R, RB=Z (GC Z is a digital button). */
@@ -378,6 +380,18 @@ diff -ruN a/pc/src/pc_keybindings.c b/pc/src/pc_keybindings.c
      .dpad_up    = SDL_CONTROLLER_BUTTON_DPAD_UP,
      .dpad_down  = SDL_CONTROLLER_BUTTON_DPAD_DOWN,
      .dpad_left  = SDL_CONTROLLER_BUTTON_DPAD_LEFT,
+@@ -289,6 +303,11 @@
+     fprintf(f, "#   rightshoulder, lefttrigger, righttrigger, leftstick, rightstick,\n");
+     fprintf(f, "#   dpup, dpdown, dpleft, dpright. Use 'none' to unbind.\n");
+     fprintf(f, "# Sticks are fixed: left stick = movement, right stick = C-stick.\n");
++#ifdef TARGET_MORTAR
++    fprintf(f, "# TrimUI Brick (no sticks, fixed): D-pad = main stick; hold L2 for\n");
++    fprintf(f, "#   D-pad = GameCube D-pad and X/B/Y/A = C-stick up/down/left/right.\n");
++    fprintf(f, "#   Leave lefttrigger (L2) unbound below, it is the modifier.\n");
++#endif
+     fprintf(f, "# The Back/Select button is reserved: it opens the pause menu.\n");
+ 
+     for (int i = 0; i < (int)NUM_PAD_ENTRIES; i++) {
 diff -ruN a/pc/src/pc_main.c b/pc/src/pc_main.c
 --- a/pc/src/pc_main.c	2026-11-01 23:49:37
 +++ b/pc/src/pc_main.c	2026-11-02 01:25:02
@@ -392,8 +406,8 @@ diff -ruN a/pc/src/pc_main.c b/pc/src/pc_main.c
          SDL_GL_DeleteContext(g_pc_gl_context);
 diff -ruN a/pc/src/pc_pad.c b/pc/src/pc_pad.c
 --- a/pc/src/pc_pad.c	2026-11-01 23:49:37
-+++ b/pc/src/pc_pad.c	2026-11-01 23:50:01
-@@ -162,6 +162,26 @@
++++ b/pc/src/pc_pad.c	2026-11-02 01:59:37
+@@ -162,6 +162,42 @@
  
          status[0].triggerLeft  = pad_trigger_value(pb->l);
          status[0].triggerRight = pad_trigger_value(pb->r);
@@ -401,11 +415,27 @@ diff -ruN a/pc/src/pc_pad.c b/pc/src/pc_pad.c
 +#ifdef TARGET_MORTAR
 +        /* TrimUI Brick: no analog sticks. The D-pad is the main stick; with
 +         * L2 held it is the GameCube D-pad (letter and pattern editors, tool
-+         * switching). A real stick, if a pad has one, wins over the D-pad. */
++         * switching) and the face buttons are the C-stick, by position (X up,
++         * B down, Y left, A right). A real stick, if a pad has one, wins over
++         * the D-pad. */
 +        {
 +            const u16 dmask = PAD_BUTTON_UP | PAD_BUTTON_DOWN | PAD_BUTTON_LEFT | PAD_BUTTON_RIGHT;
 +            u16 d = buttons & dmask;
 +            int l2 = SDL_GameControllerGetAxis(g_controller, SDL_CONTROLLER_AXIS_TRIGGERLEFT) > PC_PAD_AXIS_PRESS;
++            if (l2) {
++                /* positional SDL buttons: north X, south B, west Y, east A on the Brick */
++                int up = SDL_GameControllerGetButton(g_controller, SDL_CONTROLLER_BUTTON_Y);
++                int down = SDL_GameControllerGetButton(g_controller, SDL_CONTROLLER_BUTTON_A);
++                int left = SDL_GameControllerGetButton(g_controller, SDL_CONTROLLER_BUTTON_X);
++                int right = SDL_GameControllerGetButton(g_controller, SDL_CONTROLLER_BUTTON_B);
++                if (up || down || left || right) {
++                    buttons &= ~(PAD_BUTTON_A | PAD_BUTTON_B | PAD_BUTTON_X | PAD_BUTTON_Y);
++                    if (cstickX == 0 && cstickY == 0) {
++                        cstickY = (s8)((up ? STICK_MAGNITUDE : 0) - (down ? STICK_MAGNITUDE : 0));
++                        cstickX = (s8)((right ? STICK_MAGNITUDE : 0) - (left ? STICK_MAGNITUDE : 0));
++                    }
++                }
++            }
 +            if (d && !l2) {
 +                buttons &= ~dmask;
 +                if (stickX == 0 && stickY == 0) {
@@ -452,3 +482,15 @@ diff -ruN a/pc/src/pc_vi.c b/pc/src/pc_vi.c
              fps_start = now;
              fps_count = 0;
          }
+diff -ruN a/src/static/jaudio_NES/internal/neosthread.c b/src/static/jaudio_NES/internal/neosthread.c
+--- a/src/static/jaudio_NES/internal/neosthread.c	2026-11-02 01:59:27
++++ b/src/static/jaudio_NES/internal/neosthread.c	2026-11-02 01:59:27
+@@ -50,7 +50,7 @@
+     /* Diagnostic: check NEOS output amplitude every 60 frames. Not on Switch: this runs on the
+      * audio thread (its own core there), and printing concurrently with the main thread spliced
+      * random memory into stdout.log (unsynchronised stdio). */
+-#ifndef TARGET_SWITCH
++#if !defined(TARGET_SWITCH) && !defined(TARGET_MORTAR) /* Mortar: it filled the journal */
+     {
+         static u32 neos_diag_ctr = 0;
+         if ((neos_diag_ctr++ % 60) == 0) {
