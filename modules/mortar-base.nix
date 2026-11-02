@@ -89,6 +89,19 @@
   # Compressed swap in RAM: 1 GB is tight for heavier tools (Claude Code
   # alone uses ~200 MB at startup).
   zramSwap.enable = true;
+  # Swap-in from zram is a decompression, not a disk seek: read one page,
+  # not eight (the default page-cluster 3 decompresses 7 pages nobody
+  # asked for).
+  boot.kernel.sysctl."vm.page-cluster" = 0;
+
+  # No transparent huge pages. With the kernel's default (`always`, and
+  # khugepaged filling a 2 MB page from a single used 4 KB one) every
+  # process's heap grew in 2 MB steps: 147 MB of the ~400 MB in use at
+  # idle were huge pages (the shell 61 MB, WirePlumber 18 MB,
+  # mortar-setupd 14 MB of its 20). Measured 2026-11-01 with a fresh foot:
+  # 27.5 MB RSS (11.2 MB anonymous) with THP on, 19.8 MB (3.5 MB) without.
+  # (`madvise` did not help: foot's heap still got 10 MB of huge pages.)
+  boot.kernelParams = [ "transparent_hugepage=never" ];
 
   services.udisks2.enable = false;
   programs.command-not-found.enable = false;
