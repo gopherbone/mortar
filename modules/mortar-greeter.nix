@@ -242,6 +242,13 @@ in
         user = "greeter";
       };
     };
+    # NixOS runs greetd as Type=idle (so boot messages do not scribble over
+    # a text greeter): systemd holds it until no other job is running, or
+    # 5 s. On the Brick a slow oneshot (the Bluetooth address, ~7 s) is
+    # always still running, so the shell started 6 s after greetd was due
+    # (2026-11-01: greetd started 21.6 s, the session 27.7 s). The greeter
+    # and the shell draw with KMS over any console text.
+    systemd.services.greetd.serviceConfig.Type = lib.mkForce "simple";
 
     # Passwordless profiles: succeed in the greetd auth stack before the
     # `login` substack (autoOrderRules numbers that one 10100).

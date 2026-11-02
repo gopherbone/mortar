@@ -209,7 +209,12 @@ in {
       RuntimeMaxUse = "16M";
       ForwardToConsole = true;
       TTYPath = "/dev/ttyS0";
-      MaxLevelConsole = "info";
+      # Warnings and errors only: journald writes to the 115200 baud UART
+      # synchronously, ~11 KB/s, and a boot logs ~70 KB at info. Measured
+      # on 2026-11-01: 300 info lines (32 KB) took journald 3.8 s to take
+      # in, and every service logging meanwhile waited on it. The whole
+      # journal is still in RAM (journalctl) and in the black-box logs.
+      MaxLevelConsole = mkDefault "warning";
     };
 
     # tmpfs for temp directories
