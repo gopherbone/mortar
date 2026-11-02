@@ -12,6 +12,7 @@
 
 #![cfg_attr(not(target_os = "linux"), allow(dead_code))]
 
+mod attention;
 mod chat;
 mod cli;
 mod keys;

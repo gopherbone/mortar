@@ -18,11 +18,13 @@ pub struct Chat {
     view: View,
     sys: Sys,
     sys_at: Instant,
+    /// The shell's "Needs you" while an approval waits.
+    shell: crate::attention::Notifier,
 }
 
 impl Chat {
     pub fn new(spawn: Spawn) -> Chat {
-        let mut c = Chat { spawn, claude: None, model: Model::new(), view: View::default(), sys: Sys::read(), sys_at: Instant::now() };
+        let mut c = Chat { spawn, claude: None, model: Model::new(), view: View::default(), sys: Sys::read(), sys_at: Instant::now(), shell: Default::default() };
         c.start();
         c
     }
@@ -71,6 +73,17 @@ fn attention() {
     }
 }
 
+impl Chat {
+    /// An approval waits: the shell shows "Needs you" until it is answered.
+    fn tell_shell(&mut self) {
+        let want = self.model.pending.front().map(|p| match self.model.pending.len() {
+            1 => format!("Approve: {}", p.title),
+            n => format!("Approve: {} (+{} more)", p.title, n - 1),
+        });
+        self.shell.update(want);
+    }
+}
+
 impl Screen for Chat {
     fn title(&self) -> &str {
         "Claude"
@@ -101,6 +114,7 @@ impl Screen for Chat {
             self.model.exited(code);
         }
         self.apply(outs);
+        self.tell_shell();
         if self.sys_at.elapsed() > Duration::from_secs(10) {
             self.sys = Sys::read();
             self.sys_at = Instant::now();
@@ -112,6 +126,7 @@ impl Screen for Chat {
     fn key(&mut self, code: u16, down: bool) {
         let outs = self.model.key(code, down, self.view.page_lines());
         self.apply(outs);
+        self.tell_shell();
     }
 
     fn reset_keys(&mut self) {
