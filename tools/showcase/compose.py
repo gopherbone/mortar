@@ -50,28 +50,17 @@ class Card:
     sub: str = ""
 
 
-# Long takes of real use, in order. The cuts land where the shell itself
-# changes scene (a launch, a switch), so it reads as one session.
+# Long takes of real use, in order: one session (capture.nix), so the cuts
+# only skip waits and off-camera set-up.
 BOARD = [
     Card(66, "Mortar", "NixOS for the TrimUI Brick"),
-    Take("boot", 0, 96),
-    Take("home"),
-    Take("launch-ai"),
-    Take("ai-ask", 0, 232),
-    Take("menu", 0, 116),
-    Take("launch-term"),
-    Take("switch"),
-    Take("quick"),
-    Take("launch-pico8", 0, 58),   # MENU > Games > PICO-8 ...
-    Take("launch-pico8", 96, 110),  # ... Splore boots (skips its blank start)
-    Take("play", 0, 58),           # MENU > Games: mortar-play ...
-    Take("play", 102, 58),         # ... its game list, a homebrew game
-    Take("play", 372, 60),
-    Take("choochoo", 0, 135),      # MENU > Music > ChooChooTracker
-    Take("running", 12, 116),      # everything still running, live previews
-    Take("close-home"),
-    Take("sleep"),
-    Take("night"),
+    Take("boot"),      # the boot replay, onto the Home dashboard
+    Take("running"),   # MENU: the Running page, switch, flip back
+    Take("cross"),     # the cross and its mosaics
+    Take("games"),     # a system's page, a game, its panel: save a state
+    Take("settings"),  # Display, Sound > Mixer, the volume pill
+    Take("terminal"),  # zsh, the keyboard, suggestion chips
+    Take("saver"),     # the cross left alone: the screensaver
     Card(84, "Mortar", "NixOS for the TrimUI Brick"),
 ]
 
