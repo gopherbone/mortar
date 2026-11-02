@@ -54,7 +54,11 @@
           }
           ./modules/mortar-greeter.nix
           ./modules/mortar-shell.nix
-          { mortar.shell.enable = true; }
+          {
+            mortar.shell.enable = true;
+            # boot straight into the shell (the greeter after Log out)
+            mortar.shell.autologin.user = "brick";
+          }
           ./modules/mortar-ai.nix
           { mortar.ai.enable = true; }
           ./modules/mortar-setup.nix

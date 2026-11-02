@@ -13,7 +13,8 @@
 //! toast JSON ({"title", "sub", "kind": "info"|"achievement", "sound", "haptic",
 //! "secs"}; `mortar-shell toast` builds it), boot (replay the boot screen),
 //! time manual|real|+MS (freeze UI time / step it, for test frames),
-//! prefs (the current settings).
+//! prefs (the current settings), attention JSON ({"op": "set"|"clear",
+//! "app", "text"}; `mortar-shell attention` builds it).
 //! The socket is $XDG_RUNTIME_DIR/mortar-shell.sock (mode 0600). Clients
 //! without one of their own (root over SSH) find the session's in
 //! /run/user/*/.
@@ -196,6 +197,10 @@ pub fn command(shell: &mut Shell, line: &str) -> Result<String, String> {
             shell.toast_json(arg)?;
             "ok".into()
         }
+        "attention" => {
+            shell.attention_json(arg)?;
+            "ok".into()
+        }
         "boot" => {
             shell.sui.play_boot();
             shell.sync_cover();
@@ -263,7 +268,6 @@ fn state(shell: &Shell) -> String {
         "socket": shell.socket_name,
         "overlay": shell.sui.menu_open() || shell.sui.page_open(),
         "category": shell.sui.menu_category().map(|c| c.name()),
-        "settings": shell.sui.settings_open(),
         "menu_page": shell.sui.menu_sub().map(|s| s.name()),
         "game_panel": shell.sui.game_panel(),
         "game_page": shell.sui.game_page(),
@@ -275,6 +279,9 @@ fn state(shell: &Shell) -> String {
                 "slots": s.slots.iter().map(|x| x.is_some()).collect::<Vec<_>>(), "fast_forward": s.fast_forward,
             }))).collect::<serde_json::Map<_, _>>(),
         })),
+        "menu_pages": shell.sui.menu_pages().iter().map(|s| s.name()).collect::<Vec<_>>(),
+        "attention": shell.attention.items(),
+        "widgets": shell.widget_out,
         "home": shell.visible_app().is_none() && !shell.sui.menu_open(),
         "ui": {
             "layer": shell.ui_layer(),

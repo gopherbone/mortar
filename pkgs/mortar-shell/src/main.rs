@@ -2,8 +2,10 @@
 //! mortar-shell: a controller-driven Wayland compositor for Mortar (NixOS on
 //! the TrimUI Brick). See DESIGN.md.
 
+mod about;
 mod apps;
 mod art;
+mod attention;
 #[cfg(target_os = "linux")]
 mod comp;
 mod config;
@@ -22,6 +24,7 @@ mod scene;
 mod sfx;
 mod shellui;
 mod tz;
+mod widgets;
 
 use mortar_ui::input::Button;
 use std::path::PathBuf;
@@ -53,6 +56,8 @@ fn main() -> ExitCode {
         Some("run") => run_cmd(&args[1..]),
         #[cfg(target_os = "linux")]
         Some("toast") => toast_cmd(&args[1..]),
+        #[cfg(target_os = "linux")]
+        Some("attention") => attention_cmd(&args[1..]),
         Some("-h" | "--help") | None => Err(String::new()),
         Some(other) => Err(format!("unknown command '{other}'")),
     };
@@ -86,10 +91,14 @@ commands:
                quit      (--ctl PATH before CMD)
   toast      show a toast in the running shell (for apps, e.g. achievements):
                toast [--achievement] [--sound NAME|none] [--secs S] TITLE [SUBTITLE]
+  attention  ask for the person's attention (Needs you: Home, Running, a toast):
+               attention set [--app ID] TEXT | attention clear [--app ID]
+               (ID defaults to $MORTAR_APP, set for every app the shell starts)
   sfx NAME   play a UI sound [--wav FILE: write it instead]
   preview    render shell screens / transition frames to PNG without a compositor
-               --screen boot|home|app|menu|menu-launch|menu-settings|launch|close|
-                        swap|osd|toast|achievement|flash|osk|osk-chips|osk-chips-focus|remote|wifi|bluetooth
+               --screen home|home-attention|running-attention|cross-settings|page-display|
+                        page-sound|page-mixer|page-wifi|page-timezone|page-about|page-controls|
+                        page-power|... (the full list: an unknown name prints it)
                --out FILE [--keys a,down,...] [--theme light|dark]
                [--at MS] [--frames N --every MS]   (FILE-000.png ...)
 
@@ -187,6 +196,30 @@ fn toast_cmd(args: &[String]) -> Result<(), String> {
         j["secs"] = s.into();
     }
     comp::ctl::client(&ctl, &["toast".to_string(), j.to_string()])?;
+    Ok(())
+}
+
+/// `mortar-shell attention set|clear [--app ID] [TEXT]`
+#[cfg(target_os = "linux")]
+fn attention_cmd(args: &[String]) -> Result<(), String> {
+    let mut app = std::env::var("MORTAR_APP").ok();
+    let mut ctl = comp::ctl::client_path();
+    let mut words = Vec::new();
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--app" => app = Some(it.next().ok_or("--app needs an id")?.clone()),
+            "--ctl" => ctl = PathBuf::from(it.next().ok_or("--ctl needs a path")?),
+            w => words.push(w.to_string()),
+        }
+    }
+    let op = match words.first().map(String::as_str) {
+        Some(o @ ("set" | "clear")) => o.to_string(),
+        _ => return Err("attention set [--app ID] TEXT | attention clear [--app ID]".into()),
+    };
+    let app = app.filter(|a| !a.is_empty()).ok_or("attention: --app ID (or run it from an app: $MORTAR_APP)")?;
+    let j = serde_json::json!({ "op": op, "app": app, "text": words[1..].join(" ") });
+    comp::ctl::client(&ctl, &["attention".to_string(), j.to_string()])?;
     Ok(())
 }
 

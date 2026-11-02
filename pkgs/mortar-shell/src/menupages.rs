@@ -1,7 +1,12 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-//! The MENU's glass pages (plan/mortar-cross-2.html): Wi-Fi, Bluetooth and
-//! the Mixer, frosted panels that slide in from the right over the cross.
+//! The MENU's glass pages (plan/mortar-cross-2.html): frosted panels that
+//! slide in from the right over the cross, one on top of the other (a
+//! stack: Settings > Sound > Mixer, Settings > Time zone > Europe). B or ◀
+//! goes back one page, MENU closes everything.
 //!
+//! - Display: brightness, palette (Day/Night), motion, reduce motion, the
+//!   screensaver (Off, 30 s to 5 min idle on the cross).
+//! - Sound: volume, the Mixer, UI sounds and their level, vibration.
 //! - Wi-Fi: on/off (rfkill, radio.rs), the connected network with its
 //!   signal (Details, Forget), nearby networks to join, "Other network…".
 //!   Through mortar-setupd (iwd): scan, connect, forget; secured networks
@@ -9,8 +14,19 @@
 //! - Bluetooth: on/off (rfkill and BlueZ power), paired devices (A connects
 //!   or disconnects, X forgets), "Pair new device" (discovery) and the
 //!   devices found, A pairs. Through mortar-setupd (BlueZ, its agent).
+//! - Time zone: regions, then their cities (the compositor loads the zones).
+//! - Updates (with mortar.update): check now / restart to update,
+//!   auto-check daily.
+//! - About: version and generation, storage, battery, temperature, the
+//!   device, and Controls (every button and chord).
+//! - Power: Sleep, sleep mode, sleep when idle, Restart, Power off and Log
+//!   out (the last three need a second A).
 //! - Mixer: Master, a fader per running app (its PipeWire streams), UI
-//!   sounds. ◀▶ pick a channel, ▲▼ ±5, A mutes.
+//!   sounds. ◀▶ pick a channel (◀ on Master goes back), ▲▼ ±5, A mutes.
+//!
+//! Rows: a level (A, then ◀▶ change it in steps of 10; A or B when done), a
+//! choice (A or ▶: the next value), a link (A or ▶ opens the page), an
+//! action, a fact (A: the whole text in a toast).
 //!
 //! A child module of `shellui` next to `cross`.
 
@@ -23,6 +39,15 @@ pub enum SubKind {
     Wifi,
     Bluetooth,
     Mixer,
+    Display,
+    Sound,
+    TimeZone,
+    /// A region's cities (the page's `region`).
+    TzCities,
+    Updates,
+    About,
+    Controls,
+    Power,
 }
 
 impl SubKind {
@@ -31,13 +56,91 @@ impl SubKind {
             SubKind::Wifi => "wifi",
             SubKind::Bluetooth => "bluetooth",
             SubKind::Mixer => "mixer",
+            SubKind::Display => "display",
+            SubKind::Sound => "sound",
+            SubKind::TimeZone => "timezone",
+            SubKind::TzCities => "timezone-cities",
+            SubKind::Updates => "updates",
+            SubKind::About => "about",
+            SubKind::Controls => "controls",
+            SubKind::Power => "power",
+        }
+    }
+
+    pub fn title(self) -> &'static str {
+        match self {
+            SubKind::Wifi => "Wi-Fi",
+            SubKind::Bluetooth => "Bluetooth",
+            SubKind::Mixer => "Mixer",
+            SubKind::Display => "Display",
+            SubKind::Sound => "Sound",
+            SubKind::TimeZone | SubKind::TzCities => "Time zone",
+            SubKind::Updates => "Updates",
+            SubKind::About => "About",
+            SubKind::Controls => "Controls",
+            SubKind::Power => "Power",
+        }
+    }
+
+    pub(super) fn icon(self) -> Ic {
+        match self {
+            SubKind::Wifi => Ic::Wifi,
+            SubKind::Bluetooth => Ic::Bt,
+            SubKind::Mixer => Ic::Music,
+            SubKind::Display => Ic::Screen,
+            SubKind::Sound => Ic::Vol,
+            SubKind::TimeZone | SubKind::TzCities => Ic::Clock,
+            SubKind::Updates => Ic::Update,
+            SubKind::About => Ic::Info,
+            SubKind::Controls => Ic::Pad,
+            SubKind::Power => Ic::Power,
         }
     }
 }
 
-/// A row of the Wi-Fi or Bluetooth page.
+/// A level row: A, then ◀▶.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Lv {
+    Brightness,
+    Volume,
+    UiVolume,
+}
+
+/// A choice row: A or ▶ picks the next value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum OptK {
+    Palette,
+    Motion,
+    ReduceMotion,
+    Screensaver,
+    UiSounds,
+    Haptics,
+    SleepMode,
+    IdleSleep,
+    AutoUpdate,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ActK {
+    Sleep,
+    Restart,
+    PowerOff,
+    Logout,
+    Update,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum FactK {
+    Version,
+    Storage,
+    Battery,
+    Temp,
+    Device,
+}
+
+/// A row of a page.
 #[derive(Clone, Debug, PartialEq, Eq)]
-enum SRow {
+pub(super) enum SRow {
     Label(&'static str),
     /// Greyed out: why there is nothing to do.
     Note(String, String),
@@ -52,24 +155,63 @@ enum SRow {
     Scan,
     /// A device found by the scan (address).
     Found(String),
+    Level(Lv),
+    Opt(OptK),
+    Link(SubKind),
+    Act(ActK),
+    Fact(FactK),
+    /// A line of the Controls page (index into CONTROLS).
+    Key(usize),
+    /// A time zone region and how many zones it has ("UTC": none).
+    Region(String, usize),
+    /// A zone (index into the loaded zones).
+    Zone(usize),
 }
 
 impl SRow {
     fn selectable(&self) -> bool {
         !matches!(self, SRow::Label(_) | SRow::Note(..))
     }
+    fn confirms(&self) -> bool {
+        matches!(self, SRow::Act(ActK::Restart | ActK::PowerOff | ActK::Logout))
+    }
 }
+
+/// Every button and chord (About > Controls): (group, keys, what, detail).
+pub(super) const CONTROLS: &[(&str, &str, &str, &str)] = &[
+    ("Everywhere", "MENU", "Open or close the menu", "From any app; closes every page at once"),
+    ("Everywhere", "MENU then A", "Back to the app before", "The menu opens on the last app"),
+    ("Everywhere", "VOL+ + VOL−", "Volume; both together: screenshot", "Saved in ~/Pictures/Screenshots"),
+    ("Everywhere", "POWER", "Tap: sleep or wake", "Any button also wakes it"),
+    ("Everywhere", "hold POWER", "The power menu", "Sleep, Restart, Power off"),
+    ("Games", "SELECT + MENU", "The game's own menu", "MENU alone opens Mortar's"),
+    ("In the menu", "◀▶ ▲▼", "Move; ◀ from Apps: Running", "B goes back one step"),
+    ("In the menu", "L1 / R1", "Running / Settings", "From anywhere in the cross"),
+    ("In the menu", "X / Y", "Close app / options", "On a window in Running"),
+    ("Home", "L1 / SELECT", "The menu on Apps", "R1: on Settings"),
+    ("Terminals", "START", "The on-screen keyboard", "Pad: A Enter, B Backspace, X Tab"),
+    ("Terminals", "L2 / R2", "Esc / hold for Ctrl", "SELECT: Ctrl+C; L1 R1: Page up/down"),
+    ("On-screen keyboard", "A / B", "Type / Backspace", "X Space, Y Enter"),
+    ("On-screen keyboard", "L1", "Shift; twice: caps lock", "R2: Ctrl for one key, L2: Esc"),
+    ("On-screen keyboard", "▲", "Into the suggestions", "From the top row; ◀▶ choose, A types"),
+    ("On-screen keyboard", "R1", "Type the suggestion", "The first one from the keys"),
+    ("On-screen keyboard", "START", "Hide the keyboard", "The app gets its full height back"),
+];
 
 pub(super) struct Sub {
     pub kind: SubKind,
     sel: usize,
     sel_key: Option<SRow>,
-    scroll: Spring,
     /// 0: in place; 1: off to the right.
     x: Spring,
     pub closing: bool,
     mix_sel: usize,
-    mix_scroll: Spring,
+    /// TzCities: which region.
+    region: Option<String>,
+    /// A level row is being adjusted (◀▶ change it).
+    adjusting: bool,
+    /// A row waiting for its confirming A.
+    confirm: Option<SRow>,
 }
 
 impl Sub {
@@ -80,20 +222,25 @@ impl Sub {
         if reduce {
             x.snap(0.0);
         }
-        Sub { kind, sel: 0, sel_key: None, scroll: Spring::new(0.0), x, closing: false, mix_sel: 0, mix_scroll: Spring::new(0.0) }
+        Sub { kind, sel: 0, sel_key: None, x, closing: false, mix_sel: 0, region: None, adjusting: false, confirm: None }
     }
 
     pub fn springs(&mut self) -> Vec<&mut Spring> {
-        vec![&mut self.scroll, &mut self.x, &mut self.mix_scroll]
+        vec![&mut self.x]
     }
 
     pub fn moving(&self) -> bool {
-        self.closing || !(self.scroll.rest() && self.x.rest() && self.mix_scroll.rest())
+        self.closing || !self.x.rest()
     }
 
     /// Gone after sliding out.
     pub fn gone(&self) -> bool {
         self.closing && self.x.x > 0.98
+    }
+
+    #[cfg(test)]
+    pub fn adjusting(&self) -> bool {
+        self.adjusting
     }
 }
 
@@ -189,12 +336,42 @@ fn bt_rows(v: &View) -> Vec<SRow> {
     r
 }
 
-fn sub_rows(kind: SubKind, v: &View) -> Vec<SRow> {
-    match kind {
-        SubKind::Wifi => wifi_rows(v),
-        SubKind::Bluetooth => bt_rows(v),
-        SubKind::Mixer => Vec::new(),
+/// The time zone regions ("UTC" last).
+fn tz_regions(zones: &[TzZone]) -> Vec<SRow> {
+    let mut regions: Vec<(String, usize)> = Vec::new();
+    for z in zones {
+        if z.id == "UTC" {
+            continue;
+        }
+        let r = crate::tz::region(&z.id);
+        match regions.iter_mut().find(|(n, _)| n == r) {
+            Some(e) => e.1 += 1,
+            None => regions.push((r.to_string(), 1)),
+        }
     }
+    regions.sort();
+    let mut v: Vec<SRow> = regions.into_iter().map(|(n, c)| SRow::Region(n, c)).collect();
+    v.push(SRow::Region("UTC".into(), 0));
+    v
+}
+
+fn tz_cities(zones: &[TzZone], region: &str) -> Vec<SRow> {
+    let mut idx: Vec<usize> = (0..zones.len()).filter(|i| crate::tz::region(&zones[*i].id) == region && zones[*i].id != "UTC").collect();
+    idx.sort_by_key(|i| crate::tz::pretty(&zones[*i].id).0);
+    idx.into_iter().map(SRow::Zone).collect()
+}
+
+fn controls_rows() -> Vec<SRow> {
+    let mut r = Vec::new();
+    let mut group = "";
+    for (i, (g, ..)) in CONTROLS.iter().enumerate() {
+        if *g != group {
+            group = g;
+            r.push(SRow::Label(g));
+        }
+        r.push(SRow::Key(i));
+    }
+    r
 }
 
 /// A mixer channel: Master, an app, or the shell's own sounds.
@@ -221,14 +398,41 @@ fn chan_state(c: Chan, v: &View, prefs: &Prefs) -> (u8, bool, bool) {
     }
 }
 
+/// A choice row's values and the chosen one.
+fn opt_values(k: OptK, prefs: &Prefs, v: &View) -> (Vec<&'static str>, usize) {
+    let onoff = |b: bool| (vec!["On", "Off"], if b { 0 } else { 1 });
+    match k {
+        OptK::Palette => (vec!["Day", "Night"], prefs.night as usize),
+        OptK::Motion => (Preset::ALL.iter().map(|p| p.name()).collect(), Preset::ALL.iter().position(|p| *p == prefs.motion).unwrap_or(0)),
+        OptK::ReduceMotion => onoff(prefs.reduce_motion),
+        OptK::Screensaver => (SAVER_LABELS.to_vec(), SAVER_CHOICES.iter().position(|m| *m == prefs.screensaver).unwrap_or(2)),
+        OptK::UiSounds => onoff(prefs.sounds),
+        OptK::Haptics => onoff(prefs.haptics),
+        OptK::SleepMode => (vec!["Suspend", "Screen off"], if prefs.suspend { 0 } else { 1 }),
+        OptK::IdleSleep => (IDLE_LABELS.to_vec(), IDLE_CHOICES.iter().position(|m| *m == prefs.idle_minutes).unwrap_or(0)),
+        OptK::AutoUpdate => onoff(v.update.is_some_and(|u| u.auto_check)),
+    }
+}
+
 const ROW_H: f32 = 84.0;
 const LBL_H: f32 = 44.0;
 const ROWS_TOP: f32 = 176.0;
 const ROWS_BOTTOM: f32 = H - HINT_H;
 const CH_W: f32 = 168.0;
 const CH_GAP: f32 = 18.0;
+/// L1/R1 in long lists.
+const PAGE_ROWS: usize = 6;
 
 impl ShellUi {
+    fn top_sub(&self) -> Option<&Sub> {
+        self.menu.as_ref()?.subs.iter().rev().find(|s| !s.closing)
+    }
+
+    fn top_sub_mut(&mut self) -> Option<&mut Sub> {
+        self.menu.as_mut()?.subs.iter_mut().rev().find(|s| !s.closing)
+    }
+
+    /// Push a page over the cross (or over the page in front).
     pub(super) fn open_sub(&mut self, kind: SubKind, v: &View) {
         let reduce = self.prefs.reduce_motion;
         let Some(m) = &mut self.menu else { return };
@@ -238,19 +442,37 @@ impl ShellUi {
             let ch = channels(v);
             s.mix_sel = v.current.and_then(|u| ch.iter().position(|c| *c == Chan::App(u))).unwrap_or(0);
         }
-        m.sub = Some(s);
+        m.subs.push(s);
         if kind == SubKind::Wifi && wifi_on(v) && v.net.is_some() {
             self.out.push(Out::Setup(Request::WifiScan));
         }
         self.fx(Sfx::Tab, Some(Haptic::Tick));
     }
 
+    /// The compositor loaded the zones (after Out::OpenTimeZone): the time
+    /// zone page opens on the current zone's region.
+    pub fn open_tz(&mut self, zones: Vec<TzZone>, current: String) {
+        self.tz_zones = zones;
+        let reduce = self.prefs.reduce_motion;
+        let Some(m) = self.menu.as_mut().filter(|m| !m.closing) else { return };
+        let mut s = Sub::new(SubKind::TimeZone, reduce);
+        let region = crate::tz::region(&current).to_string();
+        let rows = tz_regions(&self.tz_zones);
+        let key = rows.iter().find(|r| matches!(r, SRow::Region(n, _) if *n == region || (current == "UTC" && n == "UTC"))).cloned();
+        s.sel = key.as_ref().and_then(|k| rows.iter().position(|r| r == k)).unwrap_or(0);
+        s.sel_key = key;
+        m.subs.push(s);
+        self.fx(Sfx::Tab, Some(Haptic::Tick));
+        self.dirty = true;
+    }
+
+    /// Pop the page in front.
     fn close_sub(&mut self, v: &View) {
-        let Some(m) = &mut self.menu else { return };
-        let Some(s) = &mut m.sub else { return };
+        let reduce = self.prefs.reduce_motion;
+        let Some(s) = self.top_sub_mut() else { return };
         s.closing = true;
         s.x.set(1.0);
-        if self.prefs.reduce_motion {
+        if reduce {
             s.x.snap(1.0);
         }
         if s.kind == SubKind::Bluetooth && v.net.is_some_and(|n| n.bt.discovering) {
@@ -259,15 +481,24 @@ impl ShellUi {
         self.fx(Sfx::DrawerUp, Some(Haptic::Tick));
     }
 
+    /// The pages in front, bottom to top (for `ctl state`).
+    pub fn menu_pages(&self) -> Vec<SubKind> {
+        self.menu.as_ref().map(|m| m.subs.iter().filter(|s| !s.closing).map(|s| s.kind).collect()).unwrap_or_default()
+    }
+
     /// The page in front (for `ctl state`).
     pub fn menu_sub(&self) -> Option<SubKind> {
-        self.menu.as_ref()?.sub.as_ref().filter(|s| !s.closing).map(|s| s.kind)
+        self.top_sub().map(|s| s.kind)
     }
 
     /// The compositor should keep mortar-setupd's state fresh (Settings or
     /// a Wi-Fi/Bluetooth page shows).
     pub fn wants_net(&self) -> bool {
-        self.menu.as_ref().is_some_and(|m| !m.closing && m.on_cross() && (m.cat == Cat::Settings || m.sub.as_ref().is_some_and(|s| s.kind != SubKind::Mixer)))
+        let Some(m) = self.menu.as_ref().filter(|m| !m.closing && m.on_cross()) else { return false };
+        match self.top_sub() {
+            Some(s) => matches!(s.kind, SubKind::Wifi | SubKind::Bluetooth),
+            None => m.cat == Cat::Settings,
+        }
     }
 
     /// The Mixer page shows: poll the streams.
@@ -275,35 +506,103 @@ impl ShellUi {
         self.menu_sub() == Some(SubKind::Mixer)
     }
 
-    /// Drop a page that slid out.
+    /// Drop pages that slid out.
     pub(super) fn sync_sub(&mut self) {
-        if let Some(m) = &mut self.menu
-            && m.sub.as_ref().is_some_and(|s| s.gone())
-        {
-            m.sub = None;
-            self.dirty = true;
+        if let Some(m) = &mut self.menu {
+            let n = m.subs.len();
+            m.subs.retain(|s| !s.gone());
+            if m.subs.len() != n {
+                self.dirty = true;
+            }
         }
     }
 
+    /// The rows of a page.
+    fn page_rows(&self, s: &Sub, v: &View) -> Vec<SRow> {
+        match s.kind {
+            SubKind::Wifi => wifi_rows(v),
+            SubKind::Bluetooth => bt_rows(v),
+            SubKind::Mixer => Vec::new(),
+            SubKind::Display => vec![SRow::Level(Lv::Brightness), SRow::Opt(OptK::Palette), SRow::Opt(OptK::Motion), SRow::Opt(OptK::ReduceMotion), SRow::Opt(OptK::Screensaver)],
+            SubKind::Sound => vec![SRow::Level(Lv::Volume), SRow::Link(SubKind::Mixer), SRow::Opt(OptK::UiSounds), SRow::Level(Lv::UiVolume), SRow::Opt(OptK::Haptics)],
+            SubKind::TimeZone => tz_regions(&self.tz_zones),
+            SubKind::TzCities => tz_cities(&self.tz_zones, s.region.as_deref().unwrap_or("")),
+            SubKind::Updates => match v.update {
+                Some(_) => vec![SRow::Act(ActK::Update), SRow::Opt(OptK::AutoUpdate)],
+                None => vec![SRow::Note("Updates are off".into(), "mortar.update.enable".into())],
+            },
+            SubKind::About => vec![
+                SRow::Fact(FactK::Version),
+                SRow::Fact(FactK::Storage),
+                SRow::Fact(FactK::Battery),
+                SRow::Fact(FactK::Temp),
+                SRow::Fact(FactK::Device),
+                SRow::Link(SubKind::Controls),
+            ],
+            SubKind::Controls => controls_rows(),
+            SubKind::Power => vec![
+                SRow::Act(ActK::Sleep),
+                SRow::Opt(OptK::SleepMode),
+                SRow::Opt(OptK::IdleSleep),
+                SRow::Act(ActK::Restart),
+                SRow::Act(ActK::PowerOff),
+                SRow::Act(ActK::Logout),
+            ],
+        }
+    }
+
+    /// The selected row's index among the selectable ones.
+    fn cur_of(s: &Sub, sel_rows: &[&SRow]) -> usize {
+        s.sel_key.as_ref().and_then(|k| sel_rows.iter().position(|r| *r == k)).unwrap_or(s.sel).min(sel_rows.len().saturating_sub(1))
+    }
+
     pub(super) fn sub_button(&mut self, b: Button, repeat: bool, v: &View) {
-        let Some(kind) = self.menu.as_ref().and_then(|m| m.sub.as_ref()).filter(|s| !s.closing).map(|s| s.kind) else { return };
+        let Some(kind) = self.top_sub().map(|s| s.kind) else { return };
         if kind == SubKind::Mixer {
             self.mixer_button(b, repeat, v);
             return;
         }
-        let rows = sub_rows(kind, v);
+        let Some(s) = self.top_sub() else { return };
+        let rows = self.page_rows(s, v);
         let sel_rows: Vec<&SRow> = rows.iter().filter(|r| r.selectable()).collect();
-        let Some(s) = self.menu.as_mut().and_then(|m| m.sub.as_mut()) else { return };
-        let cur = s.sel_key.as_ref().and_then(|k| sel_rows.iter().position(|r| *r == k)).unwrap_or(s.sel).min(sel_rows.len().saturating_sub(1));
+        let cur = Self::cur_of(s, &sel_rows);
+        let row = sel_rows.get(cur).map(|r| (*r).clone());
+        let Some(s) = self.top_sub_mut() else { return };
         s.sel = cur;
+        if s.adjusting {
+            match b {
+                Button::Left | Button::Right => {
+                    if let Some(SRow::Level(l)) = row {
+                        self.adjust_level(l, b == Button::Right, v);
+                    }
+                    return;
+                }
+                Button::A | Button::B => {
+                    if !repeat {
+                        s.adjusting = false;
+                        self.fx(Sfx::Tab, Some(Haptic::Tick));
+                    }
+                    return;
+                }
+                // anything else leaves adjust mode and does what it does
+                _ => s.adjusting = false,
+            }
+        }
         match b {
-            Button::Up | Button::Down => {
-                let n = if b == Button::Up { cur.saturating_sub(1) } else { (cur + 1).min(sel_rows.len().saturating_sub(1)) };
+            Button::Up | Button::Down | Button::L1 | Button::R1 => {
+                let last = sel_rows.len().saturating_sub(1);
+                let n = match b {
+                    Button::Up => cur.saturating_sub(1),
+                    Button::Down => (cur + 1).min(last),
+                    Button::L1 => cur.saturating_sub(PAGE_ROWS),
+                    _ => (cur + PAGE_ROWS).min(last),
+                };
                 if n == cur {
                     self.fx(Sfx::Deny, None);
                 } else {
                     s.sel = n;
                     s.sel_key = sel_rows.get(n).map(|r| (*r).clone());
+                    s.confirm = None;
                     self.fx(Sfx::Tick, Some(Haptic::Tick));
                 }
             }
@@ -312,26 +611,151 @@ impl ShellUi {
                 self.out.push(Out::Setup(Request::WifiScan));
                 self.fx(Sfx::Tab, Some(Haptic::Tick));
             }
-            Button::X if !repeat => match sel_rows.get(cur) {
+            Button::X if !repeat => match row {
                 Some(SRow::Dev(addr)) => {
-                    let name = dev_name(v, addr);
+                    let name = dev_name(v, &addr);
                     self.out.push(Out::Setup(Request::BtForget { address: addr.clone() }));
                     self.show_toast(Toast { sub: name, sound: None, ..Toast::info("Forgot") });
                     self.fx(Sfx::Close, Some(Haptic::Double));
                 }
                 _ => self.fx(Sfx::Deny, None),
             },
-            Button::A if !repeat => {
-                let row = sel_rows.get(cur).map(|r| (*r).clone());
-                self.sub_activate(kind, row, v);
-            }
+            // ▶ goes forward: opens a page, picks the next value, adjusts
+            Button::Right if !repeat => match row {
+                Some(r @ (SRow::Link(_) | SRow::Region(..) | SRow::Opt(_) | SRow::Level(_))) => self.sub_activate(kind, Some(r), v),
+                _ => self.fx(Sfx::Deny, None),
+            },
+            Button::A | Button::Start if !repeat => self.sub_activate(kind, row, v),
             _ => {}
+        }
+    }
+
+    /// ◀▶ while a page's level row is adjusted.
+    fn adjust_level(&mut self, l: Lv, up: bool, v: &View) {
+        let d = if up { 10 } else { -10 };
+        match l {
+            Lv::Brightness if v.sys.brightness.is_some() => self.out.push(Out::Brightness(d)),
+            Lv::Volume if v.volume.is_some() => self.out.push(Out::Volume(d)),
+            Lv::UiVolume => {
+                let nl = (self.prefs.sound_volume as i32 + d).clamp(0, 100) as u8;
+                self.prefs.sound_volume = nl;
+                self.out.push(Out::Prefs);
+                self.fx(Sfx::Vol(nl), Some(Haptic::Tick));
+            }
+            _ => self.fx(Sfx::Deny, None),
         }
     }
 
     fn sub_activate(&mut self, kind: SubKind, row: Option<SRow>, v: &View) {
         let net = v.net;
+        // a confirming row: the second A does it, any other row forgets it
+        if let Some(r) = row.as_ref().filter(|r| r.confirms() || matches!(r, SRow::Act(ActK::Update) if v.update.is_some_and(|u| u.ready))) {
+            let Some(s) = self.top_sub_mut() else { return };
+            if s.confirm.as_ref() != Some(r) {
+                s.confirm = Some(r.clone());
+                self.fx(Sfx::Deny, Some(Haptic::Double));
+                return;
+            }
+            s.confirm = None;
+        }
         match (kind, row) {
+            (_, Some(SRow::Level(l))) => {
+                let has = match l {
+                    Lv::Brightness => v.sys.brightness.is_some(),
+                    Lv::Volume => v.volume.is_some(),
+                    Lv::UiVolume => true,
+                };
+                match self.top_sub_mut() {
+                    Some(s) if has => {
+                        s.adjusting = true;
+                        self.fx(Sfx::Tab, Some(Haptic::Tick));
+                    }
+                    _ => self.fx(Sfx::Deny, None),
+                }
+            }
+            (_, Some(SRow::Opt(k))) => {
+                let p = &mut self.prefs;
+                match k {
+                    OptK::Palette => p.night = !p.night,
+                    OptK::Motion => {
+                        let i = Preset::ALL.iter().position(|x| *x == p.motion).unwrap_or(0);
+                        p.motion = Preset::ALL[(i + 1) % Preset::ALL.len()];
+                    }
+                    OptK::ReduceMotion => p.reduce_motion = !p.reduce_motion,
+                    OptK::Screensaver => {
+                        let i = SAVER_CHOICES.iter().position(|m| *m == p.screensaver).unwrap_or(2);
+                        p.screensaver = SAVER_CHOICES[(i + 1) % SAVER_CHOICES.len()];
+                    }
+                    OptK::UiSounds => p.sounds = !p.sounds,
+                    OptK::Haptics => p.haptics = !p.haptics,
+                    OptK::SleepMode => p.suspend = !p.suspend,
+                    OptK::IdleSleep => {
+                        let i = IDLE_CHOICES.iter().position(|m| *m == p.idle_minutes).unwrap_or(0);
+                        p.idle_minutes = IDLE_CHOICES[(i + 1) % IDLE_CHOICES.len()];
+                    }
+                    OptK::AutoUpdate => {
+                        if let Some(u) = v.update {
+                            self.out.push(Out::UpdateAuto(!u.auto_check));
+                        }
+                        self.fx(Sfx::Tab, Some(Haptic::Tick));
+                        return;
+                    }
+                }
+                self.out.push(Out::Prefs);
+                // heard and felt with the new value
+                self.fx(Sfx::Tab, Some(Haptic::Tick));
+            }
+            (_, Some(SRow::Link(k))) => self.open_sub(k, v),
+            (_, Some(SRow::Act(a))) => match a {
+                ActK::Sleep => {
+                    self.close_menu();
+                    self.out.push(Out::Sleep);
+                }
+                ActK::Restart => {
+                    self.out.push(Out::Reboot);
+                    self.fx(Sfx::Close, Some(Haptic::Long));
+                }
+                ActK::PowerOff => {
+                    self.out.push(Out::PowerOff);
+                    self.fx(Sfx::Close, Some(Haptic::Long));
+                }
+                ActK::Logout => {
+                    self.out.push(Out::Logout);
+                    self.fx(Sfx::Close, Some(Haptic::Long));
+                }
+                ActK::Update => match v.update {
+                    Some(u) if u.ready => {
+                        self.out.push(Out::Reboot);
+                        self.fx(Sfx::Close, Some(Haptic::Long));
+                    }
+                    Some(u) if u.busy => self.show_toast(Toast::info(u.message.clone())),
+                    Some(_) => {
+                        self.out.push(Out::UpdateCheck);
+                        self.show_toast(Toast::info("Checking for updates…"));
+                    }
+                    None => self.fx(Sfx::Deny, None),
+                },
+            },
+            (_, Some(SRow::Fact(f))) => {
+                let (t, s) = fact_text(f, v);
+                self.show_toast(Toast { sub: s, sound: None, ..Toast::info(t) });
+            }
+            (_, Some(SRow::Region(r, _))) if r == "UTC" => self.set_zone("UTC".into()),
+            (_, Some(SRow::Region(r, _))) => {
+                self.open_sub(SubKind::TzCities, v);
+                let cities = tz_cities(&self.tz_zones, &r);
+                let cur = cities.iter().position(|c| matches!(c, SRow::Zone(i) if self.tz_zones[*i].id == v.timezone)).unwrap_or(0);
+                if let Some(s) = self.top_sub_mut() {
+                    s.region = Some(r);
+                    s.sel = cur;
+                    s.sel_key = cities.get(cur).cloned();
+                }
+            }
+            (_, Some(SRow::Zone(i))) => {
+                if let Some(z) = self.tz_zones.get(i) {
+                    self.set_zone(z.id.clone());
+                }
+            }
             (SubKind::Wifi, Some(SRow::Toggle)) => match v.radios.wifi {
                 Some(on) => {
                     self.out.push(Out::Radio(crate::radio::Radio::Wifi, !on));
@@ -373,7 +797,7 @@ impl ShellUi {
             (SubKind::Wifi, Some(SRow::Forget)) => {
                 let Some(ssid) = net.and_then(|n| n.wifi.ssid.clone()) else { return };
                 self.out.push(Out::Setup(Request::WifiForget { ssid: ssid.clone() }));
-                if let Some(s) = self.menu.as_mut().and_then(|m| m.sub.as_mut()) {
+                if let Some(s) = self.top_sub_mut() {
                     s.sel_key = Some(SRow::Toggle);
                 }
                 self.show_toast(Toast { sub: ssid, sound: None, ..Toast::info("Forgot") });
@@ -423,14 +847,33 @@ impl ShellUi {
         }
     }
 
+    /// A zone was picked: set it and go back to Settings (both time zone
+    /// pages slide out).
+    fn set_zone(&mut self, id: String) {
+        self.out.push(Out::SetTimeZone(id));
+        let reduce = self.prefs.reduce_motion;
+        if let Some(m) = &mut self.menu {
+            for s in m.subs.iter_mut().filter(|s| matches!(s.kind, SubKind::TimeZone | SubKind::TzCities)) {
+                s.closing = true;
+                s.x.set(1.0);
+                if reduce {
+                    s.x.snap(1.0);
+                }
+            }
+        }
+        self.fx(Sfx::Open, Some(Haptic::Double));
+    }
+
     fn mixer_button(&mut self, b: Button, repeat: bool, v: &View) {
         let ch = channels(v);
         let prefs = self.prefs.clone();
-        let Some(s) = self.menu.as_mut().and_then(|m| m.sub.as_mut()) else { return };
+        let Some(s) = self.top_sub_mut() else { return };
         s.mix_sel = s.mix_sel.min(ch.len().saturating_sub(1));
         let c = ch[s.mix_sel];
         let (level, muted, live) = chan_state(c, v, &prefs);
         match b {
+            // ◀ on the first channel goes back, like every page
+            Button::Left if s.mix_sel == 0 && !repeat => self.close_sub(v),
             Button::Left | Button::Right => {
                 let n = if b == Button::Left { s.mix_sel.saturating_sub(1) } else { (s.mix_sel + 1).min(ch.len() - 1) };
                 if n == s.mix_sel {
@@ -487,27 +930,49 @@ impl ShellUi {
             let muted = chan_state(c, v, &self.prefs).1;
             return vec![("◀▶", "Channel"), ("▲▼", "Level"), ("A", if muted { "Unmute" } else { "Mute" }), ("B", "Back")];
         }
-        let rows = sub_rows(s.kind, v);
+        if s.adjusting {
+            return vec![("◀▶", "Adjust"), ("A", "Done"), ("MENU", "Close")];
+        }
+        let rows = self.page_rows(s, v);
         let sel: Vec<&SRow> = rows.iter().filter(|r| r.selectable()).collect();
-        let cur = s.sel_key.as_ref().and_then(|k| sel.iter().position(|r| *r == k)).unwrap_or(s.sel).min(sel.len().saturating_sub(1));
+        let cur = Self::cur_of(s, &sel);
         let mut h = vec![("▲▼", "Choose")];
+        if matches!(s.kind, SubKind::TimeZone | SubKind::TzCities | SubKind::Controls) {
+            h.push(("L1/R1", "Page"));
+        }
         let a = match sel.get(cur) {
-            Some(SRow::Toggle) => "Switch",
+            Some(SRow::Toggle) => Some("Switch"),
             Some(SRow::Dev(addr)) => {
                 if v.net.and_then(|n| n.bt.devices.iter().find(|d| d.address == *addr)).is_some_and(|d| d.connected) {
-                    "Disconnect"
+                    Some("Disconnect")
                 } else {
-                    "Connect"
+                    Some("Connect")
                 }
             }
-            Some(SRow::Join(_)) => "Join",
-            Some(SRow::Found(_)) => "Pair",
-            Some(SRow::Forget) => "Forget",
-            Some(SRow::Scan) if v.net.is_some_and(|n| n.bt.discovering) => "Stop",
-            Some(SRow::Scan) => "Search",
-            _ => "Open",
+            Some(SRow::Join(_)) => Some("Join"),
+            Some(SRow::Found(_)) => Some("Pair"),
+            Some(SRow::Forget) => Some("Forget"),
+            Some(SRow::Scan) if v.net.is_some_and(|n| n.bt.discovering) => Some("Stop"),
+            Some(SRow::Scan) => Some("Search"),
+            Some(SRow::Level(_)) => Some("Adjust"),
+            Some(SRow::Opt(_)) => Some("Change"),
+            Some(SRow::Act(ActK::Sleep)) => Some("Sleep"),
+            Some(SRow::Act(ActK::Update)) if v.update.is_some_and(|u| u.ready) => Some("Restart"),
+            Some(SRow::Act(ActK::Update)) => Some("Check"),
+            Some(r) if s.confirm.as_ref() == Some(*r) => Some("Confirm"),
+            Some(SRow::Act(ActK::Restart)) => Some("Restart"),
+            Some(SRow::Act(ActK::PowerOff)) => Some("Power off"),
+            Some(SRow::Act(ActK::Logout)) => Some("Log out"),
+            Some(SRow::Fact(_)) => Some("Show"),
+            Some(SRow::Region(n, _)) if n == "UTC" => Some("Set"),
+            Some(SRow::Zone(_)) => Some("Set"),
+            Some(SRow::Key(_)) => None,
+            Some(_) => Some("Open"),
+            None => None,
         };
-        h.push(("A", a));
+        if let Some(a) = a {
+            h.push(("A", a));
+        }
         if matches!(sel.get(cur), Some(SRow::Dev(_))) {
             h.push(("X", "Forget"));
         }
@@ -527,14 +992,14 @@ impl ShellUi {
         let accent = m.cat.accent(pal);
         glass(b, pal, g, 0.0, y0, W, h, 0.62);
         // header: serif title, a mono line, an icon block with a hard shadow
-        let (title, line, icon) = match s.kind {
-            SubKind::Wifi => ("Wi-Fi", wifi_line(v), Ic::Wifi),
-            SubKind::Bluetooth => ("Bluetooth", bt_line(v), Ic::Bt),
-            SubKind::Mixer => ("Mixer", "Each app's level, then the master".to_string(), Ic::Music),
+        let title = match s.kind {
+            SubKind::TzCities => s.region.clone().unwrap_or_default(),
+            k => k.title().to_string(),
         };
+        let line = self.page_line(s, v);
         let tst = ts(Face::SerifItalic, 64.0, pal.ink).line_height(1.0);
         let top = y0 + 22.0;
-        let tw = b.text(40.0, top, title, &tst);
+        let tw = b.text(40.0, top, &title, &tst);
         let mono = ts(Face::Mono400, 18.0, pal.soft);
         let base = top + 64.0 * 0.82;
         let lw = W - 40.0 - 64.0 - 24.0 - (40.0 + tw + 18.0);
@@ -544,19 +1009,41 @@ impl ShellUi {
         b.rect(bx + 8.0, by + 8.0, 64.0, 64.0, pal.dark);
         b.rect(bx, by, 64.0, 64.0, if s.kind == SubKind::Mixer { accent } else { Cat::Settings.accent(pal) });
         b.frame(bx, by, 64.0, 64.0, 2.0, pal.dark);
-        draw_icon(b, icon, bx + 32.0, by + 32.0, 40.0, pal, pal.dark);
+        draw_icon(b, s.kind.icon(), bx + 32.0, by + 32.0, 40.0, pal, pal.dark);
         if s.kind == SubKind::Mixer {
-            self.draw_mixer(b, pal, v, s, accent);
+            self.draw_mixer(b, pal, v, s);
         } else {
             self.draw_sub_rows(b, pal, v, s);
         }
         b.pop();
     }
 
+    /// The header's mono line.
+    fn page_line(&self, s: &Sub, v: &View) -> String {
+        let p = &self.prefs;
+        match s.kind {
+            SubKind::Wifi => wifi_line(v),
+            SubKind::Bluetooth => bt_line(v),
+            SubKind::Mixer => "Each app's level, then the master".into(),
+            SubKind::Display => format!("{} · {}{}", if p.night { "Night" } else { "Day" }, p.motion.name(), if p.reduce_motion { " · reduced" } else { "" }),
+            SubKind::Sound => match v.volume {
+                Some(x) if v.muted => format!("Muted ({x}%) · UI sounds {}", if p.sounds { "on" } else { "off" }),
+                Some(x) => format!("Volume {x}% · UI sounds {}", if p.sounds { "on" } else { "off" }),
+                None => format!("UI sounds {}", if p.sounds { "on" } else { "off" }),
+            },
+            SubKind::TimeZone => format!("{} · {}", crate::tz::pretty(v.timezone).0, v.sys.time),
+            SubKind::TzCities => format!("{} zones · now {}", tz_cities(&self.tz_zones, s.region.as_deref().unwrap_or("")).len(), crate::tz::pretty(v.timezone).0),
+            SubKind::Updates => v.update.map(|u| u.message.clone()).unwrap_or_else(|| "Off".into()),
+            SubKind::About => format!("{} · {}", v.host, v.dash.about.and_then(|a| a.version.clone()).unwrap_or_else(|| "Mortar".into())),
+            SubKind::Controls => "Every button and chord".into(),
+            SubKind::Power => if p.suspend { "Sleep suspends · power key wakes".into() } else { "Sleep turns the screen off".into() },
+        }
+    }
+
     fn draw_sub_rows(&self, b: &mut B, pal: &Pal, v: &View, s: &Sub) {
-        let rows = sub_rows(s.kind, v);
+        let rows = self.page_rows(s, v);
         let sel_rows: Vec<&SRow> = rows.iter().filter(|r| r.selectable()).collect();
-        let cur = s.sel_key.as_ref().and_then(|k| sel_rows.iter().position(|r| *r == k)).unwrap_or(s.sel).min(sel_rows.len().saturating_sub(1));
+        let cur = Self::cur_of(s, &sel_rows);
         // where the selection is, to scroll it into view
         let mut y = 0.0;
         let mut sel_y = 0.0;
@@ -571,15 +1058,19 @@ impl ShellUi {
             y += if matches!(r, SRow::Label(_)) { LBL_H } else { ROW_H };
         }
         let view_h = ROWS_BOTTOM - ROWS_TOP - 8.0;
-        let off = sel_scroll(sel_y, y, view_h);
-        b.clip(Some([0.0, ROWS_TOP - 8.0, W, ROWS_BOTTOM - ROWS_TOP + 8.0]));
+        // whole rows: never a half-cut row under the header
+        let off = (sel_scroll(sel_y, y, view_h) / ROW_H).ceil() * ROW_H;
+        // rows scrolled up are cut under the header, not drawn over it
+        b.clip(Some([0.0, ROWS_TOP - 4.0, W, ROWS_BOTTOM - ROWS_TOP + 4.0]));
         let mut y = ROWS_TOP - off;
         let mut idx = 0;
         let sel_col = Cat::Settings.accent(pal);
         for r in &rows {
             if let SRow::Label(t) = r {
                 let st = ts(Face::Mono400, 16.0, pal.soft).tracking(0.08);
-                b.text(40.0, y + 16.0, &t.to_uppercase(), &st);
+                if y + LBL_H > ROWS_TOP - 8.0 && y < ROWS_BOTTOM {
+                    b.text(40.0, y + 16.0, &t.to_uppercase(), &st);
+                }
                 y += LBL_H;
                 continue;
             }
@@ -591,32 +1082,40 @@ impl ShellUi {
                 y += ROW_H;
                 continue;
             }
+            let confirm = on && s.confirm.as_ref() == Some(r);
             if on {
-                b.rect(0.0, y, W, ROW_H, sel_col);
+                b.rect(0.0, y, W, ROW_H, if confirm { pal.orange } else { sel_col });
             }
-            let (title, sub) = Self::row_text(s.kind, r, v);
+            let (title, mut sub) = self.row_text(s.kind, r, v);
+            if confirm {
+                sub = format!("Press A again to {}", title.to_lowercase());
+            } else if on && s.adjusting {
+                sub = "◀▶ to change · A when done".into();
+            }
             let dis = matches!(r, SRow::Note(..));
             let ink = if on { pal.dark } else { pal.ink };
             b.push_alpha(if dis { 0.4 } else { 1.0 });
             let tst = if on { ts(Face::SerifItalic, 42.0, ink).line_height(1.0) } else { ts(Face::Body600, 30.0, ink).line_height(1.1) };
             let sst = ts(Face::Mono400, 18.0, if on { pal.dark } else { pal.soft });
-            let ttop = y + ROW_H / 2.0 - (tst.line_px() + sst.line_px()) / 2.0;
-            let rw = self.draw_row_right(b, pal, v, r, on, y);
+            let sub_h = if sub.is_empty() { 0.0 } else { sst.line_px() };
+            let ttop = y + ROW_H / 2.0 - (tst.line_px() + sub_h) / 2.0;
+            let rw = self.draw_row_right(b, pal, v, s, r, on, y);
             let maxw = W - 40.0 - rw - 40.0 - 16.0;
             let t = b.fit(&title, &tst, maxw);
             b.text(40.0, ttop, &t, &tst);
             let sb = b.fit(&sub, &sst, maxw);
-            b.text(40.0, ttop + tst.line_px(), &sb, &sst);
+            arrow_text(b, 40.0, ttop + tst.line_px(), &sb, &sst, true);
             b.pop_alpha();
             y += ROW_H;
         }
         b.clip(None);
     }
 
-    /// Title, subtitle, and a plain right-hand value of a row.
-    fn row_text(kind: SubKind, r: &SRow, v: &View) -> (String, String) {
+    /// Title and subtitle of a row.
+    fn row_text(&self, kind: SubKind, r: &SRow, v: &View) -> (String, String) {
         let w = v.net.map(|n| &n.wifi);
         let bt = v.net.map(|n| &n.bt);
+        let p = &self.prefs;
         match r {
             SRow::Toggle if kind == SubKind::Bluetooth => {
                 let on = bt_on(v);
@@ -674,12 +1173,11 @@ impl ShellUi {
             }
             SRow::Scan => {
                 let disc = bt.is_some_and(|b| b.discovering);
-                let (t, s) = match bt.and_then(|b| b.passkey.clone()) {
+                match bt.and_then(|b| b.passkey.clone()) {
                     Some(code) => ("Pairing…".to_string(), format!("Code {code}. If the device shows it too, confirm it there")),
                     None if disc => ("Searching…".to_string(), "Put the device in pairing mode · A to stop".to_string()),
                     None => ("Pair new device".to_string(), "Search for headphones, controllers, keyboards".to_string()),
-                };
-                (t, s)
+                }
             }
             SRow::Found(addr) => {
                 let d = bt.and_then(|b| b.devices.iter().find(|d| d.address == *addr));
@@ -688,21 +1186,62 @@ impl ShellUi {
                 let kind = d.map(|d| d.kind_label()).unwrap_or("Device");
                 (name, if busy { format!("{kind} · pairing…") } else { format!("{kind} · A to pair") })
             }
+            SRow::Level(Lv::Brightness) => ("Brightness".into(), if v.sys.brightness.is_some() { "A to adjust".into() } else { "No backlight".into() }),
+            SRow::Level(Lv::Volume) => ("Volume".into(), if v.muted { "Muted · A to adjust".into() } else { "The speaker or headphones".into() }),
+            SRow::Level(Lv::UiVolume) => ("UI sound level".into(), "Clicks and chimes, before the volume".into()),
+            SRow::Opt(OptK::Palette) => ("Palette".into(), "Day: light ground · Night: dark".into()),
+            SRow::Opt(OptK::Motion) => ("Motion".into(), "How the springs feel".into()),
+            SRow::Opt(OptK::ReduceMotion) => ("Reduce motion".into(), "No overshoot; patterns stand still".into()),
+            SRow::Opt(OptK::Screensaver) => ("Screensaver".into(), "The cross's pattern fills the screen when idle".into()),
+            SRow::Opt(OptK::UiSounds) => ("UI sounds".into(), "Clicks, swooshes, the chime".into()),
+            SRow::Opt(OptK::Haptics) => ("Vibration".into(), "A tick on every move".into()),
+            SRow::Opt(OptK::SleepMode) => ("Sleep mode".into(), if p.suspend { "Saves the battery · apps pause".into() } else { "Apps keep running · uses more battery".into() }),
+            SRow::Opt(OptK::IdleSleep) => ("Sleep when idle".into(), "With no button pressed".into()),
+            SRow::Opt(OptK::AutoUpdate) => ("Auto-check daily".into(), "Downloads in the background".into()),
+            SRow::Link(SubKind::Mixer) => ("Mixer".into(), "A level for each app".into()),
+            SRow::Link(SubKind::Controls) => ("Controls".into(), "Every button and chord".into()),
+            SRow::Link(k) => (k.title().into(), String::new()),
+            SRow::Act(ActK::Sleep) => ("Sleep".into(), if p.suspend { "Suspend · the power key wakes it".into() } else { "Screen off · any button wakes it".into() }),
+            SRow::Act(ActK::Restart) => ("Restart".into(), "Apps close".into()),
+            SRow::Act(ActK::PowerOff) => ("Power off".into(), "Apps close".into()),
+            SRow::Act(ActK::Logout) => ("Log out".into(), "Apps close; the greeter appears".into()),
+            SRow::Act(ActK::Update) => match v.update {
+                Some(u) if u.ready => ("Restart to update".into(), u.message.clone()),
+                Some(u) if u.busy => (u.message.clone(), "Working in the background".into()),
+                Some(u) => ("Check now".into(), u.message.clone()),
+                None => ("Updates".into(), "Off".into()),
+            },
+            SRow::Fact(f) => fact_text(*f, v),
+            SRow::Key(i) => {
+                let (_, _, what, detail) = CONTROLS[*i];
+                (what.into(), detail.into())
+            }
+            SRow::Region(n, _) if n == "UTC" => ("UTC".into(), "Coordinated Universal Time".into()),
+            SRow::Region(n, c) => (n.clone(), format!("{c} zones")),
+            SRow::Zone(i) => {
+                let z = &self.tz_zones[*i];
+                let (city, sub) = crate::tz::pretty(&z.id);
+                (city, sub.unwrap_or_default())
+            }
             SRow::Label(_) => (String::new(), String::new()),
         }
     }
 
-    /// The right-hand column: switches, signal, tags. Returns its width.
-    fn draw_row_right(&self, b: &mut B, pal: &Pal, v: &View, r: &SRow, on: bool, y: f32) -> f32 {
+    /// The right-hand column: switches, values, signal, tags. Returns its width.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_row_right(&self, b: &mut B, pal: &Pal, v: &View, s: &Sub, r: &SRow, on: bool, y: f32) -> f32 {
         let cy = y + ROW_H / 2.0;
         let right = W - 40.0;
         let mono = ts(Face::Mono400, 18.0, if on { pal.dark } else { pal.ink });
         let ink = if on { pal.dark } else { pal.ink };
         let wifi = v.net.map(|n| &n.wifi);
+        let chevron = |b: &mut B| {
+            let ch = ts(Face::Mono400, 30.0, ink);
+            b.text_right(right, cy - ch.line_px() / 2.0, "›", &ch)
+        };
         match r {
             SRow::Toggle => {
-                let is_bt = self.menu.as_ref().and_then(|m| m.sub.as_ref()).is_some_and(|s| s.kind == SubKind::Bluetooth);
-                let state = if is_bt { bt_on(v) } else { wifi_on(v) };
+                let state = if s.kind == SubKind::Bluetooth { bt_on(v) } else { wifi_on(v) };
                 pill(b, pal, right - 64.0, cy - 17.0, state);
                 64.0
             }
@@ -715,19 +1254,14 @@ impl ShellUi {
                 let bars = wifi.and_then(|w| w.networks.iter().find(|x| x.ssid == *ssid)).map(|x| x.bars).unwrap_or(0);
                 sig(b, pal, right, cy, bars, ink)
             }
-            SRow::Details | SRow::Other => {
-                let ch = ts(Face::Mono400, 30.0, ink);
-                b.text_right(right, cy - ch.line_px() / 2.0, "›", &ch)
-            }
+            SRow::Details | SRow::Other | SRow::Link(_) => chevron(b),
             SRow::Dev(addr) => {
                 let conn = v.net.and_then(|n| n.bt.devices.iter().find(|d| d.address == *addr)).is_some_and(|d| d.connected);
                 let mut x = right;
                 if on {
                     let lab = ts(Face::Mono400, 18.0, pal.dark);
                     x -= b.text_right(x, cy - lab.line_px() / 2.0, "Forget", &lab) + 8.0;
-                    let cap = ts(Face::Mono600, 17.0, DAY.ground);
-                    b.rrect(x - 38.0, cy - 19.0, 38.0, 38.0, 19.0, Color(29, 29, 29, 209));
-                    b.text_center(x - 19.0, cy - cap.line_px() / 2.0, "X", &cap);
+                    keycap(b, x, cy, "X");
                     x -= 38.0 + 14.0;
                 }
                 let t = if conn { "On" } else { "Off" };
@@ -739,26 +1273,96 @@ impl ShellUi {
                 right - (x - tw)
             }
             SRow::Scan => {
-                let disc = v.net.is_some_and(|n| n.bt.discovering);
-                let ch = ts(Face::Mono400, 30.0, ink);
-                if disc {
+                if v.net.is_some_and(|n| n.bt.discovering) {
                     // a slow turning ring while it searches
                     let a = (self.t as f32 * 4.0) % std::f32::consts::TAU;
-                    let pts: Vec<P> = (0..=20).map(|i| {
-                        let t = a + i as f32 / 20.0 * 4.4;
-                        (right - 12.0 + 11.0 * t.cos(), cy + 11.0 * t.sin())
-                    }).collect();
+                    let pts: Vec<P> = (0..=20)
+                        .map(|i| {
+                            let t = a + i as f32 / 20.0 * 4.4;
+                            (right - 12.0 + 11.0 * t.cos(), cy + 11.0 * t.sin())
+                        })
+                        .collect();
                     b.stroke(&pts, false, 2.0, ink);
                     26.0
                 } else {
-                    b.text_right(right, cy - ch.line_px() / 2.0, "›", &ch)
+                    chevron(b)
                 }
+            }
+            SRow::Level(l) => {
+                let lv = match l {
+                    Lv::Brightness => v.sys.brightness,
+                    Lv::Volume => v.volume.map(|x| if v.muted { 0 } else { x }),
+                    Lv::UiVolume => Some(self.prefs.sound_volume),
+                };
+                let Some(lv) = lv else { return 0.0 };
+                let num = ts(Face::Mono400, 22.0, ink);
+                let nw = b.measure("100%", &num);
+                b.text_right(right, cy - num.line_px() / 2.0, &format!("{lv}%"), &num);
+                let (bw, bh) = (150.0, 18.0);
+                let bx = right - nw - 12.0 - bw;
+                b.rect(bx, cy - bh / 2.0, bw, bh, if on && s.adjusting { pal.yellow } else { DAY.ground });
+                b.rect(bx, cy - bh / 2.0, bw * lv.min(100) as f32 / 100.0, bh, pal.dark);
+                b.frame(bx, cy - bh / 2.0, bw, bh, 2.0, pal.dark);
+                right - bx
+            }
+            SRow::Opt(k) => {
+                let (vals, chosen) = opt_values(*k, &self.prefs, v);
+                let st_on = ts(Face::Mono600, 19.0, ink);
+                let st_off = ts(Face::Mono400, 19.0, with_a(ink, 0.5));
+                let mut segs: Vec<(String, TextStyle)> = Vec::new();
+                for (j, o) in vals.iter().enumerate() {
+                    if j > 0 {
+                        segs.push((" · ".into(), st_off));
+                    }
+                    segs.push((o.to_string(), if j == chosen { st_on } else { st_off }));
+                }
+                let total: f32 = segs.iter().map(|(s, st)| b.measure(s, st)).sum();
+                let mut x = right - total;
+                for (s, st) in &segs {
+                    x += b.text(x, cy - st.line_px() / 2.0, s, st);
+                }
+                total
+            }
+            SRow::Region(n, _) => {
+                let mut w = 0.0;
+                if n != "UTC" {
+                    w = chevron(b) + 14.0;
+                }
+                let cur = crate::tz::region(v.timezone);
+                if n == cur || (n == "UTC" && v.timezone == "UTC") {
+                    w += chip(b, right - w, cy, "CURRENT", 15.0, (8.0, 2.0), pal.lavender, pal.lavender_ink);
+                }
+                w
+            }
+            SRow::Zone(i) => {
+                let z = &self.tz_zones[*i];
+                let txt = format!("{}  {}", crate::tz::hhmm_at(z.offset), crate::tz::fmt_offset(z.offset));
+                let mut w = b.text_right(right, cy - mono.line_px() / 2.0, &txt, &mono);
+                if z.id == v.timezone {
+                    w += 14.0 + chip(b, right - w - 14.0, cy, "CURRENT", 15.0, (8.0, 2.0), pal.lavender, pal.lavender_ink);
+                }
+                w
+            }
+            SRow::Key(i) => {
+                // the keys as caps, right-aligned
+                // "+", "/", "then", "hold" are words between the caps
+                let caps: Vec<&str> = CONTROLS[*i].1.split(' ').filter(|c| !c.is_empty()).collect();
+                let word = ts(Face::Mono400, 18.0, ink);
+                let mut x = right;
+                for c in caps.iter().rev() {
+                    if matches!(*c, "+" | "/" | "then" | "hold") {
+                        x -= b.text_right(x, cy - word.line_px() / 2.0, c, &word) + 8.0;
+                    } else {
+                        x -= keycap(b, x, cy, c) + 8.0;
+                    }
+                }
+                right - x
             }
             _ => 0.0,
         }
     }
 
-    fn draw_mixer(&self, b: &mut B, pal: &Pal, v: &View, s: &Sub, accent: Color) {
+    fn draw_mixer(&self, b: &mut B, pal: &Pal, v: &View, s: &Sub) {
         let ch = channels(v);
         let sel = s.mix_sel.min(ch.len().saturating_sub(1));
         // scroll sideways to keep the selected channel in view
@@ -827,8 +1431,53 @@ impl ShellUi {
             b.pop_alpha();
         }
         b.clip(None);
-        let _ = accent;
     }
+}
+
+/// About's facts: (title, the whole line).
+fn fact_text(f: FactK, v: &View) -> (String, String) {
+    let a = v.dash.about;
+    match f {
+        FactK::Version => {
+            let ver = a.and_then(|a| a.version.clone()).unwrap_or_else(|| "unknown".into());
+            let sub = match a.and_then(|a| a.generation) {
+                Some(g) => format!("NixOS {ver} · generation {g}"),
+                None => format!("NixOS {ver}"),
+            };
+            ("Mortar".into(), sub)
+        }
+        FactK::Storage => ("Storage".into(), a.and_then(|a| a.storage_line()).unwrap_or_else(|| "Not known".into())),
+        FactK::Battery => {
+            let mut parts = Vec::new();
+            if let Some(b) = v.sys.battery {
+                parts.push(format!("{b}%{}", if v.sys.charging { " · charging" } else { "" }));
+            }
+            if let Some(bt) = a.map(|a| &a.battery) {
+                if let Some(h) = &bt.health {
+                    parts.push(format!("health {}", h.to_lowercase()));
+                }
+                if let Some(c) = bt.capacity_pct {
+                    parts.push(format!("{c}% of new"));
+                }
+                if let Some(c) = bt.cycles {
+                    parts.push(format!("{c} cycles"));
+                }
+            }
+            ("Battery".into(), if parts.is_empty() { "No battery".into() } else { parts.join(" · ") })
+        }
+        FactK::Temp => ("Temperature".into(), a.and_then(|a| a.temp_c).map(|t| format!("SoC {t:.0} °C")).unwrap_or_else(|| "Not known".into())),
+        FactK::Device => ("Device".into(), format!("{} · Linux {}", v.host, a.and_then(|a| a.kernel.clone()).unwrap_or_else(|| "?".into()))),
+    }
+}
+
+/// A dark key cap ending at `right`, centred on `cy`. Returns its width.
+fn keycap(b: &mut B, right: f32, cy: f32, label: &str) -> f32 {
+    let cap = ts(Face::Mono600, 17.0, DAY.ground);
+    let tw = arrow_text(b, 0.0, 0.0, label, &cap, false);
+    let cw = (tw + 22.0).max(38.0);
+    b.rrect(right - cw, cy - 19.0, cw, 38.0, 19.0, Color(29, 29, 29, 225));
+    arrow_text(b, right - cw + (cw - tw) / 2.0, cy - cap.line_px() / 2.0, label, &cap, true);
+    cw
 }
 
 /// Scroll so the selected row stays in view (rows above it shown when
@@ -876,7 +1525,7 @@ fn bt_line(v: &View) -> String {
     }
 }
 
-/// An on/off switch, 52 x 28.
+/// An on/off switch, 64 x 34.
 fn pill(b: &mut B, pal: &Pal, x: f32, y: f32, on: bool) {
     let pts = crate::scene::rrect_pts(x, y, 64.0, 34.0, 17.0);
     b.poly(&pts, if on { pal.dark } else { DAY.ground });

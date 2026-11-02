@@ -15,15 +15,21 @@ pkgs/mortar-shell/
   src/config.rs      /etc/mortar-shell/config.json (written by the module)
   src/apps.rs        running apps: launch, pid ancestry -> app, MRU, close, reap
   src/router.rs      who gets a pad button (pure, unit-tested)
-  src/shellui.rs     the shell UI: boot, home, settings screen, transitions,
-                     OSD, toasts (pure state + scene building, unit-tested)
+  src/shellui.rs     the shell UI: boot, transitions, OSD, toasts, app
+                     states (pure state + scene building, unit-tested)
+  src/home.rs        Home: the dashboard, its navigation, first-time tips
+                     (a child module of shellui)
   src/cross.rs       the MENU: Running page, the cross, glass (a child
                      module of shellui)
-  src/menupages.rs   the MENU's glass pages: Wi-Fi, Bluetooth, Mixer
+  src/menupages.rs   the MENU's glass pages (a stack): Display, Sound, Mixer,
+                     Wi-Fi, Bluetooth, Time zone, Updates, About, Controls, Power
   src/gamepages.rs   the MENU's games: the Games category, a system's page,
                      the game panel (a child module of shellui)
   src/games.rs       games as apps: library data, titles, the game socket
                      protocol, the hibernation policy (pure, unit-tested)
+  src/widgets.rs     Home widgets: config, the 4 x 3 grid, command-widget worker
+  src/attention.rs   "Needs you": apps asking for attention
+  src/about.rs       version, generation, storage, battery health, temperature
   src/patterns.rs    the cross's background patterns (mosaics: zig-zags, Life, a scope, Truchet tiles)
   src/mixer.rs       PipeWire output streams from pw-dump (the Mixer)
   src/radio.rs       Wi-Fi / Bluetooth on/off (rfkill)
@@ -97,8 +103,8 @@ on black.
 - Close: `xdg_toplevel.close`, then SIGTERM to the process group after 3 s
   and SIGKILL after 6 s. Exited apps with no window are dropped and the
   next app in MRU order is shown, or the home screen.
-- Log out (settings screen) ends the shell; greetd returns to the greeter
-  and all apps get SIGTERM.
+- Log out (MENU > Settings > Power) ends the shell (status 0); greetd
+  returns to the greeter and all apps get SIGTERM.
 
 ## Games (mortar-play)
 
@@ -177,18 +183,28 @@ blocks with 1 px ink outlines, isometric illustrations.
 - Boot: four coloured blocks fly in and settle into a square (a tick and
   a haptic tick each), the serif wordmark rises with a chime, then the
   screen slides up (2.7 s; `ui.bootAnimation`).
-- Home (no app in front): status bar (time, "N running", SSH, Wi-Fi,
-  battery), the big serif clock and date, a row of tiles (one per
-  launcher entry: isometric illustration, serif name, description,
-  RUNNING tag) over slowly drifting flat shapes. The focused tile lifts
-  onto a lavender offset block; Left/Right move, A launches. The drift
-  runs for 30 s after the last press, then the screen goes idle.
-- Launch: the app grows out of its tile (or its MENU row) in its accent
-  colour (whoosh, double haptic) and fades in once its first buffer
-  arrives; if it is slow, the accent fills the screen with the
+- Home (no app in front, `home.rs`): a calm dashboard, not a launcher
+  (apps start from the MENU). The status bar (time, "N running", NEEDS
+  YOU, SSH, Wi-Fi, battery), then widgets on a 4 x 3 grid of Pond tiles
+  (flat blocks, 1 px ink outlines; 221 x 186 px, 2x1 tiles 462 px wide;
+  see "Home widgets" below): by default the big serif clock and date,
+  Continue, Needs you, Now playing, battery, Wi-Fi and storage. The D-pad
+  moves between the tiles that do something (the nearest one that way);
+  the focused tile sits on a lavender offset block with a 2 px outline.
+  A acts: Continue resumes the most recent running app (its window shows
+  in the card; the app zooms out of the card), or, with nothing running,
+  starts the last app on screen again (`last_app` in prefs); Needs you
+  switches to the first app waiting; Now playing to the app making
+  sound; a tile with `open` starts or switches to that entry. B does
+  nothing (Home is the top). The drifting shapes are gone: Home is a
+  still screen (no frames at rest); only the charging line under the
+  date moves, while it charges.
+- Launch: the app grows out of its MENU row (or Home's Continue card) in
+  its accent colour (whoosh, double haptic) and fades in once its first
+  buffer arrives; if it is slow, the accent fills the screen with the
   illustration and "STARTING…" until it maps (B: back, it keeps
-  starting; 20 s timeout). Closing to home is the reverse: the app
-  shrinks into its tile.
+  starting; 20 s timeout). Going Home is the reverse: the app shrinks
+  into the Continue card (it is what Continue resumes).
 - MENU (anywhere, on its own) opens the MENU, "Cross Menu 2"
   (`cross.rs` and `menupages.rs`, after the approved
   plan/mortar-cross-2.html), over the app, which stays on screen frosted:
@@ -200,9 +216,9 @@ blocks with 1 px ink outlines, isometric illustrations.
   sharp home read through and clashed with the menu. The blur and veil
   fade in and out with the menu's open spring (Reduce motion: on and off
   at once). The power
-  menu frosts the app the same way (with a lighter scrim); the settings
-  screen and time zone picker are opaque, so nothing is blurred behind
-  them. MENU closes it from anywhere.
+  menu frosts the app the same way (with a lighter scrim); the glass
+  pages are frosted themselves. MENU closes it, and everything opened
+  from it, from anywhere.
   - Two pages side by side on one spring: Running, and the cross to its
     right. ▶ on Running slides it off to the left and the cross in from
     the right (on Apps; R1: on Settings); ◀ on Apps or L1 goes back.
@@ -222,8 +238,10 @@ blocks with 1 px ink outlines, isometric illustrations.
     35%), 3 px ink edges. The page eases from 104% to 100% as the MENU
     opens. The selected window has a strip in the app's accent down its
     left edge and, in its lower left, a label: the index on ink, the
-    serif name and the status (on screen, background, starting, closing)
-    on glass. MENU opens here with the previous app selected, so MENU, A
+    serif name and the app's state on glass (in the same words
+    everywhere, `AppState`: on screen, in the background, starting,
+    closing, asleep). An app waiting for you has a yellow NEEDS YOU badge
+    with its text at the window's top right. MENU opens here with the previous app selected, so MENU, A
     flips between two apps. ▲▼ scroll, A switches (the app zooms from
     its window to the full screen while the MENU fades), X closes (its
     window goes at once, a "Closed" toast), Y opens Switch to it /
@@ -250,24 +268,54 @@ blocks with 1 px ink outlines, isometric illustrations.
     ink-soft (over 4.5:1 on the frosted ground), category names 34 px
     over 116 px icons, the clock 48 px, hint labels 22 px with 38 px
     keycaps, the glass pages' rows 30 px; both bars are 72 px tall.
-  - Apps: every launcher entry. Games, Music: the entries with that
-    `category` (the module's `category` or `categories.<id>`, else
-    guessed: M8 and trackers are music, PICO-8, PuzzleScript and
-    emulators games; Games also lists the library, see "Games (mortar-play)"); Music starts with the Mixer. A launches (zooming
-    from the row's icon); a running single-instance entry switches to its
-    app instead.
-  - Settings (the old Quick and Power): Brightness and Volume (A enters
-    an adjust mode: the bar turns yellow, ◀▶ change the level in steps of
-    10, through the volume thread; A or B leave it, ▲▼ leave it and
-    move), Mixer ›, Wi-Fi ›, Bluetooth ›, Sleep, Keyboard (only with a
-    keyboard app in front: the on-screen keyboard), More settings (the
-    settings screen), Restart and Power off (a second A: the icon turns
-    orange and the subtitle reads "Press A again to …"; moving away
-    cancels).
-  - Glass pages (A on Mixer, Wi-Fi, Bluetooth) slide in from the right
-    between the bars: a serif title, a mono status line, an icon block
-    with a hard shadow, rows (the selected one a band in pink with its
-    name in the serif). B (or ◀) goes back.
+  - Apps: the tools, the launcher entries whose `category` is `apps`.
+    Games, Music: the entries with that `category` (the module's
+    `category` or `categories.<id>`, else guessed: M8 and trackers are
+    music, PICO-8, PuzzleScript and emulators games; Games also lists
+    the library, see "Games (mortar-play)"); games and music
+    apps are not repeated under Apps. Music starts with the Mixer. A
+    launches (zooming from the row's icon); a running single-instance
+    entry switches to its app instead (its subtitle says its state). When
+    something in Running waits for you, a yellow dot sits on the cross's
+    left edge (the way to Running), level with the category icons.
+  - Settings is the one place for settings: Brightness and Volume as
+    quick rows (A enters an adjust mode: the bar turns yellow, ◀▶ change
+    the level in steps of 10, through the volume thread; A or B leave it,
+    ▲▼ leave it and move), Keyboard (only with a keyboard app in front:
+    the on-screen keyboard), then a row per glass page: Display ›,
+    Sound ›, Wi-Fi ›, Bluetooth ›, Time zone ›, Remote access ›
+    (mortar-setup's page), Updates › (with mortar.update), About ›,
+    Power ›. The old full-screen settings screen and its duplicate
+    mortar-setup Wi-Fi/Bluetooth entries are gone (mortar-setup keeps
+    those pages for first-boot setup; the Wi-Fi page's "Other network…"
+    still opens its full list for WPS).
+  - Glass pages (`menupages.rs`) slide in from the right between the
+    bars, one over the other (a stack: Settings > Sound > Mixer,
+    Settings > Time zone > Europe, About > Controls): a serif title, a
+    mono status line, an icon block with a hard shadow, rows (the
+    selected one a band in pink with its name in the serif; a row waiting
+    for its second A turns orange). Rows are levels (A, then ◀▶ in steps
+    of 10, A or B when done), choices (A or ▶: the next value, shown as
+    "Day · Night" with the current one bold), links (A or ▶ opens the
+    page), actions, facts (A: the whole line in a toast) and the Wi-Fi /
+    Bluetooth rows. L1/R1 page through long lists. B or ◀ goes back one
+    page.
+    - Display: Brightness, Palette (Day/Night), Motion
+      (Bouncy/Calm/Snappy), Reduce motion, Screensaver.
+    - Sound: Volume, Mixer ›, UI sounds, UI sound level, Vibration.
+    - Time zone: the regions, then a region's cities with their local
+      time and offset (CURRENT marked); A on a city (or UTC) sets it and
+      both pages slide away, back to Settings.
+    - Updates: Check now / Restart to update (a second A), Auto-check
+      daily.
+    - About: Mortar (NixOS version and system generation), Storage (free
+      of total on /), Battery (level, health, capacity against new,
+      cycles, when the gauge reports them), Temperature (the hottest
+      thermal zone), Device (host, kernel), Controls › (every button and
+      chord, below). Read with the status bar (`about.rs`, every 2 s
+      while a shell screen shows; file reads and a statvfs).
+    - Power: Sleep, Sleep mode (Suspend / Screen off), Sleep when idle,
+      Restart, Power off and Log out (a second A each).
     - Wi-Fi: an on/off switch (rfkill, radio.rs), the connected network
       (address, band, security, signal bars; A or Details: a toast with
       the details), Forget this network, the nearby networks (open or
@@ -287,16 +335,19 @@ blocks with 1 px ink outlines, isometric illustrations.
       (comp/bg.rs) polls `status` every second while Settings or a page
       shows and sends the requests, so no socket round trip runs on the
       event loop.
-    - Mixer: Master (the default sink: level through the volume thread,
-      mute with `actions.volumeMute`), one fader per running app, UI
-      sounds (the shell's own sound volume and on/off). ◀▶ pick a
-      channel, ▲▼ ±5, A mutes. An app's channel is its PipeWire output
+    - Mixer (Settings > Sound, or Music): Master (the default sink: level
+      through the volume thread, mute with `actions.volumeMute`), one
+      fader per running app, UI sounds (the shell's own sound volume and
+      on/off). ◀▶ pick a channel (◀ on Master goes back), ▲▼ ±5, A
+      mutes. An app's channel is its PipeWire output
       streams: `pw-dump` (`actions.pwDump`) lists them, each belongs to
       the app whose pid is the stream client's or an ancestor (apps.rs),
       the level is the loudest stream's on wpctl's cubic scale, set with
       `wpctl set-volume` / `set-mute` (`actions.streamVolume`,
       `streamMute`). An app with no stream shows "no sound". A worker
-      thread runs these, every second while the Mixer shows. No level
+      thread runs these, every second while the Mixer shows (every 4 s
+      while Home shows, for Now playing: a stream whose node is
+      `running` and not muted is playing). No level
       meters: PipeWire has no cheap way to read peaks without capturing
       every stream.
   - Behind the cross (not behind Running) runs an animated mosaic per
@@ -345,18 +396,16 @@ blocks with 1 px ink outlines, isometric illustrations.
     shell's idle sleep (`ui.idleMinutes`) counts input as before, so it
     still sleeps the screen on time. Full screen it is at most ~1,000
     solid quads a frame (Life and the scope fill a 37 x 27 grid).
-  - The hint bar follows the selection.
+  - The hint bar follows the selection, in the same words everywhere: ▲▼
+    Choose, ◀▶ Category / Adjust / Channel, A Open / Switch / Adjust /
+    Change / Done / Confirm (or the action: Sleep, Restart, Join, Pair),
+    X Close app, Y Options, B Back (one level), MENU Close (everything).
   - Sounds: move (category), tick (item), tab (page), drawer / drawerUp
     (open, close, popup), open (go), close (kill), deny (nothing there),
     vol (values); haptic tick on moves, double on go/kill/confirm.
-- Settings screen (MENU > Settings > More settings): slides in from the
-  right over the MENU. UI sounds, Haptic ticks, Motion
-  (Bouncy/Calm/Snappy), Reduce motion, Palette (Day/Night), Time zone,
-  Sleep, Sleep when idle, Screensaver,
-  Wi-Fi networks, Bluetooth devices and Remote access (mortar-setup
-  pages), Log out (second A). B goes back to the MENU, MENU closes both.
-  Changes are saved in $XDG_STATE_HOME/mortar-shell/prefs.json over the
-  module's defaults (`mortar.shell.ui.*`).
+- Settings are saved in $XDG_STATE_HOME/mortar-shell/prefs.json over the
+  module's defaults (`mortar.shell.ui.*`), with what the shell remembers
+  for the person: the tips already shown and the last app.
 - Home shortcuts: L1 or SELECT opens the MENU on Apps, R1 on Settings.
 - Volume keys work everywhere: the OSD, a frosted-glass pill (72x300) at
   the right edge, fades and scales in (~120 ms), with a speaker (sun for
@@ -385,7 +434,7 @@ blocks with 1 px ink outlines, isometric illustrations.
   TITLE [SUBTITLE]` (control socket `toast {json}`), e.g. mortar-play for
   RetroAchievements.
 
-- Time zone (settings screen): a full-screen picker, regions then cities (from
+- Time zone (Settings > Time zone, glass pages): regions then cities (from
   the system tzdata's zone1970.tab; offsets and local times computed by a
   `mortar-shell tz-offsets` child process, since setting TZ in the
   threaded compositor is unsafe). A sets it with `timedatectl
@@ -401,14 +450,14 @@ blocks with 1 px ink outlines, isometric illustrations.
   button wakes; holding it shows a filling "hold for power menu" pill and
   at 0.8 s opens the power menu (Sleep, Restart, Power off; the last two
   need a second A, B backs out).
-- Sleep (power tap, MENU > Settings > Sleep, the power menu): the screen fades to
+- Sleep (power tap, MENU > Settings > Power > Sleep, the power menu): the screen fades to
   black, then the backlight goes off (bl_power), nothing is redrawn, UI
   sounds and haptics are muted, and the front app is `suspended` like a
   background app (SDL apps see OCCLUDED and can idle). Apps keep running:
   audio from the M8 (m8c keeps its capture running) continues. Waking
   turns the backlight on first, then fades back in; the waking press does
   nothing else.
-- Suspend (Settings > Sleep = Suspend, the default on the Brick; module
+- Suspend (Settings > Power > Sleep mode = Suspend, the default on the Brick; module
   default `ui.suspend`): once the screen has been dark for
   `ui.suspendGraceMs` (3 s, so a second tap just wakes the screen) the
   shell runs `actions.sleep` (`systemctl suspend`: s2idle by default,
@@ -421,9 +470,117 @@ blocks with 1 px ink outlines, isometric illustrations.
   frame callback. It stays DRM master throughout; the kernel restores
   the last committed state. Apps are frozen while suspended: m8c and
   ChooChoo audio stops, USB devices (the M8) may re-enumerate.
-- Settings > Sleep when idle (Off, 1-30 min; module default
+- Settings > Power > Sleep when idle (Off, 1-30 min; module default
   `ui.idleMinutes` = 0): no button or key input for that long sleeps
   like a power tap (and then suspends with Sleep = Suspend).
+
+### Navigation: B and MENU
+
+One rule everywhere: B goes back one level, and closes the MENU only at
+its top (Running or the cross); MENU closes everything at once (pages,
+popup, a setup page, the MENU). ◀ on a glass page goes back too, except
+while a level is being adjusted (◀▶ adjust it then) and in the Mixer
+(◀ picks the channel to the left; on Master it goes back). A unit test
+(`b_and_menu_on_every_screen`) checks this table:
+
+| Screen | B | MENU |
+|---|---|---|
+| Home | nothing (the top) | opens the MENU on Running |
+| Running | closes the MENU | closes the MENU |
+| The cross | closes the MENU | closes the MENU |
+| The cross, adjusting a level | stops adjusting | closes the MENU |
+| Options popup (Y) | back to Running | closes the MENU |
+| A glass page (Display, Sound, Wi-Fi, Bluetooth, Updates, About, Power, Time zone) | back to the cross | closes the MENU |
+| A page adjusting a level | stops adjusting | closes the MENU |
+| A page waiting for its second A | back to the cross (forgets it) | closes the MENU |
+| Sound > Mixer, Time zone > cities, About > Controls | back to the page under it | closes the MENU |
+| mortar-setup page (Remote access, Wi-Fi's Other network, password keyboard) | its own back; at its first page, back to the MENU | closes everything |
+| Power menu (hold the power key) | closes it | closes it |
+| Power menu, waiting for its second A | forgets it | closes it |
+| An app starting (the splash) | back home, it keeps starting | opens the MENU |
+| On-screen keyboard | Backspace (it is a keyboard; START hides it) | opens the MENU over the app |
+| Games > a system's page (mortar-play) | back to Games (◀ too) | closes the MENU |
+| Game panel (Y on a game in Running) | back to Running (Y too) | closes the MENU |
+| Screensaver | brings the cross back | brings the cross back |
+| Asleep | wakes (nothing else) | wakes (nothing else) |
+
+### App states
+
+An app's state reads the same everywhere (Running's window label,
+the cross's subtitles, Home's Continue card): on screen, in the
+background, starting, closing, asleep (`AppState` in shellui.rs; asleep:
+kept but not running, e.g. a hibernated game).
+
+### Home widgets
+
+`mortar.shell.home.widgets` (config `home.widgets`, `widgets.rs`) lists
+the dashboard's tiles in reading order; each takes a 1x1 or 2x1 slot on
+a 4 x 3 grid, placed first-fit (a 2x1 that does not fit at the end of a
+row goes to the next one and a later 1x1 fills the gap; what does not
+fit is left out). Kinds:
+
+| kind | default size | shows | A |
+|---|---|---|---|
+| `clock` | 2x1 | the big serif clock, the date and host, the charging line | — |
+| `continue` | 2x1 | the most recent app (its window, name, state), else the last app | resume / start it |
+| `needs-you` | 2x1 | apps waiting for you (yellow), else "All quiet" | switch to the first |
+| `now-playing` | 2x1 | the app making sound (orange) and its level | switch to it |
+| `battery` | 1x1 | level, bar, charging or health | — |
+| `wifi` | 1x1 | on / off / offline, the network | — |
+| `storage` | 1x1 | free space, a bar, of how much | — |
+| `command` | 1x1 | a script's output | `open`, if set |
+
+Every widget takes `size`, `title`, `accent` (lime, lavender, yellow,
+orange, pink, ground) and `open` (a launcher entry A starts or switches
+to). A `command` widget runs `command` every `interval` seconds (at
+least 2) while Home shows, on the widgets thread (never on the event
+loop), each run in its own process group and killed after 10 s. It may
+print text (the first line large, the second small) or a JSON object
+`{"title": "…", "value": "…", "accent": "lime"}`; a failure shows its
+output (or "exit N") with a "!" tag. `ctl state` reports the results
+(`widgets`). Example:
+
+```nix
+mortar.shell.home.widgets = [
+  { kind = "clock"; }
+  { kind = "continue"; }
+  { kind = "needs-you"; }
+  { kind = "now-playing"; }
+  { kind = "battery"; }
+  { kind = "command"; title = "Uptime"; interval = 60;
+    command = "uptime -p | sed 's/^up //'"; }
+  { kind = "command"; size = "2x1"; open = "terminal"; interval = 300;
+    command = [ "${pkgs.writeShellScript "disk" ''
+      printf '{"title":"Disk","value":"%s free","accent":"lime"}\n' \
+        "$(df -h --output=avail / | tail -1 | tr -d ' ')"
+    ''}" ]; }
+];
+```
+
+### Needs you
+
+Any app (or script) can ask for attention: `mortar-shell attention set
+[--app ID] TEXT` and `attention clear [--app ID]` (ID defaults to
+`$MORTAR_APP`, which the shell sets for every app it starts; control
+socket `attention {"op": "set"|"clear", "app", "text"}`). Raising it
+shows one toast ("Claude needs you" with the text, double haptic; a new
+text for the same app updates it quietly), a NEEDS YOU badge on the
+app's window in Running, a dot on the cross's edge towards Running, the
+Home widget and a NEEDS YOU chip in Home's status bar. An item for a
+launcher entry goes when that app stops; items for other ids stay until
+cleared. mortar-ai (the Claude controller app) sets it while a tool
+approval waits ("Approve: …", "+N more") and clears it when answered
+(`pkgs/mortar-ai/src/attention.rs`, from a short-lived thread).
+
+### First-time tips
+
+A tip is a toast shown once ever, the first time its feature matters,
+when nothing else is on screen (no toast, MENU, transition): "MENU
+switches apps" (the first app on screen), "START opens the keyboard"
+(the first keyboard app), "SELECT + MENU: the game's menu" (the first
+game), "Every button, in one place" (back Home with two apps running;
+it points at Settings > About > Controls). The ids shown are saved in
+prefs (`tipsSeen`).
 
 ### Motion
 
@@ -849,12 +1006,16 @@ records the shell's RSS (`rss_kib` in state.json).
 ## Control socket
 
 `$XDG_RUNTIME_DIR/mortar-shell.sock` (0600), one line per connection:
-`state` (JSON; `overlay`, `category` ("Running" on the Running page), `game_panel`, `game_page`, `games` (library summary, panel states), per app `game` / `asleep`,
-`menu_page` (wifi, bluetooth, mixer) and `settings` say what of the MENU
-shows), `press|down|up BUTTON`, `key CODE`, `launch ID`,
-`focus ID`, `close ID`, `game SYSTEM [ROM]`, `hibernate UID`, `save-games`, `home`, `screenshot PATH`, `shot` (the screenshot
-combo), `toast JSON`, `boot` (replay), `time manual|real|+MS`, `prefs`,
-`quit`. Tests drive the
+`state` (JSON; `overlay`, `category` ("Running" on the Running page),
+`menu_page` (the page in front: display, sound, mixer, wifi, bluetooth,
+timezone, timezone-cities, updates, about, controls, power) and
+`menu_pages` (the stack) say what of the MENU shows; `game_panel`,
+`game_page`, `games` (library summary, panel states), per app `game` /
+`asleep`; `attention`, `widgets` (the command widgets' results)),
+`press|down|up BUTTON`, `key CODE`, `launch ID`, `focus ID`, `close ID`,
+`game SYSTEM [ROM]`, `hibernate UID`, `save-games`, `home`, `screenshot
+PATH`, `shot` (the screenshot combo), `toast JSON`, `attention JSON`,
+`boot` (replay), `time manual|real|+MS`, `prefs`, `quit`. Tests drive the
 shell through it; over SSH it gives remote screenshots and app control
 (`mortar-shell ctl state` as root finds the session's socket in
 /run/user/*/).
@@ -867,6 +1028,17 @@ shell through it; over SSH it gives remote screenshots and app control
   `mortar-shell-session`: `mortar-shell run` under `systemd-cat -t
   mortar-shell`. greetd + pam_systemd give it a logind session on seat0,
   which libseat uses (no seatd needed).
+- `autologin.user` (the Brick: `brick`, in flake.nix): greetd's
+  `initial_session` starts the same session for that user at boot, once
+  (greetd's runfile), so the Brick boots straight into the shell; the
+  greeter (`default_session`) appears only when the session ends. The
+  session script ends on status 0 (Log out, `ctl quit`); a crash
+  restarts the shell, but two failures in a row that each came within
+  30 s of starting end the session (logged as mortar-shell-session), so
+  a broken shell falls back to the greeter instead of looping. SIGTERM
+  (shutdown) stops it at once. `mortar deploy --reboot` only waits for
+  SSH and compares /run/current-system, which none of this touches.
+- `home.widgets`: the dashboard (above).
 - Imports the other greeter sessions as launcher entries (minus console-only
   ones, `excludeGreeterSessions`, default `terminal`), adds a foot
   Terminal entry (keyboard mode; Geist Mono, Mortar colours) and
@@ -887,9 +1059,12 @@ the shell, see pkgs/mortar-play/DESIGN.md.)
   MRU, button routing (MENU chord, releases on retarget, keyboard mode),
   OSK layout and typing, the MENU (previous app, the Running page and
   its live windows, Running/cross navigation, categories and their
-  memory, Settings adjust mode, Restart/Power off confirm, the Wi-Fi,
-  Bluetooth and Mixer pages' requests, options popup, settings screen,
-  time zone picker, the row above clearing the lifted category icon and
+  memory, Apps without games and music, Settings adjust mode, the glass
+  pages (Display, Sound, Mixer, Wi-Fi, Bluetooth, Time zone, Updates,
+  About, Power with its second A), options popup, the B / MENU table for
+  every screen), Home (Continue, Needs you, focus, last app), attention
+  and its toast, first-time tips, widgets (config, grid layout, script
+  output, the worker and its time limit), About's sysfs readers, the row above clearing the lifted category icon and
   its shadow by 16 px for every category and selection), the patterns
   (Life's rules, it never dies out; moving, nudged, sliding on a
   category change, still with Reduce motion, stopped with the MENU
@@ -900,7 +1075,10 @@ the shell, see pkgs/mortar-play/DESIGN.md.)
   MENU with injected buttons; typing through keys and the OSK;
   switching back; closing from Running; zsh's suggestion chips (history
   first, choosing one, R1 typing it); a screenshot after every step;
-  MENU > Settings and its Mixer, Wi-Fi and Bluetooth pages;
+  the dashboard with a command widget's JSON result; MENU > Settings and
+  its Display, Sound > Mixer, Wi-Fi, Bluetooth, About > Controls and
+  Power pages; `mortar-shell attention` set and clear (toast, Running
+  badge, Home);
   then UI time frozen and stepped for transition frames (`t-*.png`:
   MENU, the cross sliding in, its pattern moving, launch, close, OSD,
   toast, shutter, settings, night palette,

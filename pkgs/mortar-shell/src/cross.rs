@@ -16,8 +16,12 @@
 //!
 //! ▶ slides Running off to the left and the cross in; ◀ from Apps (or L1)
 //! goes back. The clock and hint bars float over both as frosted glass.
-//! Settings opens Wi-Fi, Bluetooth and the Mixer as glass panels
-//! (menupages.rs).
+//! Settings is the one place for settings: Brightness and Volume as quick
+//! rows, then glass pages (menupages.rs) for Display, Sound, Wi-Fi,
+//! Bluetooth, Time zone, Remote access, Updates, About and Power.
+//!
+//! B goes back one level (adjusting, the options popup, a page) and closes
+//! the MENU at the top (Running or the cross); MENU closes everything.
 //!
 //! A child module of `shellui`: it works on the `ShellUi` state directly.
 
@@ -92,14 +96,13 @@ pub(super) enum Row {
     Game(GRow),
     Brightness,
     Volume,
+    /// Music: the Mixer page.
     Mixer,
-    Wifi,
-    Bluetooth,
-    Sleep,
     Keyboard,
-    MoreSettings,
-    Restart,
-    PowerOff,
+    /// Settings: a glass page.
+    Page(SubKind),
+    /// Settings > Remote access (mortar-setup's page).
+    Remote,
 }
 
 impl Row {
@@ -111,14 +114,9 @@ impl Row {
     fn page(&self) -> Option<SubKind> {
         match self {
             Row::Mixer => Some(SubKind::Mixer),
-            Row::Wifi => Some(SubKind::Wifi),
-            Row::Bluetooth => Some(SubKind::Bluetooth),
+            Row::Page(k) => Some(*k),
             _ => None,
         }
-    }
-    /// Needs a second A.
-    fn warn(&self) -> bool {
-        matches!(self, Row::Restart | Row::PowerOff)
     }
 }
 
@@ -140,7 +138,7 @@ impl CtxItem {
 }
 
 /// Y on a running app: Switch, Restart, Close.
-struct Ctx {
+pub(super) struct Ctx {
     uid: u32,
     sel: usize,
     items: Vec<CtxItem>,
@@ -165,7 +163,7 @@ pub(super) struct Cross {
     run_keys: Vec<Row>,
     pub(super) run_sel: usize,
     run_scroll: Spring,
-    ctx: Option<Ctx>,
+    pub(super) ctx: Option<Ctx>,
     /// Apps closed with X, hidden until they are gone.
     hidden: Vec<u32>,
     // the cross
@@ -173,11 +171,10 @@ pub(super) struct Cross {
     cat_x: Spring,
     lift: [Spring; 4],
     rows: Vec<RowAnim>,
-    /// A row waiting for its confirming A.
-    confirm: Option<Row>,
     /// A level row is being adjusted (◀▶ change it instead of category).
-    adjusting: bool,
-    pub(super) sub: Option<Sub>,
+    pub(super) adjusting: bool,
+    /// The glass pages, bottom to top (closing ones slide out on top).
+    pub(super) subs: Vec<Sub>,
     /// A system's games (MENU > Games > a system).
     pub(super) gpage: Option<GamePage>,
     /// The game panel (Y on a game in Running).
@@ -261,18 +258,26 @@ pub(super) fn rows(cat: Cat, v: &View) -> Vec<Row> {
     let launch = |f: &dyn Fn(&LauncherInfo) -> bool| v.launcher.iter().filter(|l| f(l)).map(|l| Row::Launch(l.id.clone())).collect::<Vec<_>>();
     match cat {
         Cat::Running => running_rows(v, &[]),
-        Cat::Apps => launch(&|_| true),
+        // tools only: games and music apps live in their own categories
+        Cat::Apps => launch(&|l| l.category == Category::Apps),
         Cat::Games => super::gamepages::games_rows(v),
         Cat::Music => std::iter::once(Row::Mixer).chain(launch(&|l| l.category == Category::Music)).collect(),
-        Cat::Settings => {
-            let mut r = vec![Row::Brightness, Row::Volume, Row::Mixer, Row::Wifi, Row::Bluetooth, Row::Sleep];
-            if v.keyboard_app {
-                r.push(Row::Keyboard);
-            }
-            r.extend([Row::MoreSettings, Row::Restart, Row::PowerOff]);
-            r
-        }
+        Cat::Settings => settings_rows(v),
     }
+}
+
+/// Settings: the quick levels, then a page per group.
+pub(super) fn settings_rows(v: &View) -> Vec<Row> {
+    let mut r = vec![Row::Brightness, Row::Volume];
+    if v.keyboard_app {
+        r.push(Row::Keyboard);
+    }
+    r.extend([Row::Page(SubKind::Display), Row::Page(SubKind::Sound), Row::Page(SubKind::Wifi), Row::Page(SubKind::Bluetooth), Row::Page(SubKind::TimeZone), Row::Remote]);
+    if v.update.is_some() {
+        r.push(Row::Page(SubKind::Updates));
+    }
+    r.extend([Row::Page(SubKind::About), Row::Page(SubKind::Power)]);
+    r
 }
 
 impl Cross {
@@ -333,7 +338,7 @@ impl Cross {
         if let Some(c) = &mut self.ctx {
             v.push(&mut c.op);
         }
-        if let Some(s) = &mut self.sub {
+        for s in &mut self.subs {
             v.extend(s.springs());
         }
         if let Some(p) = &mut self.gpage {
@@ -360,7 +365,7 @@ impl Cross {
             || !self.lift.iter().all(|s| s.rest())
             || !self.rows.iter().all(|r| r.y.rest() && r.op.rest() && r.bw.rest())
             || self.ctx.as_ref().is_some_and(|c| !c.op.rest())
-            || self.sub.as_ref().is_some_and(|s| s.moving())
+            || self.subs.iter().any(|s| s.moving())
             || self.gpage.as_ref().is_some_and(|p| p.moving())
             || self.gpanel.as_ref().is_some_and(|p| p.moving())
             || !(self.patterns.nudge.rest() && self.pat_x.rest())
@@ -379,11 +384,16 @@ impl Cross {
     /// The screensaver may grow here: the cross alone, settled (not
     /// Running, a glass page or the options popup).
     pub(super) fn saver_ok(&self) -> bool {
-        !self.closing && self.on_cross && self.sub.is_none() && self.ctx.is_none() && self.gpage.is_none() && self.gpanel.is_none() && self.page_x.x > 0.99
+        !self.closing && self.on_cross && self.top().is_none() && self.ctx.is_none() && self.gpage.is_none() && self.gpanel.is_none() && self.page_x.x > 0.99
     }
 
     pub(super) fn on_cross(&self) -> bool {
         self.on_cross
+    }
+
+    /// The page in front (not one sliding out).
+    pub(super) fn top(&self) -> Option<&Sub> {
+        self.subs.iter().rev().find(|s| !s.closing)
     }
 }
 
@@ -423,9 +433,8 @@ impl ShellUi {
             cat_x: Spring::new(0.0),
             lift: std::array::from_fn(|_| Spring::new(0.0)),
             rows: Vec::new(),
-            confirm: None,
             adjusting: false,
-            sub: None,
+            subs: Vec::new(),
             gpage: None,
             gpanel: None,
             patterns: Patterns::new(),
@@ -438,7 +447,6 @@ impl ShellUi {
         m.set_rows(rows(cat, v), s, false);
         self.menu = Some(m);
         self.set_cat(cat, v, true);
-        self.confirm = None;
         self.fx(Sfx::Drawer, Some(Haptic::Tick));
     }
 
@@ -480,7 +488,6 @@ impl ShellUi {
         let Some(m) = &mut self.menu else { return };
         m.on_cross = false;
         m.adjusting = false;
-        m.confirm = None;
         m.page_x.set(0.0);
         if self.prefs.reduce_motion {
             m.page_x.snap(0.0);
@@ -504,7 +511,6 @@ impl ShellUi {
             m.pat_x.set(1.0);
         }
         m.cat = cat;
-        m.confirm = None;
         m.adjusting = false;
         let keys = rows(cat, v);
         let s = s.min(keys.len().saturating_sub(1));
@@ -575,14 +581,14 @@ impl ShellUi {
     /// A button with the MENU up; the pattern feels ▲▼.
     pub(super) fn menu_button(&mut self, b: Button, repeat: bool, v: &View) {
         self.sync_menu(v);
-        let before = self.menu.as_ref().map(|m| (m.on_cross, m.cat, self.cross_sel[m.cat.i()], m.sub.as_ref().is_some_and(|s| !s.closing), m.ctx.is_some(), m.adjusting));
+        let before = self.menu.as_ref().map(|m| (m.on_cross, m.cat, self.cross_sel[m.cat.i()], m.top().is_some(), m.ctx.is_some(), m.adjusting));
         self.menu_button_inner(b, repeat, v);
         let Some((cross0, cat0, s0, sub0, ctx0, adj0)) = before else { return };
         if self.prefs.reduce_motion {
             return;
         }
         let Some(m) = &mut self.menu else { return };
-        if m.closing || sub0 || ctx0 || m.sub.as_ref().is_some_and(|s| !s.closing) {
+        if m.closing || sub0 || ctx0 || m.top().is_some() {
             return;
         }
         let s = self.cross_sel[m.cat.i()];
@@ -608,7 +614,7 @@ impl ShellUi {
             return;
         }
         // a page sliding out no longer takes buttons
-        if m.sub.as_ref().is_some_and(|s| !s.closing) {
+        if m.top().is_some() {
             self.sub_button(b, repeat, v);
             return;
         }
@@ -673,7 +679,6 @@ impl ShellUi {
                     self.fx(Sfx::Deny, None);
                 } else {
                     self.cross_sel[cat.i()] = ns;
-                    m.confirm = None;
                     m.layout(ns);
                     self.fx(Sfx::Tick, Some(Haptic::Tick));
                 }
@@ -792,6 +797,11 @@ impl ShellUi {
     }
 
     fn activate(&mut self, row: Row, v: &View) {
+        if row == Row::Page(SubKind::TimeZone) {
+            // the compositor loads the zones, then opens the page (open_tz)
+            self.out.push(Out::OpenTimeZone);
+            return;
+        }
         if let Some(kind) = row.page() {
             self.open_sub(kind, v);
             return;
@@ -823,25 +833,13 @@ impl ShellUi {
                     _ => self.fx(Sfx::Deny, None),
                 }
             }
-            Row::Sleep => {
-                self.close_menu();
-                self.out.push(Out::Sleep);
-            }
             Row::Keyboard => {
                 self.close_menu();
                 self.out.push(Out::ShowKeyboard);
             }
-            Row::MoreSettings => self.open_settings(),
-            Row::Restart | Row::PowerOff => {
-                let Some(m) = &mut self.menu else { return };
-                if m.confirm.as_ref() == Some(&row) {
-                    m.confirm = None;
-                    self.out.push(if row == Row::Restart { Out::Reboot } else { Out::PowerOff });
-                    self.fx(Sfx::Close, Some(Haptic::Long));
-                } else {
-                    m.confirm = Some(row);
-                    self.fx(Sfx::Deny, Some(Haptic::Double));
-                }
+            Row::Remote => {
+                self.out.push(Out::OpenSetup(SetupPage::Remote));
+                self.fx(Sfx::Tab, Some(Haptic::Tick));
             }
             _ => {}
         }
@@ -895,7 +893,7 @@ impl ShellUi {
     /// The apps the Running page shows live (they get frame callbacks):
     /// the selected window and its visible neighbours.
     pub fn live_previews(&self) -> Vec<u32> {
-        if self.page.is_some() || self.settings.is_some() || self.tz.is_some() {
+        if self.page.is_some() {
             return Vec::new();
         }
         let Some(m) = self.menu.as_ref().filter(|m| !m.closing && m.page_x.x < 0.99) else { return Vec::new() };
@@ -955,6 +953,14 @@ impl ShellUi {
         if let Some(p) = &m.gpanel {
             self.draw_gpanel(b, pal, v, p, g);
         }
+        // something in Running needs you: a dot on the cross's edge
+        // towards it
+        if px > 0.01 && !v.dash.attention.is_empty() && m.top().is_none() {
+            let x = (1.0 - px) * W + 22.0;
+            let cy = CATS_TOP + 10.0 + ICON / 2.0;
+            b.ellipse(x, cy, 12.0, 12.0, pal.dark);
+            b.ellipse(x, cy, 9.0, 9.0, pal.yellow);
+        }
         // the bars fade with the menu under the screensaver
         let (e, _) = self.saver();
         b.push_alpha(1.0 - e);
@@ -1001,6 +1007,12 @@ impl ShellUi {
             }
             b.rect(0.0, y, W, 3.0, pal.dark);
             b.rect(0.0, y + RUN_H - 3.0, W, 3.0, pal.dark);
+            // an app that waits for you: a yellow badge at its top right
+            if let Row::App(u) = r
+                && let Some(it) = v.app(*u).and_then(|a| a.entry.as_deref()).and_then(|e| v.dash.attention.iter().find(|i| i.app == e))
+            {
+                needs_you_badge(b, pal, W - 28.0, y + 24.0, &it.text);
+            }
             if on {
                 let accent = match r {
                     Row::Home => pal.lime,
@@ -1020,20 +1032,7 @@ impl ShellUi {
         let (name, status) = match r {
             Row::Home => ("Home".to_string(), String::new()),
             Row::App(u) => match v.app(*u) {
-                Some(a) => {
-                    let st = if a.asleep {
-                        "asleep · saved"
-                    } else if a.closing {
-                        "closing"
-                    } else if !a.has_buffer {
-                        "starting"
-                    } else if v.current == Some(*u) {
-                        "on screen"
-                    } else {
-                        "background"
-                    };
-                    (a.name.clone(), st.to_string())
-                }
+                Some(a) => (a.name.clone(), AppState::of(a, v).label().to_string()),
                 None => (String::new(), String::new()),
             },
             _ => (String::new(), String::new()),
@@ -1105,7 +1104,7 @@ impl ShellUi {
         {
             self.draw_games_pic(b, pal, v, gr, g);
         }
-        if let Some(sub) = &m.sub {
+        for sub in &m.subs {
             self.draw_sub(b, pal, v, m, sub, g);
         }
         if let Some(p) = &m.gpage {
@@ -1158,8 +1157,7 @@ impl ShellUi {
     #[allow(clippy::too_many_arguments)]
     fn draw_item(&self, b: &mut B, pal: &Pal, v: &View, m: &Cross, r: &RowAnim, on: bool, accent: Color, g: &Glass) {
         let row = &r.key;
-        let confirm = on && m.confirm.as_ref() == Some(row);
-        let info = row_info(row, v, self.prefs.sound_volume);
+        let info = row_info(row, v, &self.prefs);
         let h = if on { SEL_H } else { ROWH };
         let cy = h / 2.0;
         let bw = r.bw.x;
@@ -1182,17 +1180,14 @@ impl ShellUi {
         // the icon tile: glass, or solid with an ink outline when selected
         let tile = if on { TILE } else { TILE_S };
         let (sx, sy) = (IX_W, cy - tile / 2.0);
-        if confirm {
-            b.rect(sx, sy, tile, tile, pal.orange);
-            b.frame(sx, sy, tile, tile, 2.0, pal.dark);
-        } else if on {
+        if on {
             b.rect(sx, sy, tile, tile, DAY.ground);
             b.frame(sx, sy, tile, tile, 2.0, pal.dark);
         } else {
             glass(b, pal, g, sx, sy, tile, tile, 0.45);
             b.frame(sx, sy, tile, tile, 1.0, Color(255, 255, 255, 190));
         }
-        draw_icon(b, info.icon, sx + tile / 2.0, sy + tile / 2.0, tile * 0.62, pal, if on || confirm { pal.dark } else { pal.ink });
+        draw_icon(b, info.icon, sx + tile / 2.0, sy + tile / 2.0, tile * 0.62, pal, if on { pal.dark } else { pal.ink });
         // the value column, right-aligned at the item's right edge
         let adjusting = on && m.adjusting;
         let mut right = ITEM_W;
@@ -1225,9 +1220,7 @@ impl ShellUi {
         let top = cy - (title.line_px() + 2.0 + sub.line_px()) / 2.0;
         let t = b.fit(&info.title, &title, right - tx);
         b.text(tx, top, &t, &title);
-        let s = if confirm {
-            format!("Press A again to {}", info.title.to_lowercase())
-        } else if adjusting {
+        let s = if adjusting {
             "◀▶ to change · A when done".to_string()
         } else {
             info.sub
@@ -1236,25 +1229,28 @@ impl ShellUi {
         arrow_text(b, tx, top + title.line_px() + 2.0, &s, &sub, true);
     }
 
+    /// The hint bar. The same words everywhere: ▲▼ Choose, ◀▶ Category /
+    /// Adjust / Channel, A Open / Switch / Adjust / Change / Done, B Back
+    /// (one level), MENU Close (everything).
     pub(super) fn menu_hints(&self, m: &Cross, v: &View) -> Vec<(&'static str, &'static str)> {
-        if let Some(sub) = &m.sub {
+        if let Some(sub) = m.top() {
             return self.sub_hints(sub, v);
         }
         if let Some(h) = self.games_hints(v) {
             return h;
         }
         if m.ctx.is_some() {
-            return vec![("▲▼", "Choose"), ("B", "Back"), ("A", "Select")];
+            return vec![("▲▼", "Choose"), ("A", "Select"), ("B", "Back")];
         }
         if !m.on_cross {
-            let mut h = vec![("▲▼", "Scroll"), ("▶", "Apps")];
+            let mut h = vec![("▲▼", "Choose"), ("▶", "Apps")];
             match m.run_keys.get(m.run_sel) {
                 Some(Row::Home) => h.push(("A", "Go home")),
                 Some(Row::App(u)) if v.app(*u).is_some_and(|a| a.game) => {
                     let wake = v.app(*u).is_some_and(|a| a.asleep);
-                    h.extend([("X", "Close"), ("Y", "Game menu"), ("A", if wake { "Wake" } else { "Switch" })]);
+                    h.extend([("X", "Close app"), ("Y", "Game menu"), ("A", if wake { "Wake" } else { "Switch" })]);
                 }
-                Some(_) => h.extend([("X", "Close"), ("Y", "Options"), ("A", "Switch")]),
+                Some(_) => h.extend([("X", "Close app"), ("Y", "Options"), ("A", "Switch")]),
                 None => {}
             }
             h.push(("MENU", "Close"));
@@ -1267,13 +1263,12 @@ impl ShellUi {
         let mut h = vec![("◀▶", if first { "Running / Category" } else { "Category" }), ("▲▼", "Choose")];
         match m.sel_row(self.cross_sel[m.cat.i()]) {
             Some(r) if r.level() => h.push(("A", "Adjust")),
-            Some(r) if r.warn() => h.push(("A", "Choose")),
-            Some(Row::Sleep) => h.push(("A", "Sleep")),
             Some(Row::Game(g)) => h.push(("A", super::gamepages::game_hint(g, v))),
             Some(Row::Launch(id)) => {
                 let running = v.launcher.iter().find(|l| l.id == *id).is_some_and(|l| l.running && l.single_instance);
                 h.push(("A", if running { "Switch" } else { "Open" }));
             }
+            Some(Row::Keyboard) => h.push(("A", "Show")),
             Some(_) => h.push(("A", "Open")),
             None => {}
         }
@@ -1404,10 +1399,11 @@ impl RowInfo {
     }
 }
 
-fn row_info(row: &Row, v: &View, _ui_vol: u8) -> RowInfo {
+fn row_info(row: &Row, v: &View, prefs: &Prefs) -> RowInfo {
     let ri = |title: &str, sub: String, icon: Ic| RowInfo { title: title.to_string(), sub, icon, level: None, value: None, chevron: false };
+    let page = |k: SubKind, sub: String| RowInfo { chevron: true, ..ri(k.title(), sub, k.icon()) };
     match row {
-        Row::Home => ri("Home", "Tiles and clock".into(), Ic::Home),
+        Row::Home => ri("Home", "Clock, Continue, Needs you".into(), Ic::Home),
         Row::App(uid) => match v.app(*uid) {
             Some(a) => ri(&a.name, String::new(), Ic::art(a.art)),
             None => ri("", String::new(), Ic::Apps),
@@ -1419,22 +1415,63 @@ fn row_info(row: &Row, v: &View, _ui_vol: u8) -> RowInfo {
         }
         Row::Launch(id) => match v.launcher.iter().find(|l| l.id == *id) {
             Some(l) => {
-                let sub = if l.running && l.single_instance { format!("{} · running", l.description) } else { l.description.clone() };
-                ri(&l.name, sub.trim_start_matches(" · ").to_string(), Ic::art(l.art))
+                let state = v.by_entry(id).filter(|_| l.single_instance).map(|a| AppState::of(a, v).label());
+                let sub = match state {
+                    Some(st) if l.description.is_empty() => st.to_string(),
+                    Some(st) => format!("{} · {st}", l.description),
+                    None => l.description.clone(),
+                };
+                ri(&l.name, sub, Ic::art(l.art))
             }
             None => ri(id, String::new(), Ic::Apps),
         },
         Row::Brightness => RowInfo { level: v.sys.brightness, ..ri("Brightness", if v.sys.brightness.is_some() { "A to adjust".into() } else { "No backlight".into() }, Ic::Sun) },
         Row::Volume => RowInfo { level: v.volume.map(|x| if v.muted { 0 } else { x }), ..ri("Volume", if v.muted { "Muted · A to adjust".into() } else { "A to adjust".into() }, Ic::Vol) },
         Row::Mixer => RowInfo { value: v.volume.map(|x| format!("{x}%")), chevron: true, ..ri("Mixer", "A level for each app".into(), Ic::Music) },
-        Row::Wifi => RowInfo { chevron: true, ..ri("Wi-Fi", super::menupages::wifi_summary(v), Ic::Wifi) },
-        Row::Bluetooth => RowInfo { chevron: true, ..ri("Bluetooth", super::menupages::bt_summary(v), Ic::Bt) },
-        Row::Sleep => ri("Sleep", "Any button wakes it".into(), Ic::Moon),
         Row::Keyboard => ri("Keyboard", "On-screen keys for this app".into(), Ic::Keys),
-        Row::MoreSettings => RowInfo { chevron: true, ..ri("More settings", "Sounds, motion, time zone…".into(), Ic::Gear) },
-        Row::Restart => ri("Restart", "Apps close".into(), Ic::Restart),
-        Row::PowerOff => ri("Power off", "Apps close".into(), Ic::Power),
+        Row::Remote => {
+            let sub = if v.sys.sshd_listening {
+                match v.sys.ssh_sessions {
+                    0 => "SSH on · pair a computer".to_string(),
+                    1 => "SSH on · 1 session".to_string(),
+                    n => format!("SSH on · {n} sessions"),
+                }
+            } else {
+                "SSH off · pair a computer".to_string()
+            };
+            RowInfo { chevron: true, ..ri("Remote access", sub, Ic::Link) }
+        }
+        Row::Page(k) => {
+            let sub = match k {
+                SubKind::Display => format!("{} · {}{}", if prefs.night { "Night" } else { "Day" }, prefs.motion.name(), if prefs.reduce_motion { " · reduced" } else { "" }),
+                SubKind::Sound => format!("Mixer, UI sounds {}, vibration {}", if prefs.sounds { "on" } else { "off" }, if prefs.haptics { "on" } else { "off" }),
+                SubKind::Wifi => super::menupages::wifi_summary(v),
+                SubKind::Bluetooth => super::menupages::bt_summary(v),
+                SubKind::TimeZone => format!("{} · {}", crate::tz::pretty(v.timezone).0, v.sys.time),
+                SubKind::Updates => v.update.map(|u| u.message.clone()).unwrap_or_default(),
+                SubKind::About => "Version, storage, battery, controls".into(),
+                SubKind::Power => "Sleep, restart, power off, log out".into(),
+                _ => String::new(),
+            };
+            page(*k, sub)
+        }
     }
+}
+
+/// "NEEDS YOU" on a window in Running, right-aligned at `right`.
+fn needs_you_badge(b: &mut B, pal: &Pal, right: f32, top: f32, text: &str) {
+    let lab = ts(Face::Mono600, 17.0, pal.dark).tracking(0.06);
+    let txt = ts(Face::Body500, 20.0, pal.dark);
+    let t = b.fit(text, &txt, 380.0);
+    let (lw, tw) = (b.measure("NEEDS YOU", &lab), b.measure(&t, &txt));
+    let h = 44.0;
+    let w = 16.0 + lw + 14.0 + tw + 16.0;
+    let x = right - w;
+    b.rect(x + 6.0, top + 6.0, w, h, pal.dark);
+    b.rect(x, top, w, h, pal.yellow);
+    b.frame(x, top, w, h, 2.0, pal.dark);
+    b.text(x + 16.0, top + h / 2.0 - lab.line_px() / 2.0, "NEEDS YOU", &lab);
+    b.text(x + 16.0 + lw + 14.0, top + h / 2.0 - txt.line_px() / 2.0, &t, &txt);
 }
 
 /// The options popup (Y on a window): frosted, ink outline and shadow.
@@ -1482,10 +1519,13 @@ pub(super) enum Ic {
     Vol,
     Wifi,
     Bt,
-    Moon,
-    Restart,
     Keys,
-    Gear,
+    Clock,
+    Screen,
+    Link,
+    Update,
+    Info,
+    Pad,
 }
 
 impl Ic {
@@ -1621,17 +1661,6 @@ pub(super) fn draw_icon(b: &mut B, ic: Ic, cx: f32, cy: f32, size: f32, pal: &Pa
             line(b, &arc(0.0, 17.29, 8.0, -131.4, -48.6));
         }
         Ic::Bt => line(b, &[(-8.0, -12.0), (10.0, 4.0), (0.0, 14.0), (0.0, -18.0), (10.0, -8.0), (-8.0, 8.0)]),
-        Ic::Moon => {
-            // a crescent: the outer circle minus an inner one
-            let mut pts = arc(1.32, 0.85, 20.0, -70.5, -339.1);
-            pts.extend(arc(20.48, -7.99, 16.0, 91.7, 218.7));
-            b.poly_concave(&pts, pal.lavender);
-            b.stroke(&pts, true, lw, ink);
-        }
-        Ic::Restart => {
-            line(b, &arc(0.22, 3.12, 20.0, -27.2, -351.7));
-            line(b, &[(20.0, -20.0), (20.0, -6.0), (6.0, -6.0)]);
-        }
         Ic::Keys => {
             rect(b, -24.0, -14.0, 48.0, 28.0, Some(DAY.ground));
             for (x, y) in [(-16.0, -6.0), (-6.0, -6.0), (4.0, -6.0), (14.0, -6.0)] {
@@ -1639,13 +1668,42 @@ pub(super) fn draw_icon(b: &mut B, ic: Ic, cx: f32, cy: f32, size: f32, pal: &Pa
             }
             line(b, &[(-12.0, 6.0), (12.0, 6.0)]);
         }
-        Ic::Gear => {
-            dot(b, 0.0, 0.0, 8.0, pal.yellow, true);
-            for k in 0..8 {
-                let a = (k as f32 * 45.0).to_radians();
-                let (c, s) = (a.cos(), a.sin());
-                line(b, &[(c * 16.0, s * 16.0), (c * 24.0, s * 24.0)]);
-            }
+        Ic::Clock => {
+            dot(b, 0.0, 0.0, 22.0, pal.lavender, true);
+            line(b, &[(0.0, -13.0), (0.0, 0.0), (10.0, 6.0)]);
+        }
+        Ic::Screen => {
+            rect(b, -24.0, -18.0, 48.0, 30.0, Some(pal.lavender));
+            dot(b, -6.0, -4.0, 6.0, pal.yellow, true);
+            line(b, &[(-10.0, 22.0), (10.0, 22.0)]);
+            line(b, &[(0.0, 12.0), (0.0, 22.0)]);
+        }
+        Ic::Link => {
+            // two chain links
+            let a = crate::scene::rrect_pts(-24.0, -9.0, 28.0, 18.0, 9.0);
+            let c = crate::scene::rrect_pts(-4.0, -9.0, 28.0, 18.0, 9.0);
+            b.poly(&a, pal.lime);
+            b.stroke(&a, true, lw, ink);
+            b.stroke(&c, true, lw, ink);
+        }
+        Ic::Update => {
+            rect(b, -20.0, 10.0, 40.0, 10.0, Some(pal.lime));
+            line(b, &[(0.0, -22.0), (0.0, 4.0)]);
+            line(b, &[(-10.0, -6.0), (0.0, 4.0), (10.0, -6.0)]);
+        }
+        Ic::Info => {
+            dot(b, 0.0, 0.0, 22.0, pal.yellow, true);
+            line(b, &[(0.0, -2.0), (0.0, 12.0)]);
+            dot(b, 0.0, -10.0, 2.6, ink, false);
+        }
+        Ic::Pad => {
+            let pts = crate::scene::rrect_pts(-26.0, -14.0, 52.0, 28.0, 8.0);
+            b.poly(&pts, pal.pink);
+            b.stroke(&pts, true, lw, ink);
+            line(b, &[(-15.0, -6.0), (-15.0, 6.0)]);
+            line(b, &[(-21.0, 0.0), (-9.0, 0.0)]);
+            dot(b, 10.0, -3.0, 3.0, ink, false);
+            dot(b, 17.0, 4.0, 3.0, ink, false);
         }
         Ic::Claude => {}
     }

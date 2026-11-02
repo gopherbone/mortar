@@ -257,10 +257,16 @@ pub fn run(o: &Opts) -> Result<(), String> {
     let none: Vec<RunningInfo> = Vec::new();
     // the screensaver screens: it comes after 30 s (use --at 29000)
     let screensaver = if o.screen.starts_with("saver") { 30 } else { Prefs::default().screensaver };
-    let prefs = Prefs { night: o.night, screensaver, ..Prefs::default() };
+    // no first-time tips over the screens (the "tip" screen shows one)
+    let tips_seen = ["menu", "keyboard", "game", "controls"].map(String::from).to_vec();
+    let prefs = Prefs { night: o.night, screensaver, tips_seen, ..Prefs::default() };
     let s = o.screen.as_str();
     let mut ui = ShellUi::new(prefs, s == "boot");
-    let over_app = s.starts_with("menu") || s.starts_with("cross") || s.starts_with("saver") || matches!(s, "running" | "cross-switch" | "mixer" | "bluetooth" | "setup-wifi" | "setup-bluetooth" | "settings" | "app" | "osd" | "osd-mute" | "osd-bri" | "osd-home" | "toast" | "achievement" | "flash" | "osk" | "osk-chips" | "osk-chips-focus" | "close" | "swap" | "remote" | "wifi");
+    let over_app = s.starts_with("menu")
+        || s.starts_with("cross")
+        || s.starts_with("saver")
+        || s.starts_with("page-")
+        || matches!(s, "running" | "running-attention" | "setup-wifi" | "setup-bluetooth" | "app" | "osd" | "osd-mute" | "osd-bri" | "osd-home" | "toast" | "achievement" | "flash" | "osk" | "osk-chips" | "osk-chips-focus" | "close" | "swap" | "remote" | "tip");
     let mut current = if s == "cross-dark" { Some(1) } else if over_app { Some(2) } else { None };
     // games: a demo library (made-up titles), one game running
     let games = demo_games(&mut demo.pix);
@@ -275,7 +281,28 @@ pub fn run(o: &Opts) -> Result<(), String> {
     let host = "brick";
     let demo_st = { use mortar_setup::ui::Device; mortar_setup::ui::demo::DemoDevice::settings().status().clone() };
     let net = crate::shellui::NetState { wifi: demo_st.wifi.clone(), bt: demo_st.bluetooth.clone(), error: None };
-    let mixer = vec![crate::shellui::MixChan { uid: 2, level: 40, muted: false }, crate::shellui::MixChan { uid: 1, level: 70, muted: false }];
+    let mixer = vec![crate::shellui::MixChan { uid: 2, level: 40, muted: false, playing: false }, crate::shellui::MixChan { uid: 1, level: 70, muted: false, playing: true }];
+    // the dashboard: the default widgets plus two command widgets
+    let mut widgets = crate::widgets::defaults();
+    if s != "home-default" {
+        widgets.truncate(6);
+        let cmd = |title: &str| crate::widgets::Widget { title: Some(title.into()), command: vec!["true".into()], ..crate::widgets::Widget::new(crate::widgets::Kind::Command) };
+        widgets.insert(4, cmd("Uptime"));
+        widgets.push(cmd("Backup"));
+    }
+    let mut outputs: Vec<Option<crate::widgets::Output>> = vec![None; widgets.len()];
+    if let Some(i) = widgets.iter().position(|w| w.title.as_deref() == Some("Uptime")) {
+        outputs[i] = Some(crate::widgets::parse_output("3 days\nload 0.42"));
+    }
+    if let Some(i) = widgets.iter().position(|w| w.title.as_deref() == Some("Backup")) {
+        outputs[i] = Some(crate::widgets::parse_output(r#"{"title":"Backup","value":"OK","accent":"lime"}"#));
+    }
+    let attention = if s.ends_with("attention") || s == "home" {
+        vec![crate::attention::Item { app: "claude".into(), text: "Approve: systemd-run --user free -m".into(), seq: 1 }]
+    } else {
+        Vec::new()
+    };
+    let about = crate::about::About::demo();
     let update = crate::shellui::UpdateView { message: "Restart to update".into(), ready: true, busy: false, auto_check: true };
     let mk = |current: Option<u32>, osk_h: f32| View {
         running: run_ref,
@@ -294,6 +321,7 @@ pub fn run(o: &Opts) -> Result<(), String> {
         net: Some(&net),
         mixer: &mixer,
         games: Some(&games),
+        dash: crate::shellui::Dash { attention: &attention, widgets: &widgets, outputs: &outputs, about: Some(&about) },
     };
     let dt = 1.0 / 120.0;
     let settle = |ui: &mut ShellUi, v: &View, secs: f64| {
@@ -306,11 +334,16 @@ pub fn run(o: &Opts) -> Result<(), String> {
     let v0 = mk(current, 0.0);
     settle(&mut ui, &v0, 0.05);
     match s {
-        "boot" | "home" | "home-empty" | "home-charging" | "home-low" | "app" => {}
-        "menu" | "menu-running" | "running" => {
+        "boot" | "home" | "home-default" | "home-attention" | "home-empty" | "home-charging" | "home-low" | "app" => {}
+        "tip" => ui.show_toast(Toast { sub: "TIP · MENU, THEN A GOES BACK TO THE LAST ONE".into(), ..Toast::info("MENU switches apps") }),
+        "menu" | "menu-running" | "running" | "running-attention" => {
             ui.menu_key(&v0);
+            if s == "running-attention" {
+                // Claude, the one waiting
+                ui.button(Button::Up, false, &v0);
+            }
         }
-        "menu-apps" | "cross-apps" | "cross-dark" | "home-menu" | "menu-games" | "cross-games" | "menu-music" | "cross-music" | "cross-switch" | "saver-apps" | "saver-games" | "saver-music" | "saver-settings" | "saver-exit" => {
+        "menu-apps" | "cross-apps" | "cross-attention" | "cross-dark" | "home-menu" | "menu-games" | "cross-games" | "menu-music" | "cross-music" | "cross-switch" | "saver-apps" | "saver-games" | "saver-music" | "saver-settings" | "saver-exit" => {
             ui.menu_key(&v0);
             let n = match s {
                 "menu-games" | "cross-games" | "saver-games" => 2,
@@ -332,25 +365,33 @@ pub fn run(o: &Opts) -> Result<(), String> {
                 ui.button(Button::Right, false, &v0);
             }
         }
-        "menu-settings" | "cross-settings" | "menu-adjust" | "menu-confirm" | "settings" | "wifi" | "bluetooth" | "mixer" => {
-            // MENU, R1: Settings (Brightness, Volume, Mixer, Wi-Fi,
-            // Bluetooth, Sleep, Keyboard, More settings, Restart, Power off)
+        "menu-settings" | "cross-settings" | "menu-adjust" | "page-display" | "page-display-adjust" | "page-sound" | "page-mixer" | "page-wifi" | "page-bluetooth" | "page-updates" | "page-about" | "page-controls" | "page-power" | "page-power-confirm" => {
+            // MENU, R1: Settings (Brightness, Volume, Keyboard, Display,
+            // Sound, Wi-Fi, Bluetooth, Time zone, Remote access, Updates,
+            // About, Power)
             ui.menu_key(&v0);
             ui.button(Button::R1, false, &v0);
-            let (down, a) = match s {
-                "menu-adjust" => (1, 1),
-                "menu-confirm" => (8, 1),
-                "settings" => (7, 1),
-                "mixer" => (2, 1),
-                "wifi" => (3, 1),
-                "bluetooth" => (4, 1),
-                _ => (0, 0),
+            let (down, a): (usize, &[Button]) = match s {
+                "menu-adjust" => (1, &[Button::A]),
+                "page-display" => (3, &[Button::A]),
+                "page-display-adjust" => (3, &[Button::A, Button::A]),
+                "page-sound" => (4, &[Button::A]),
+                "page-mixer" => (4, &[Button::A, Button::Down, Button::A]),
+                "page-wifi" => (5, &[Button::A]),
+                "page-bluetooth" => (6, &[Button::A]),
+                "page-updates" => (9, &[Button::A]),
+                "page-about" => (10, &[Button::A]),
+                "page-controls" => (10, &[Button::A, Button::R1, Button::A]),
+                "page-power" => (11, &[Button::A]),
+                "page-power-confirm" => (11, &[Button::A, Button::Down, Button::Down, Button::Down, Button::A]),
+                _ => (0, &[]),
             };
             for _ in 0..down {
                 ui.button(Button::Down, false, &v0);
             }
-            for _ in 0..a {
-                ui.button(Button::A, false, &v0);
+            for b in a {
+                settle(&mut ui, &v0, 0.5);
+                ui.button(*b, false, &v0);
             }
         }
         "games" | "games-system" => {
@@ -455,21 +496,25 @@ pub fn run(o: &Opts) -> Result<(), String> {
             terminal_with_chips(&dir, &mut demo.pix, &strip, o.night)?;
         }
         "power" => ui.open_power_menu(),
-        "timezone" | "timezone-zones" => {
+        "page-timezone" | "page-timezone-cities" => {
             ui.menu_key(&v0);
+            ui.button(Button::R1, false, &v0);
+            for _ in 0..7 {
+                ui.button(Button::Down, false, &v0);
+            }
             let dir = std::path::Path::new("/usr/share/zoneinfo");
             let ids = crate::tz::list(dir);
             let off = crate::tz::offsets(dir, &ids);
             let zones = ids.into_iter().map(|id| crate::shellui::TzZone { offset: off.get(&id).copied().unwrap_or(0), id }).collect();
             ui.open_tz(zones, "Europe/Lisbon".into());
-            if s == "timezone-zones" {
+            if s == "page-timezone-cities" {
                 settle(&mut ui, &v0, 0.6);
                 ui.button(Button::A, false, &v0);
             }
         }
         other => {
             return Err(format!(
-                "unknown preview screen '{other}' (boot, home, home-empty, app, running, cross-apps, home-menu (the cross over home), menu-games, menu-music, cross-settings, menu-adjust, menu-confirm, menu-options, games, games-system, game-panel, game-asleep, wifi, bluetooth, mixer, cross-games, cross-music, cross-switch (Apps to Games: use --frames), settings, remote, setup-wifi, setup-bluetooth, timezone, timezone-zones, launch, close, swap, osd, osd-mute, osd-bri, osd-home, toast, achievement, flash, osk, osk-chips, osk-chips-focus, power)"
+                "unknown preview screen '{other}' (boot, home (the dashboard, Claude needs you), home-default (the default widgets), home-attention, home-empty, home-charging, home-low, app, tip, running, running-attention, cross-apps, cross-attention, home-menu (the cross over home), menu-games, menu-music, games, games-system, game-panel, game-asleep, cross-settings, menu-adjust, menu-options, cross-games, cross-music, cross-switch (Apps to Games: use --frames), saver-apps, saver-games, saver-music, saver-settings, saver-exit, page-display, page-display-adjust, page-sound, page-mixer, page-wifi, page-bluetooth, page-timezone, page-timezone-cities, page-updates, page-about, page-controls, page-power, page-power-confirm, remote, setup-wifi, setup-bluetooth, launch, close, swap, osd, osd-mute, osd-bri, osd-home, toast, achievement, flash, osk, osk-chips, osk-chips-focus, power)"
             ))
         }
     }

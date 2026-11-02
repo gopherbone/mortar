@@ -276,6 +276,8 @@ impl Shell {
         let osk_h = if self.osk_shown() { self.osk_height() as f32 } else { 0.0 };
         let osk_drop = if self.osk_shown() { (self.osk_height() - self.osk_shown_h()) as f32 } else { 0.0 };
         let update = self.update.view.clone();
+        let attention = self.attention.items().to_vec();
+        let dash = crate::shellui::Dash { attention: &attention, widgets: &self.cfg.home.widgets, outputs: &self.widget_out, about: Some(&self.about) };
         let v = View {
             running: &running,
             launcher: &launcher,
@@ -293,6 +295,7 @@ impl Shell {
             net: self.net.as_ref(),
             mixer: &self.mixer,
             games: self.games.as_ref().map(|g| &g.view),
+            dash,
         };
         f(&mut self.sui, &v)
     }
@@ -470,6 +473,7 @@ impl Shell {
                     crate::config::save_prefs(&self.sui.prefs);
                     self.apply_prefs();
                 }
+                Out::Remember => crate::config::save_prefs(&self.sui.prefs),
                 Out::UpdateCheck => {
                     if let Some(u) = &self.cfg.update {
                         super::state::run_detached(&u.check.clone());
@@ -566,7 +570,17 @@ impl Shell {
             }
         }
         self.games_poll();
+        // Home: the command widgets run, and Now playing looks at the
+        // streams now and then
+        let home = self.visible_app().is_none() && self.sui.sleep_phase() == crate::shellui::SleepPhase::Awake;
+        self.widget_worker.set_active(home);
+        if let Some(o) = self.widget_worker.take() {
+            self.widget_out = o;
+            self.ui_dirty = true;
+        }
+        let now_playing = home && self.cfg.home.widgets.iter().any(|w| w.kind == crate::widgets::Kind::NowPlaying);
         self.mixer_worker.set_active(self.sui.wants_mixer());
+        self.mixer_worker.set_slow(now_playing);
         if let Some(s) = self.mixer_worker.take() {
             self.streams = s;
             let mix = self.mix_channels();
@@ -588,8 +602,9 @@ impl Shell {
                 Some(c) => {
                     c.level = c.level.max(s.level);
                     c.muted &= s.muted;
+                    c.playing |= s.running && !s.muted;
                 }
-                None => out.push(crate::shellui::MixChan { uid, level: s.level, muted: s.muted }),
+                None => out.push(crate::shellui::MixChan { uid, level: s.level, muted: s.muted, playing: s.running && !s.muted }),
             }
         }
         out
@@ -624,7 +639,6 @@ impl Shell {
             let m = match which {
                 SetupPage::Wifi => "Wi-Fi settings need mortar.setup.enable",
                 SetupPage::Remote => "Remote access needs mortar.setup.enable",
-                SetupPage::Bluetooth => "Bluetooth settings need mortar.setup.enable",
             };
             self.sui.show_toast(Toast::info(m));
             return;
@@ -637,7 +651,6 @@ impl Shell {
         let page = match which {
             SetupPage::Wifi => SetupUi::wifi(dev, self.sys.clone()),
             SetupPage::Remote => SetupUi::remote_access(dev, self.sys.clone()),
-            SetupPage::Bluetooth => SetupUi::bluetooth(dev, self.sys.clone()),
         };
         self.sui.open_page(page);
         self.page_tick = Some(Instant::now() + Duration::from_secs(1));
@@ -1024,10 +1037,31 @@ impl Shell {
     pub fn status_refresh(&mut self) -> bool {
         let new = Sys::read();
         let radios = read_radios();
-        let changed = format!("{new:?}") != format!("{:?}", self.sys) || radios != self.radios;
+        let about = crate::about::About::read();
+        let changed = format!("{new:?}") != format!("{:?}", self.sys) || radios != self.radios || about != self.about;
         self.sys = new;
         self.radios = radios;
+        self.about = about;
         changed
+    }
+
+    /// `ctl attention {json}`: an app raises or clears "Needs you".
+    pub fn attention_json(&mut self, arg: &str) -> Result<(), String> {
+        let c = crate::attention::Cmd::parse(arg)?;
+        let change = self.attention.apply(&c);
+        tracing::info!(app = c.app, op = c.op, ?change, "attention");
+        if change == crate::attention::Change::Raised {
+            let name = self.cfg.app(&c.app).map(|e| e.name.clone()).unwrap_or_else(|| c.app.clone());
+            let text = self.attention.get(&c.app).map(|i| i.text.clone()).unwrap_or_default();
+            self.sui.attention_raised(&name, &text);
+            let outs = self.sui.take_out();
+            self.handle_outs(outs);
+        }
+        if change != crate::attention::Change::Nothing {
+            self.ui_dirty = true;
+            self.needs_redraw = true;
+        }
+        Ok(())
     }
 }
 

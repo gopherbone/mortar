@@ -36,28 +36,35 @@ over SSH.
 | Battery | Charger set up like stock (4.2 V, 960 mA, 128 mA termination, NTC/JEITA windows); the AXP2202 fuel gauge runs TrimUI's battery model. Charging/full shown in the status bars; warnings at 15 % and 5 %; clean power-off at 3 %. USB input: 500 mA from a computer, 2.5 A from a charger. `mortar-power status`. |
 | Debug | Each boot saves logs to `mortar-logs/` on the card's FAT partition. |
 
-Tap the power key to sleep: the screen goes dark and the Brick suspends (s2idle) after 3 s; the power key or any gamepad button wakes it. Settings can also sleep it when idle; hold it for Sleep / Restart / Power off. Set the time zone in MENU > Settings > More settings.
+Tap the power key to sleep: the screen goes dark and the Brick suspends (s2idle) after 3 s; the power key or any gamepad button wakes it. Settings can also sleep it when idle; hold it for Sleep / Restart / Power off. Set the time zone in MENU > Settings > Time zone.
 
 Not yet: deep suspend (it resumes with a fuzzy panel, see modules/trimui-brick.nix), LED effects.
 
 ## Using it
 
-On the greeter, choose **Mortar**. In the shell:
+The Brick boots straight into the shell (as `brick`); the greeter appears
+after Log out (Settings › Power) or if the shell keeps failing. Home is a
+dashboard: the clock, **Continue** (A resumes the last app), **Needs you**
+(apps waiting for you, e.g. a Claude approval), what is playing, battery,
+Wi-Fi, storage and your own widgets (`mortar.shell.home.widgets`). Apps
+start from the MENU. Every button and chord is listed in Settings › About ›
+Controls.
 
 | Button | Does |
 |---|---|
-| D-pad, A, B | Move, open, back |
-| MENU | Running: your open windows, Home first, stacked full screen; MENU or B closes it |
+| D-pad, A | Move, open (on Home: between the tiles; A resumes, switches) |
+| B | Back one step; at the top it closes the menu |
+| MENU | Opens the menu on Running (your open windows, Home first, stacked full screen); closes everything, from anywhere |
 | MENU, then A | Flip back to the previous app |
 | In Running: ▲▼, A, X, Y | Scroll, switch to it, close it, options (switch, restart, close) |
 | In Running, on a game: Y | Game menu: save or load a state (◀▶ picks one of four slots, with pictures), reset, fast-forward, change disc, quit |
 | In Running: ▶ (R1) | The cross: Apps, Games, Music, Settings (R1: straight to Settings); ◀ from Apps or L1 goes back |
-| In the cross: ◀▶, ▲▼, A | Category, item, open |
+| In the cross: ◀▶, ▲▼, A | Category, item, open (Apps holds the tools; games and music have their own) |
 | Games | Continue, recently played, one row per system (A: its games, L1/R1 page, A plays), PICO-8, PuzzleScript, All systems. Every game is its own window in Running; a game you have not used for a while sleeps (saved) and wakes where it was |
-| Settings | Brightness and volume (A, then ◀▶, A when done), Mixer, Wi-Fi, Bluetooth, Sleep, More settings (sounds, motion, palette, time zone, remote access, log out), Restart and Power off (press A twice) |
+| Settings | Brightness and volume (A, then ◀▶, A when done), then pages: Display (palette, motion, screensaver), Sound (Mixer, UI sounds, vibration), Wi-Fi, Bluetooth, Time zone, Remote access, Updates, About (version, storage, battery, Controls), Power (sleep, restart, power off, log out: press A twice). B or ◀ goes back a page |
 | Settings › Wi-Fi | On/off, the network you are on (details, forget), networks nearby (A joins; a password keyboard for new secured ones) |
 | Settings › Bluetooth | On/off, your devices (A connects or disconnects, X forgets), Pair new device |
-| Mixer (Music or Settings) | A fader per app, Master and UI sounds: ◀▶ channel, ▲▼ level, A mute |
+| Mixer (Music or Settings › Sound) | A fader per app, Master and UI sounds: ◀▶ channel, ▲▼ level, A mute |
 | VOL+ / VOL− | Volume (the shell owns these keys) |
 | VOL+ and VOL− together | Screenshot, saved to `~/Pictures/Screenshots` |
 | SELECT + MENU (or F1) | In a game: its own menu (save/load state, reset, quit) |
@@ -66,7 +73,9 @@ On the greeter, choose **Mortar**. In the shell:
 Copy games over SSH, e.g. `scp game.gba brick:/var/lib/mortar-play/roms/gba/`
 (PS1 needs a BIOS such as `scph5501.bin` in `/var/lib/mortar-play/bios/`;
 CHD is the best format for discs). Run `mortar attention` on your computer
-to make the Brick buzz.
+to make the Brick buzz. Scripts on the Brick can ask for you with
+`mortar-shell attention set --app NAME "text"` (and `clear`): it shows
+under Needs you.
 
 ## Getting started
 

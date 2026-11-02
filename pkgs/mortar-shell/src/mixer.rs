@@ -18,6 +18,8 @@ pub struct Stream {
     /// Percent (cubic).
     pub level: u8,
     pub muted: bool,
+    /// The node is running (sound is flowing), not idle or suspended.
+    pub running: bool,
 }
 
 fn num(v: &Value) -> Option<u64> {
@@ -52,7 +54,8 @@ pub fn parse_streams(json: &str) -> Vec<Stream> {
             }
             None => (100, false),
         };
-        out.push(Stream { id: id as u32, pid, name, level, muted });
+        let running = info.get("state").and_then(Value::as_str) == Some("running");
+        out.push(Stream { id: id as u32, pid, name, level, muted, running });
     }
     out
 }
@@ -65,7 +68,7 @@ mod tests {
     fn finds_output_streams() {
         let j = r#"[
           {"id": 31, "type": "PipeWire:Interface:Node", "info": {"props": {"media.class": "Audio/Sink", "node.name": "codec"}}},
-          {"id": 77, "type": "PipeWire:Interface:Node", "info": {
+          {"id": 77, "type": "PipeWire:Interface:Node", "info": {"state": "running",
              "props": {"media.class": "Stream/Output/Audio", "application.name": "m8c", "application.process.id": 4242},
              "params": {"Props": [{"volume": 1.0, "mute": false, "channelVolumes": [0.343, 0.343]}]}}},
           {"id": 78, "type": "PipeWire:Interface:Node", "info": {
@@ -75,7 +78,8 @@ mod tests {
         ]"#;
         let s = parse_streams(j);
         assert_eq!(s.len(), 2);
-        assert_eq!(s[0], Stream { id: 77, pid: Some(4242), name: "m8c".into(), level: 70, muted: false });
+        assert_eq!(s[0], Stream { id: 77, pid: Some(4242), name: "m8c".into(), level: 70, muted: false, running: true });
+        assert!(!s[1].running, "no state: not playing");
         assert_eq!((s[1].pid, s[1].level, s[1].muted), (Some(99), 100, true));
         assert!(parse_streams("not json").is_empty());
     }

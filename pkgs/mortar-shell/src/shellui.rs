@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //! The shell's own UI, after the approved motion prototype
-//! (plan/mortar-motion) and Cross Menu 2 (plan/mortar-cross-2): boot, home, the
-//! MENU (cross.rs: Running, then Apps, Games, Music, Settings; menupages.rs), the
-//! settings screen, launch/close/switch transitions, the volume OSD, toasts
-//! and the screenshot flash.
+//! (plan/mortar-motion) and Cross Menu 2 (plan/mortar-cross-2): boot, the
+//! Home dashboard (home.rs, widgets.rs), the MENU (cross.rs: Running, then
+//! Apps, Games, Music, Settings and its glass pages, menupages.rs),
+//! launch/close/switch transitions, the volume OSD, toasts, first-time
+//! tips and the screenshot flash.
 //!
 //! Pure state: the compositor feeds it buttons, the passing of time and a
 //! `View` of the apps; it answers with `Out`s (actions, sounds, haptic
@@ -11,10 +12,10 @@
 //! the prototype's 1024x768 logical pixels.
 //!
 //! Layers, bottom to top: home or the visible app (+ on-screen keyboard),
-//! the MENU and its veil, the launch/close/switch transition, the settings
-//! screen, the time zone picker, a setup page, the power menu, the OSD, a
-//! toast, the shutter flash, the boot screen, the power-key hold
-//! indicator, and the black of sleep.
+//! the MENU and its veil (with its glass pages), the launch/close/switch
+//! transition, a setup page, the power menu, the OSD, a toast, the shutter
+//! flash, the boot screen, the power-key hold indicator, and the black of
+//! sleep.
 
 #[path = "cross.rs"]
 mod cross;
@@ -22,6 +23,8 @@ mod cross;
 mod menupages;
 #[path = "gamepages.rs"]
 mod gamepages;
+#[path = "home.rs"]
+mod home;
 pub use cross::Cat;
 #[cfg(test)]
 use menupages::SubKind;
@@ -80,8 +83,10 @@ pub const H: f32 = 768.0;
 
 // ------------------------------------------------------------- settings ----
 
-/// User settings changed from the settings screen (persisted by the compositor;
-/// defaults from the NixOS module).
+/// User settings changed in MENU > Settings (persisted by the compositor;
+/// defaults from the NixOS module), plus what the shell remembers for the
+/// person: the first-time tips already shown and the last app (Home's
+/// Continue card).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Prefs {
@@ -99,11 +104,27 @@ pub struct Prefs {
     /// The MENU's screensaver: seconds idle on the cross before its
     /// pattern fills the screen (0: never).
     pub screensaver: u32,
+    /// First-time tips already shown (TIPS ids).
+    pub tips_seen: Vec<String>,
+    /// The launcher entry last on screen (Continue starts it again).
+    pub last_app: Option<String>,
 }
 
 impl Default for Prefs {
     fn default() -> Self {
-        Prefs { sounds: true, sound_volume: 60, haptics: true, motion: Preset::Bouncy, reduce_motion: false, night: false, suspend: false, idle_minutes: 0, screensaver: 60 }
+        Prefs {
+            sounds: true,
+            sound_volume: 60,
+            haptics: true,
+            motion: Preset::Bouncy,
+            reduce_motion: false,
+            night: false,
+            suspend: false,
+            idle_minutes: 0,
+            screensaver: 60,
+            tips_seen: Vec::new(),
+            last_app: None,
+        }
     }
 }
 
@@ -138,6 +159,41 @@ pub struct RunningInfo {
     pub asleep: bool,
     /// Its last frame (`Src::Pic`), while asleep or waking.
     pub pic: Option<u32>,
+}
+
+/// An app's state, in the same words everywhere (Running, the cross, Home).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AppState {
+    OnScreen,
+    Background,
+    Starting,
+    Closing,
+    Asleep,
+}
+
+impl AppState {
+    pub fn of(a: &RunningInfo, v: &View) -> AppState {
+        if a.closing {
+            AppState::Closing
+        } else if a.asleep {
+            AppState::Asleep
+        } else if !a.has_buffer {
+            AppState::Starting
+        } else if v.current == Some(a.uid) {
+            AppState::OnScreen
+        } else {
+            AppState::Background
+        }
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            AppState::OnScreen => "on screen",
+            AppState::Background => "in the background",
+            AppState::Starting => "starting",
+            AppState::Closing => "closing",
+            AppState::Asleep => "asleep",
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -185,10 +241,24 @@ pub struct View<'a> {
     pub muted: bool,
     /// Wi-Fi and Bluetooth from mortar-setupd (None: no setup service).
     pub net: Option<&'a NetState>,
-    /// The running apps' PipeWire streams (the Mixer).
+    /// The running apps' PipeWire streams (the Mixer, Now playing).
     pub mixer: &'a [MixChan],
     /// mortar-play's library and the game apps' states (None: no games).
     pub games: Option<&'a crate::games::GamesView>,
+    /// Home and Settings > About: attention, widgets, system facts.
+    pub dash: Dash<'a>,
+}
+
+/// What the dashboard and About show.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Dash<'a> {
+    /// "Needs you" (attention.rs), oldest first.
+    pub attention: &'a [crate::attention::Item],
+    /// The Home widgets (config `home.widgets`).
+    pub widgets: &'a [crate::widgets::Widget],
+    /// The command widgets' last results, by widget index.
+    pub outputs: &'a [Option<crate::widgets::Output>],
+    pub about: Option<&'a crate::about::About>,
 }
 
 /// mortar-setupd's view of Wi-Fi (iwd) and Bluetooth (BlueZ).
@@ -207,6 +277,8 @@ pub struct MixChan {
     /// Percent, on wpctl's (cubic) scale.
     pub level: u8,
     pub muted: bool,
+    /// A stream is running (making sound), not idle or corked.
+    pub playing: bool,
 }
 
 /// Settings > Updates, from mortar-update's status file.
@@ -222,7 +294,7 @@ pub struct UpdateView {
 }
 
 impl View<'_> {
-    fn app(&self, uid: u32) -> Option<&RunningInfo> {
+    pub(crate) fn app(&self, uid: u32) -> Option<&RunningInfo> {
         self.running.iter().find(|r| r.uid == uid)
     }
     fn by_entry(&self, id: &str) -> Option<&RunningInfo> {
@@ -244,9 +316,10 @@ pub enum Out {
     /// Switch a radio on or off.
     Radio(Radio, bool),
     ShowKeyboard,
-    /// A mortar-setup page (Wi-Fi networks, Remote access, Bluetooth devices).
+    /// A mortar-setup page (Wi-Fi's WPS and full list, Remote access).
     OpenSetup(SetupPage),
-    /// Open the time zone picker (the compositor loads the zones).
+    /// Open Settings > Time zone (the compositor loads the zones, then
+    /// calls `open_tz`).
     OpenTimeZone,
     SetTimeZone(String),
     Sleep,
@@ -257,6 +330,9 @@ pub enum Out {
     Haptic(Haptic),
     /// Settings changed (save and apply).
     Prefs,
+    /// Save what the shell remembers (tips shown, the last app) without
+    /// applying anything.
+    Remember,
     /// Settings > Updates: check now.
     UpdateCheck,
     /// Settings > Auto-check daily.
@@ -276,51 +352,12 @@ pub enum Out {
     GameCtl(u32, crate::games::GameCmd),
 }
 
-/// Rows of the settings screen (MENU > Settings > More settings). Volume,
-/// brightness, sleep and power live in the MENU itself.
+/// mortar-setup's own pages the MENU opens: Wi-Fi's WPS and full list
+/// ("Other network…"), and Settings > Remote access.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SetupPage {
     Wifi,
     Remote,
-    Bluetooth,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Setting {
-    Sounds,
-    Haptics,
-    Motion,
-    ReduceMotion,
-    Palette,
-    TimeZone,
-    Wifi,
-    Bluetooth,
-    Remote,
-    Updates,
-    AutoUpdate,
-    SleepMode,
-    IdleSleep,
-    Screensaver,
-    Logout,
-}
-
-/// The rows; Updates and Auto-check daily only with mortar.update.
-fn settings(v: &View) -> Vec<Setting> {
-    use Setting::*;
-    let mut s = vec![Sounds, Haptics, Motion, ReduceMotion, Palette, TimeZone, Wifi, Bluetooth, Remote];
-    if v.update.is_some() {
-        s.extend([Updates, AutoUpdate]);
-    }
-    s.extend([SleepMode, IdleSleep, Screensaver, Logout]);
-    s
-}
-
-/// The settings screen: a list that slides in from the right.
-struct SettingsPanel {
-    sel: usize,
-    scroll: Spring,
-    x: Spring,
-    closing: bool,
 }
 
 // ---------------------------------------------------------------- state ----
@@ -330,66 +367,6 @@ struct SettingsPanel {
 pub struct TzZone {
     pub id: String,
     pub offset: i32,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-enum TzRow {
-    /// A region and how many zones it has ("UTC": none, it is a zone).
-    Region(String, usize),
-    Zone(usize),
-}
-
-/// Settings > Time zone: regions, then the zones of one.
-struct TzPicker {
-    zones: Vec<TzZone>,
-    current: String,
-    region: Option<String>,
-    sel: usize,
-    scroll: Spring,
-    /// Slide in/out from the right.
-    x: Spring,
-    /// Fade/slide of the list when the level changes.
-    swap: Spring,
-    closing: bool,
-}
-
-const TZ_ROWS: usize = 7;
-
-impl TzPicker {
-    fn rows(&self) -> Vec<TzRow> {
-        match &self.region {
-            None => {
-                let mut regions: Vec<(String, usize)> = Vec::new();
-                for z in &self.zones {
-                    if z.id == "UTC" {
-                        continue;
-                    }
-                    let r = crate::tz::region(&z.id);
-                    match regions.iter_mut().find(|(n, _)| n == r) {
-                        Some(e) => e.1 += 1,
-                        None => regions.push((r.to_string(), 1)),
-                    }
-                }
-                regions.sort();
-                let mut v: Vec<TzRow> = regions.into_iter().map(|(n, c)| TzRow::Region(n, c)).collect();
-                v.push(TzRow::Region("UTC".into(), 0));
-                v
-            }
-            Some(r) => {
-                let mut idx: Vec<usize> = (0..self.zones.len()).filter(|i| crate::tz::region(&self.zones[*i].id) == r && self.zones[*i].id != "UTC").collect();
-                idx.sort_by_key(|i| crate::tz::pretty(&self.zones[*i].id).0);
-                idx.into_iter().map(TzRow::Zone).collect()
-            }
-        }
-    }
-    fn scroll_for(sel: usize, n: usize) -> f32 {
-        sel.saturating_sub(3).min(n.saturating_sub(TZ_ROWS)) as f32 * 76.0
-    }
-    fn select(&mut self, sel: usize, n: usize, snap: bool) {
-        self.sel = sel.min(n.saturating_sub(1));
-        let t = Self::scroll_for(self.sel, n);
-        if snap { self.scroll.snap(t) } else { self.scroll.set(t) }
-    }
 }
 
 /// Sleep: the screen fades to black, then the compositor switches the
@@ -418,12 +395,6 @@ struct PowerMenu {
 }
 
 const POWER_ROWS: [(&str, &str); 3] = [("Sleep", "Screen off · any button wakes"), ("Restart", "Apps close"), ("Power off", "Apps close")];
-
-struct TileAnim {
-    lift: Spring,
-    sc: Spring,
-    back: Spring,
-}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct R4 {
@@ -525,16 +496,7 @@ struct Boot {
 const BOOT_START: [(f32, f32, f32); 4] = [(-400.0, -300.0, -40.0), (1400.0, -200.0, 30.0), (-300.0, 1000.0, 25.0), (1300.0, 900.0, -35.0)];
 const BOOT_END: [(f32, f32); 4] = [(362.0, 166.0), (512.0, 166.0), (362.0, 316.0), (512.0, 316.0)];
 
-/// Background shapes: (w, h, x, y, round).
-const SHAPES: [(f32, f32, f32, f32, bool); 5] = [
-    (120.0, 160.0, 760.0, 300.0, true),
-    (70.0, 70.0, 900.0, 600.0, false),
-    (200.0, 200.0, -60.0, 520.0, true),
-    (90.0, 90.0, 560.0, 200.0, false),
-    (140.0, 140.0, 300.0, 640.0, true),
-];
-
-/// Ambient drift keeps going this long after the last button press.
+/// The charging line's highlight moves this long after the last press.
 const DRIFT_SECS: f64 = 30.0;
 
 /// How often the compositor should redraw.
@@ -542,7 +504,7 @@ const DRIFT_SECS: f64 = 30.0;
 pub enum Pace {
     /// Something moves: every vblank.
     Full,
-    /// Only the slow background drift: ~20 fps is plenty.
+    /// Only the charging line's slow highlight on Home: ~20 fps.
     Ambient,
     /// Only the MENU's background pattern moves: ~30 fps.
     Pattern,
@@ -555,9 +517,9 @@ pub struct ShellUi {
     t: f64,
     drift_t: f64,
     drift_until: f64,
-    focus: usize,
-    row_x: Spring,
-    tiles: Vec<TileAnim>,
+    /// Home is on screen and the battery charges (the charging line moves).
+    charging_home: bool,
+    home: home::Home,
     lp: Spring,
     /// The veil over the blurred backdrop: FROST_VEIL, raised over dark
     /// backdrops so ink-soft text keeps 4.5:1 (`set_backdrop`).
@@ -566,9 +528,9 @@ pub struct ShellUi {
     menu: Option<cross::Cross>,
     /// Each MENU category's selected row (kept between openings).
     cross_sel: [usize; 5],
-    settings: Option<SettingsPanel>,
     page: Option<SetupUi>,
-    tz: Option<TzPicker>,
+    /// The zones the compositor loaded for Settings > Time zone.
+    tz_zones: Vec<TzZone>,
     sleep: Option<SleepSt>,
     power: Option<PowerMenu>,
     /// Power key held: progress to the power menu (0..1).
@@ -578,7 +540,6 @@ pub struct ShellUi {
     toasts: Vec<Toast>,
     flash: Option<Spring>,
     boot: Option<Boot>,
-    confirm: Option<(Setting, f64)>,
     /// The last button press (UI time), and the screensaver: wanted, how
     /// far it has grown (0..1), when it filled the screen.
     last_input: f64,
@@ -597,17 +558,15 @@ impl ShellUi {
             t: 0.0,
             drift_t: 0.0,
             drift_until: DRIFT_SECS,
-            focus: 0,
-            row_x: Spring::new(0.0),
-            tiles: Vec::new(),
+            charging_home: false,
+            home: home::Home::default(),
             lp: Spring::new(0.0),
             veil: Spring::new(FROST_VEIL),
             trans: None,
             menu: None,
             cross_sel: [0; 5],
-            settings: None,
             page: None,
-            tz: None,
+            tz_zones: Vec::new(),
             sleep: None,
             power: None,
             power_hold: None,
@@ -616,7 +575,6 @@ impl ShellUi {
             toasts: Vec::new(),
             flash: None,
             boot: None,
-            confirm: None,
             last_input: 0.0,
             saver_on: false,
             saver_p: 0.0,
@@ -652,9 +610,7 @@ impl ShellUi {
         !has_app
             || self.boot.is_some()
             || self.menu.is_some()
-            || self.settings.is_some()
             || self.page.is_some()
-            || self.tz.is_some()
             || self.trans.is_some()
             || self.sleep.is_some()
             || self.power.is_some()
@@ -677,10 +633,6 @@ impl ShellUi {
     /// The MENU's category (while it shows).
     pub fn menu_category(&self) -> Option<Cat> {
         self.menu.as_ref().filter(|m| !m.closing).map(|m| if m.on_cross() { m.cat } else { Cat::Running })
-    }
-
-    pub fn settings_open(&self) -> bool {
-        self.settings.as_ref().is_some_and(|s| !s.closing)
     }
 
     pub fn page_mut(&mut self) -> Option<&mut SetupUi> {
@@ -794,93 +746,6 @@ impl ShellUi {
         }
     }
 
-    /// Show the time zone picker with the system's zones.
-    pub fn open_tz(&mut self, zones: Vec<TzZone>, current: String) {
-        let mut x = Spring::new(W);
-        x.set(0.0);
-        let mut p = TzPicker { zones, current, region: None, sel: 0, scroll: Spring::new(0.0), x, swap: Spring::new(1.0), closing: false };
-        let rows = p.rows();
-        let cur_region = crate::tz::region(&p.current).to_string();
-        let sel = rows.iter().position(|r| matches!(r, TzRow::Region(n, _) if *n == cur_region)).unwrap_or(0);
-        p.select(sel, rows.len(), true);
-        self.tz = Some(p);
-        self.fx(Sfx::Tab, Some(Haptic::Tick));
-        self.dirty = true;
-    }
-
-    pub fn tz_open(&self) -> bool {
-        self.tz.is_some()
-    }
-
-    fn close_tz(&mut self) {
-        if let Some(p) = &mut self.tz {
-            p.closing = true;
-            p.x.set(W);
-        }
-    }
-
-    fn tz_button(&mut self, b: Button, repeat: bool) {
-        let Some(p) = &mut self.tz else { return };
-        if p.closing {
-            return;
-        }
-        let rows = p.rows();
-        let n = rows.len();
-        let old = p.sel;
-        match b {
-            Button::Up | Button::Down | Button::L1 | Button::R1 => {
-                let new = match b {
-                    Button::Up => old.saturating_sub(1),
-                    Button::Down => (old + 1).min(n.saturating_sub(1)),
-                    Button::L1 => old.saturating_sub(TZ_ROWS),
-                    _ => (old + TZ_ROWS).min(n.saturating_sub(1)),
-                };
-                p.select(new, n, false);
-                if new != old {
-                    self.fx(Sfx::Move, Some(Haptic::Tick));
-                } else {
-                    self.fx(Sfx::Deny, None);
-                }
-            }
-            Button::A | Button::Right if !repeat => match rows.get(old) {
-                Some(TzRow::Region(r, _)) if r == "UTC" => {
-                    self.out.push(Out::SetTimeZone("UTC".into()));
-                    self.close_tz();
-                }
-                Some(TzRow::Region(r, _)) => {
-                    p.region = Some(r.clone());
-                    let zr = p.rows();
-                    let cur = zr.iter().position(|z| matches!(z, TzRow::Zone(i) if p.zones[*i].id == p.current)).unwrap_or(0);
-                    p.select(cur, zr.len(), true);
-                    p.swap.snap(0.0);
-                    p.swap.set(1.0);
-                    self.fx(Sfx::Tab, Some(Haptic::Tick));
-                }
-                Some(TzRow::Zone(i)) => {
-                    let id = p.zones[*i].id.clone();
-                    self.out.push(Out::SetTimeZone(id));
-                    self.close_tz();
-                }
-                None => {}
-            },
-            Button::B | Button::Left if !repeat => match p.region.take() {
-                Some(r) => {
-                    let rr = p.rows();
-                    let sel = rr.iter().position(|x| matches!(x, TzRow::Region(n, _) if *n == r)).unwrap_or(0);
-                    p.select(sel, rr.len(), true);
-                    p.swap.snap(0.0);
-                    p.swap.set(1.0);
-                    self.fx(Sfx::Tab, Some(Haptic::Tick));
-                }
-                None => {
-                    self.close_tz();
-                    self.fx(Sfx::DrawerUp, Some(Haptic::Tick));
-                }
-            },
-            _ => {}
-        }
-    }
-
     pub fn close_page(&mut self) {
         self.page = None;
         self.dirty = true;
@@ -910,16 +775,15 @@ impl ShellUi {
             || self.osd.as_ref().is_some_and(|o| self.t > o.until || !(o.a.rest() && o.fill.rest()));
         // layers that can sit still: moving only while their springs are
         let menu_moving = self.menu.as_ref().is_some_and(|m| m.moving());
-        let settings_moving = self.settings.as_ref().is_some_and(|p| p.closing || !(p.scroll.rest() && p.x.rest()));
-        let tz_moving = self.tz.as_ref().is_some_and(|p| p.closing || !(p.scroll.rest() && p.x.rest() && p.swap.rest()));
         let power_moving = self.power.as_ref().is_some_and(|p| p.closing || !p.x.rest());
         let sleep_moving = self.sleep.as_ref().is_some_and(|s| !s.a.rest());
         let springs = self.springs_ref().iter().any(|s| !s.rest());
-        if timed || menu_moving || settings_moving || tz_moving || power_moving || sleep_moving || springs {
+        if timed || menu_moving || power_moving || sleep_moving || springs {
             return Pace::Full;
         }
-        // home visible (no app, nothing opaque over it): the slow drift
-        let over_home = self.menu.is_none() && self.settings.is_none() && self.tz.is_none() && self.power.is_none() && self.sleep.is_none() && self.page.is_none();
+        // home visible (no app, nothing over it) and charging: the charging
+        // line's slow highlight
+        let over_home = self.menu.is_none() && self.power.is_none() && self.sleep.is_none() && self.page.is_none();
         if !has_app && over_home && self.drifting() {
             return Pace::Ambient;
         }
@@ -932,14 +796,14 @@ impl ShellUi {
             return Pace::Ambient;
         }
         // the cross's pattern moves while it shows (Reduce motion: still)
-        if !self.prefs.reduce_motion && self.page.is_none() && self.settings.is_none() && self.tz.is_none() && self.menu.as_ref().is_some_and(|m| m.pattern_visible()) {
+        if !self.prefs.reduce_motion && self.page.is_none() && self.menu.as_ref().is_some_and(|m| m.pattern_visible()) {
             return Pace::Pattern;
         }
         Pace::Idle
     }
 
     fn drifting(&self) -> bool {
-        !self.prefs.reduce_motion && self.t < self.drift_until
+        self.charging_home && !self.prefs.reduce_motion && self.t < self.drift_until
     }
 
     /// When the next timed event is due (toast/OSD expiry, confirm reset),
@@ -963,26 +827,16 @@ impl ShellUi {
     }
 
     fn springs_ref(&self) -> Vec<&Spring> {
-        let mut v: Vec<&Spring> = vec![&self.row_x, &self.lp, &self.veil];
-        for t in &self.tiles {
-            v.extend([&t.lift, &t.sc, &t.back]);
-        }
+        let mut v: Vec<&Spring> = vec![&self.lp, &self.veil];
+        v.extend(self.home.springs_ref());
         v
     }
 
     fn springs_mut(&mut self) -> Vec<&mut Spring> {
-        let mut v: Vec<&mut Spring> = vec![&mut self.row_x, &mut self.lp, &mut self.veil];
-        for t in &mut self.tiles {
-            v.extend([&mut t.lift, &mut t.sc, &mut t.back]);
-        }
+        let mut v: Vec<&mut Spring> = vec![&mut self.lp, &mut self.veil];
+        v.extend(self.home.springs_mut());
         if let Some(m) = &mut self.menu {
             v.extend(m.springs());
-        }
-        if let Some(p) = &mut self.settings {
-            v.extend([&mut p.scroll, &mut p.x]);
-        }
-        if let Some(p) = &mut self.tz {
-            v.extend([&mut p.scroll, &mut p.x, &mut p.swap]);
         }
         if let Some(p) = &mut self.power {
             v.push(&mut p.x);
@@ -1020,7 +874,8 @@ impl ShellUi {
             self.drift_t += dt;
         }
         self.t += real;
-        self.sync_tiles(v);
+        self.charging_home = v.sys.charging && v.current.is_none();
+        self.sync_home(v);
         let p = self.params();
         {
             let mut s = self.springs_mut();
@@ -1028,20 +883,13 @@ impl ShellUi {
         }
         // the pattern only while it is on screen (nothing when the MENU is shut
         // or covered)
-        if self.page.is_none() && self.settings.as_ref().is_none_or(|p| p.closing) && self.tz.is_none() {
+        if self.page.is_none() {
             self.step_pattern(dt as f32);
         }
         self.step_saver(dt as f32);
         self.timers(v);
+        self.tips(v);
         std::mem::take(&mut self.out)
-    }
-
-    fn sync_tiles(&mut self, v: &View) {
-        if self.tiles.len() != v.launcher.len() {
-            self.tiles = (0..v.launcher.len()).map(|_| TileAnim { lift: Spring::new(0.0), sc: Spring::new(1.0), back: Spring::new(0.0) }).collect();
-            self.focus = self.focus.min(v.launcher.len().saturating_sub(1));
-            self.set_focus(self.focus as i32, v.launcher.len(), true);
-        }
     }
 
     fn timers(&mut self, v: &View) {
@@ -1085,10 +933,6 @@ impl ShellUi {
         // the MENU: in step with the apps; gone once faded out
         self.sync_menu(v);
         self.sync_sub();
-        if self.settings.as_ref().is_some_and(|p| p.closing && p.x.x > W - 8.0) {
-            self.settings = None;
-            self.dirty = true;
-        }
         // power menu closed; sleep woken
         if self.power.as_ref().is_some_and(|p| p.closing && p.x.x < 0.02) {
             self.power = None;
@@ -1096,11 +940,6 @@ impl ShellUi {
         }
         if self.sleep.as_ref().is_some_and(|s| s.waking && s.a.x < 0.01) {
             self.sleep = None;
-            self.dirty = true;
-        }
-        // time zone picker slid away
-        if self.tz.as_ref().is_some_and(|p| p.closing && p.x.x > W - 8.0) {
-            self.tz = None;
             self.dirty = true;
         }
         // transitions
@@ -1163,9 +1002,6 @@ impl ShellUi {
         if self.flash.as_ref().is_some_and(|f| f.x < 0.01 && f.t == 0.0) {
             self.flash = None;
             self.dirty = true;
-        }
-        if self.confirm.as_ref().is_some_and(|c| now > c.1) {
-            self.confirm = None;
         }
     }
 
@@ -1295,12 +1131,8 @@ impl ShellUi {
         if self.saver_wake() {
             return std::mem::take(&mut self.out);
         }
-        if self.tz.is_some() {
-            self.tz_button(b, repeat);
-        } else if self.page.is_some() {
+        if self.page.is_some() {
             self.page_button(b, v);
-        } else if self.settings.is_some() {
-            self.settings_button(b, repeat, v);
         } else if self.menu.is_some() {
             self.menu_button(b, repeat, v);
         } else if self.trans.is_some() {
@@ -1331,7 +1163,8 @@ impl ShellUi {
         if self.saver_wake() {
             return std::mem::take(&mut self.out);
         }
-        let sub = self.tz.take().is_some() | self.page.take().is_some() | self.settings.take().is_some();
+        // everything closes at once: a setup page, the glass pages, the MENU
+        let sub = self.page.take().is_some();
         if sub || self.menu.as_ref().is_some_and(|m| !m.closing) {
             self.close_menu();
         } else {
@@ -1362,86 +1195,12 @@ impl ShellUi {
         }
     }
 
-    fn set_focus(&mut self, i: i32, n: usize, snap: bool) {
-        if n == 0 {
-            return;
-        }
-        self.focus = i.rem_euclid(n as i32) as usize;
-        for (j, t) in self.tiles.iter_mut().enumerate() {
-            let on = j == self.focus;
-            t.lift.set(if on { -18.0 } else { 0.0 });
-            t.sc.set(if on { 1.05 } else { 1.0 });
-            t.back.set(if on { 1.0 } else { 0.0 });
-        }
-        let tile_w = 232.0 + 28.0;
-        let visible = W - 112.0;
-        let want = (-(self.focus as f32 * tile_w - visible / 2.0 + tile_w / 2.0)).max(-(n as f32 * tile_w - 28.0 - visible)).min(0.0);
-        self.row_x.set(want);
-        if snap {
-            self.row_x.snap(want);
-            for (j, t) in self.tiles.iter_mut().enumerate() {
-                let on = j == self.focus;
-                t.lift.snap(if on { -18.0 } else { 0.0 });
-                t.sc.snap(if on { 1.05 } else { 1.0 });
-                t.back.snap(if on { 1.0 } else { 0.0 });
-            }
-        }
-    }
-
-    fn home_button(&mut self, b: Button, _repeat: bool, v: &View) {
-        let n = v.launcher.len();
-        match b {
-            Button::Left | Button::Right if n > 0 => {
-                let d = if b == Button::Left { -1 } else { 1 };
-                self.set_focus(self.focus as i32 + d, n, false);
-                self.fx(Sfx::Move, Some(Haptic::Tick));
-            }
-            Button::A | Button::Start if n > 0 => {
-                let i = self.focus.min(n - 1);
-                self.launch_from_tile(i, v);
-            }
-            Button::B | Button::Up | Button::Down => self.fx(Sfx::Deny, None),
-            Button::L1 | Button::R1 | Button::Select => {
-                // shortcuts: the MENU on Apps (L1, SELECT) or Settings (R1)
-                self.open_menu_on(if b == Button::R1 { Cat::Settings } else { Cat::Apps }, v);
-            }
-            _ => {}
-        }
-    }
-
-    fn tile_rect(&self, i: usize) -> R4 {
-        let t = self.tiles.get(i);
-        let (lift, sc) = t.map(|t| (t.lift.x, t.sc.x)).unwrap_or((0.0, 1.0));
-        let x = 56.0 + self.row_x.x + i as f32 * 260.0;
-        let (cx, cy) = (x + 116.0, 302.0 + 159.0 + lift);
-        R4 { x: cx - 116.0 * sc, y: cy - 159.0 * sc, w: 232.0 * sc, h: 318.0 * sc }
-    }
-
-    fn launch_from_tile(&mut self, i: usize, v: &View) {
-        let Some(l) = v.launcher.get(i) else { return };
-        if !self.tiles.is_empty() && i != self.focus {
-            self.set_focus(i as i32, v.launcher.len(), true);
-        }
-        let from = self.tile_rect(i);
-        self.trans = Some(Trans::Launch { target: Target::Entry(l.id.clone()), name: l.name.clone(), art: l.art, from, prev: None, t0: self.t });
-        self.lp.snap(0.0);
-        self.lp.set(1.0);
-        self.out.push(Out::Launch(l.id.clone()));
-        self.fx(Sfx::Open, Some(Haptic::Double));
-    }
-
+    /// The front app shrinks into Home's Continue card (it is what
+    /// Continue resumes).
     fn go_home(&mut self, v: &View) {
         let Some(cur) = v.current else { return };
-        let a = v.app(cur);
-        let art = a.map(|a| a.art).unwrap_or_default();
-        let i = a.and_then(|a| a.entry.as_ref()).and_then(|e| v.launcher.iter().position(|l| &l.id == e));
-        if let Some(i) = i {
-            self.set_focus(i as i32, v.launcher.len(), true);
-        }
-        let to = match i {
-            Some(i) => self.tile_rect(i),
-            None => R4 { x: W / 2.0 - 116.0, y: 302.0, w: 232.0, h: 318.0 },
-        };
+        let art = v.app(cur).map(|a| a.art).unwrap_or_default();
+        let to = self.continue_rect(v).unwrap_or(R4 { x: W / 2.0 - 116.0, y: 302.0, w: 232.0, h: 174.0 });
         self.trans = Some(Trans::Close { uid: cur, art, to });
         self.lp.snap(1.0);
         self.lp.set(0.0);
@@ -1449,134 +1208,15 @@ impl ShellUi {
         self.fx(Sfx::Close, Some(Haptic::Tick));
     }
 
-    /// MENU > Settings > More settings: the settings screen slides in.
-    fn open_settings(&mut self) {
-        let mut x = Spring::new(W);
-        x.set(0.0);
-        self.settings = Some(SettingsPanel { sel: 0, scroll: Spring::new(0.0), x, closing: false });
-        self.confirm = None;
-        self.fx(Sfx::Tab, Some(Haptic::Tick));
-    }
 
-    fn close_settings(&mut self) {
-        if let Some(p) = &mut self.settings {
-            p.closing = true;
-            p.x.set(W);
-        }
-        self.fx(Sfx::DrawerUp, Some(Haptic::Tick));
-    }
-
-    fn settings_button(&mut self, b: Button, repeat: bool, v: &View) {
-        let items = settings(v);
-        let Some(p) = &mut self.settings else { return };
-        if p.closing {
-            return;
-        }
-        let n = items.len();
-        p.sel = p.sel.min(n - 1);
-        match b {
-            Button::Up | Button::Down => {
-                let old = p.sel;
-                p.sel = if b == Button::Up { old.saturating_sub(1) } else { (old + 1).min(n - 1) };
-                p.scroll.set(set_scroll_for(p.sel, n));
-                if p.sel != old {
-                    self.confirm = None;
-                    self.fx(Sfx::Tick, Some(Haptic::Tick));
-                } else {
-                    self.fx(Sfx::Deny, None);
-                }
-                return;
-            }
-            Button::B if !repeat => {
-                self.close_settings();
-                return;
-            }
-            _ => {}
-        }
-        let it = items[p.sel];
-        let horiz = matches!(b, Button::Left | Button::Right);
-        let mut changed = true;
-        match (it, b) {
-            (Setting::Sounds, _) if horiz || b == Button::A => self.prefs.sounds = !self.prefs.sounds,
-            (Setting::Haptics, _) if horiz || b == Button::A => self.prefs.haptics = !self.prefs.haptics,
-            (Setting::ReduceMotion, _) if horiz || b == Button::A => self.prefs.reduce_motion = !self.prefs.reduce_motion,
-            (Setting::Palette, _) if horiz || b == Button::A => self.prefs.night = !self.prefs.night,
-            (Setting::SleepMode, _) if horiz || b == Button::A => self.prefs.suspend = !self.prefs.suspend,
-            (Setting::Screensaver, _) if horiz || b == Button::A => {
-                let n = SAVER_CHOICES.len() as i32;
-                let i = SAVER_CHOICES.iter().position(|m| *m == self.prefs.screensaver).unwrap_or(2) as i32;
-                let d = if b == Button::Left { -1 } else { 1 };
-                self.prefs.screensaver = SAVER_CHOICES[(i + d).rem_euclid(n) as usize];
-            }
-            (Setting::IdleSleep, _) if horiz || b == Button::A => {
-                let n = IDLE_CHOICES.len() as i32;
-                let i = IDLE_CHOICES.iter().position(|m| *m == self.prefs.idle_minutes).unwrap_or(0) as i32;
-                let d = if b == Button::Left { -1 } else { 1 };
-                self.prefs.idle_minutes = IDLE_CHOICES[(i + d).rem_euclid(n) as usize];
-            }
-            (Setting::Motion, _) if horiz || b == Button::A => {
-                let i = Preset::ALL.iter().position(|p| *p == self.prefs.motion).unwrap_or(0) as i32;
-                let d = if b == Button::Left { -1 } else { 1 };
-                self.prefs.motion = Preset::ALL[(i + d).rem_euclid(3) as usize];
-            }
-            (Setting::TimeZone, Button::A | Button::Right) if !repeat => {
-                changed = false;
-                self.out.push(Out::OpenTimeZone);
-            }
-            (Setting::Wifi | Setting::Bluetooth | Setting::Remote, Button::A | Button::Right) if !repeat => {
-                changed = false;
-                self.out.push(Out::OpenSetup(match it {
-                    Setting::Wifi => SetupPage::Wifi,
-                    Setting::Bluetooth => SetupPage::Bluetooth,
-                    _ => SetupPage::Remote,
-                }));
-            }
-            (Setting::AutoUpdate, _) if (horiz || b == Button::A) && !repeat => {
-                changed = false;
-                if let Some(u) = v.update {
-                    self.out.push(Out::UpdateAuto(!u.auto_check));
-                    self.fx(Sfx::Tab, Some(Haptic::Tick));
-                }
-            }
-            (Setting::Updates, Button::A) if !repeat => {
-                changed = false;
-                match v.update {
-                    Some(u) if u.ready => {
-                        if self.confirmed(it, "restart and update") {
-                            self.out.push(Out::Reboot);
-                        }
-                    }
-                    Some(u) if u.busy => self.show_toast(Toast::info(u.message.clone())),
-                    Some(_) => {
-                        self.out.push(Out::UpdateCheck);
-                        self.show_toast(Toast::info("Checking for updates…"));
-                    }
-                    None => {}
-                }
-            }
-            (Setting::Logout, Button::A) if !repeat => {
-                changed = false;
-                if self.confirmed(it, "log out (all apps close)") {
-                    self.out.push(Out::Logout);
-                }
-            }
-            _ => changed = false,
-        }
-        if changed {
-            self.out.push(Out::Prefs);
-            // the new setting is heard/felt with the new value
-            self.fx(Sfx::Tab, Some(Haptic::Tick));
-        }
-    }
-
-    fn confirmed(&mut self, s: Setting, what: &str) -> bool {
-        if self.confirm.is_some_and(|(k, t)| k == s && self.t < t) {
-            self.confirm = None;
-            return true;
-        }
-        self.confirm = Some((s, self.t + 4.0));
-        self.show_toast(Toast::info(format!("Press A again to {what}")));
-        false
+    /// An app asked for attention (attention.rs): one toast when it is
+    /// raised, never for updates of its text.
+    pub fn attention_raised(&mut self, name: &str, text: &str) {
+        let mut t = Toast::info(format!("{name} needs you"));
+        t.sub = text.to_string();
+        t.secs = 3.6;
+        t.haptic = Some(Haptic::Double);
+        self.show_toast(t);
     }
 }
 
@@ -1585,11 +1225,6 @@ fn target_uid(t: &Target, v: &View) -> Option<u32> {
         Target::Uid(u) => Some(*u),
         Target::Entry(id) => v.by_entry(id).map(|a| a.uid),
     }
-}
-
-/// Settings scroll: seven rows show; keep the selection inside them.
-fn set_scroll_for(sel: usize, n: usize) -> f32 {
-    sel.saturating_sub(3).min(n.saturating_sub(7)) as f32 * 76.0
 }
 
 // ---------------------------------------------------------------- drawing ----
@@ -1823,12 +1458,6 @@ impl ShellUi {
             self.draw_menu(&mut b, &pal, v, m, &g);
         }
         self.draw_trans(&mut b, &pal, v);
-        if let Some(p) = &self.settings {
-            self.draw_settings(&mut b, &pal, v, p);
-        }
-        if let Some(p) = &self.tz {
-            self.draw_tz(&mut b, &pal, p);
-        }
         if self.page.is_some() {
             b.image(Src::Layer(Layer::Page), 0.0, 0.0, W, H, [0.0, 0.0, 1.0, 1.0]);
         }
@@ -1883,8 +1512,6 @@ impl ShellUi {
             && self.sleep.is_none()
             && self.power.is_none()
             && self.trans.is_none()
-            && self.settings.is_none()
-            && self.tz.is_none()
             && self.page.is_none()
             && self.menu.as_ref().is_some_and(|m| m.saver_ok())
     }
@@ -1946,10 +1573,7 @@ impl ShellUi {
     /// the power menu's) open spring; with Reduce motion it is simply on
     /// while they show. None while a full-screen panel hides the app.
     fn frost(&self) -> f32 {
-        let covered = self.page.is_some()
-            || self.tz.as_ref().is_some_and(|p| !p.closing && p.x.rest())
-            || self.settings.as_ref().is_some_and(|p| !p.closing && p.x.rest());
-        if covered {
+        if self.page.is_some() {
             return 0.0;
         }
         let menu = self.menu.as_ref().map(|m| m.open());
@@ -2012,133 +1636,6 @@ impl ShellUi {
         b.finish()
     }
 
-    fn draw_home(&self, b: &mut B, pal: &Pal, v: &View) {
-        b.rect(0.0, 0.0, W, H, pal.ground);
-        // drifting background shapes
-        let t = self.drift_t as f32;
-        for (i, (w, h, x, y, round)) in SHAPES.iter().enumerate() {
-            let ph = i as f32 * 1.7;
-            let tx = x + (t * 0.21 + ph).sin() * 40.0;
-            let ty = y + (t * 0.17 + ph).cos() * 30.0;
-            let rot = ((t * 0.1 + ph).sin() * 12.0).to_radians();
-            b.push(Xf::translate(tx, ty).mul(&Xf::about(w / 2.0, h / 2.0, Xf::rotate(rot))));
-            if *round {
-                b.ellipse(w / 2.0, h / 2.0, w / 2.0, h / 2.0, pal.ground_2);
-            } else {
-                b.rect(0.0, 0.0, *w, *h, pal.ground_2);
-            }
-            b.pop();
-        }
-        // clock, date, hint
-        let clock = ts(Face::SerifItalic, 132.0, pal.ink).line_height(0.9).tracking(-0.02);
-        b.text(56.0, 80.0, &v.sys.time, &clock);
-        let date = ts(Face::Mono400, 18.0, pal.soft).tracking(0.04);
-        b.text(62.0, 214.0, &date_line(v.host), &date);
-        if v.sys.plugged {
-            self.draw_charge_line(b, pal, v);
-        }
-        let hint =ts(Face::Body400, 18.0, pal.soft).line_height(1.4);
-        let bold = ts(Face::Body600, 18.0, pal.ink).line_height(1.4);
-        let (a, m, c) = ("Press ", "MENU", " anytime");
-        let wc = b.measure(c, &hint);
-        let wm = b.measure(m, &bold);
-        let wa = b.measure(a, &hint);
-        let r = W - 56.0;
-        b.text(r - wc, 98.0, c, &hint);
-        b.text(r - wc - wm, 98.0, m, &bold);
-        b.text(r - wc - wm - wa, 98.0, a, &hint);
-        b.text_right(r, 98.0 + hint.line_px(), "to switch apps", &hint);
-
-        // tiles (back to front: the focused one last, it lifts over)
-        let order: Vec<usize> = (0..v.launcher.len()).filter(|i| *i != self.focus).chain(std::iter::once(self.focus)).filter(|i| *i < v.launcher.len()).collect();
-        for i in order {
-            self.draw_tile(b, pal, v, i);
-        }
-        if v.launcher.is_empty() {
-            let st = ts(Face::Body400, 24.0, pal.soft);
-            b.text(56.0, 420.0, "No apps configured (mortar.shell.apps).", &st);
-        }
-
-        // status bar
-        b.rect(0.0, 0.0, W, 56.0, pal.ground);
-        b.rect(0.0, 55.0, W, 1.0, pal.ink);
-        let sb = ts(Face::Mono400, 18.0, pal.soft);
-        b.text(30.0, 28.0 - sb.line_px() / 2.0, &v.sys.time, &sb);
-        let mut right = W - 30.0;
-        let mut net = Vec::new();
-        if v.sys.wifi {
-            net.push("Wi-Fi".to_string());
-        }
-        if v.sys.usb_net {
-            net.push("USB".to_string());
-        }
-        right = battery_status(b, pal, v, right, &mut net);
-        let net = net.join(" · ");
-        if !net.is_empty() {
-            right -= b.text_right(right, 28.0 - sb.line_px() / 2.0, &net, &sb) + 10.0;
-        }
-        if v.sys.ssh_sessions > 0 {
-            right -= chip(b, right, 28.0, "SSH", 15.0, (9.0, 2.0), pal.lime, pal.lime_ink) + 10.0;
-        }
-        if !v.running.is_empty() {
-            chip(b, right, 28.0, &format!("{} running", v.running.len()), 15.0, (9.0, 2.0), pal.lavender, pal.lavender_ink);
-        }
-        hints(b, pal, H - 64.0, &[("◀▶", "Choose"), ("MENU", "Apps"), ("A", "Open")]);
-    }
-
-    /// On the charger: a thin level line under the date, with a short
-    /// highlight drifting along the filled part while it charges.
-    fn draw_charge_line(&self, b: &mut B, pal: &Pal, v: &View) {
-        let pct = v.sys.battery.unwrap_or(0).min(100);
-        let (x, y, w) = (62.0, 248.0, 200.0);
-        let fill = (w * pct as f32 / 100.0).max(2.0);
-        b.rect(x, y, w, 2.0, pal.ground_2);
-        b.rect(x, y, fill, 2.0, pal.lime);
-        if v.sys.charging && fill > 30.0 {
-            let ph = (self.drift_t / 2.6).fract() as f32;
-            let ease = ph * ph * (3.0 - 2.0 * ph);
-            b.rect(x + (fill - 28.0) * ease, y - 1.0, 28.0, 4.0, with_a(pal.ink, 0.28 * (1.0 - ph)));
-        }
-        let lab = ts(Face::Mono400, 13.0, pal.soft).tracking(0.08);
-        let txt = match (v.sys.charging, v.sys.battery) {
-            (true, Some(p)) => format!("CHARGING · {p}%"),
-            (true, None) => "CHARGING".to_string(),
-            (false, Some(100)) => "CHARGED".to_string(),
-            (false, _) => "ON POWER".to_string(),
-        };
-        b.text(x + w + 14.0, y + 1.0 - lab.line_px() / 2.0, &txt, &lab);
-    }
-
-    fn draw_tile(&self, b: &mut B, pal: &Pal, v: &View, i: usize) {
-        let l = &v.launcher[i];
-        let Some(t) = self.tiles.get(i) else { return };
-        let sel = i == self.focus;
-        let x = 56.0 + self.row_x.x + i as f32 * 260.0;
-        let y = 302.0;
-        if x > W + 40.0 || x + 232.0 < -40.0 {
-            return;
-        }
-        let (fg, bg) = if sel { (pal.lime_ink, pal.lime) } else { (pal.ink, pal.tile) };
-        b.push(Xf::translate(0.0, t.lift.x).mul(&Xf::about(x + 116.0, y + 159.0, Xf::scale(t.sc.x, t.sc.x))));
-        let off = t.back.x * 12.0;
-        if off > 0.05 {
-            b.block(x + off, y + off, 232.0, 318.0, pal.lavender, pal.ink);
-        }
-        b.block(x, y, 232.0, 318.0, bg, pal.ink);
-        art::draw(b, l.art, x + 116.0, y + 95.0, 1.0, *pal, fg);
-        b.rect(x + 1.0, y + 189.0, 230.0, 1.0, fg);
-        let nm = ts(Face::SerifItalic, 40.0, fg).line_height(1.0);
-        let name = b.fit(&l.name, &nm, 200.0);
-        b.text(x + 18.0, y + 206.0, &name, &nm);
-        let sub = ts(Face::Body400, 16.0, with_a(fg, 0.8)).line_height(1.3);
-        let desc = b.fit(&l.description, &sub, 200.0);
-        b.text(x + 18.0, y + 250.0, &desc, &sub);
-        if l.running {
-            chip(b, x + 232.0 - 12.0, y + 12.0 + 10.0, "RUNNING", 13.0, (7.0, 1.0), pal.lavender, pal.lavender_ink);
-        }
-        b.pop();
-    }
-
     fn draw_trans(&self, b: &mut B, pal: &Pal, v: &View) {
         match &self.trans {
             Some(Trans::Launch { target, name, art, from, .. }) => {
@@ -2191,196 +1688,6 @@ impl ShellUi {
         b.rect(0.0, 0.0, W, H, Color(0, 0, 0, 255));
         let g = a.geom;
         b.image(Src::App(uid), g[0], g[1], g[2], g[3], [0.0, 0.0, 1.0, 1.0]);
-        b.pop();
-    }
-
-    /// The settings screen (MENU > Settings > More settings), full screen.
-    fn draw_settings(&self, b: &mut B, pal: &Pal, v: &View, p: &SettingsPanel) {
-        b.push(Xf::translate(p.x.x, 0.0));
-        b.block(0.0, 0.0, W + 2.0, H, pal.ground, pal.ink);
-        let items = settings(v);
-        let n = items.len();
-        let sel = p.sel.min(n - 1);
-        let onoff = |on: bool| (vec!["On", "Off"], if on { 0 } else { 1 });
-        b.clip(Some([0.0, 119.0, W, H - 64.0 - 119.0]));
-        for (i, it) in items.iter().enumerate() {
-            let y = 136.0 + i as f32 * 76.0 - p.scroll.x;
-            if y > H || y + 76.0 < 100.0 {
-                continue;
-            }
-            let on = i == sel;
-            let fg = if on { pal.lime_ink } else { pal.ink };
-            if on {
-                b.rect(40.0, y, W - 80.0, 76.0, pal.lime);
-            } else {
-                b.rect(40.0, y + 75.0, W - 80.0, 1.0, pal.faint);
-            }
-            let (name, val): (&str, Result<(Vec<&str>, usize), String>) = match it {
-                Setting::Sounds => ("UI sounds", Ok(onoff(self.prefs.sounds))),
-                Setting::Haptics => ("Haptic ticks", Ok(onoff(self.prefs.haptics))),
-                Setting::Motion => ("Motion", Ok((Preset::ALL.iter().map(|p| p.name()).collect(), Preset::ALL.iter().position(|p| *p == self.prefs.motion).unwrap_or(0)))),
-                Setting::ReduceMotion => ("Reduce motion", Ok((vec!["Off", "On"], self.prefs.reduce_motion as usize))),
-                Setting::Palette => ("Palette", Ok((vec!["Day", "Night"], self.prefs.night as usize))),
-                Setting::SleepMode => ("Sleep", Ok((vec!["Suspend", "Screen off"], if self.prefs.suspend { 0 } else { 1 }))),
-                Setting::Screensaver => (
-                    "Screensaver",
-                    Ok((SAVER_LABELS.to_vec(), SAVER_CHOICES.iter().position(|m| *m == self.prefs.screensaver).unwrap_or(2))),
-                ),
-                Setting::IdleSleep => (
-                    "Sleep when idle",
-                    Ok((IDLE_LABELS.to_vec(), IDLE_CHOICES.iter().position(|m| *m == self.prefs.idle_minutes).unwrap_or(0))),
-                ),
-                Setting::TimeZone => ("Time zone", Err(format!("{} · {} ›", crate::tz::pretty(v.timezone).0, v.sys.time))),
-                Setting::Wifi => ("Wi-Fi networks", Err(if v.sys.wifi { "Connected ›".into() } else { "Not connected ›".into() })),
-                Setting::Bluetooth => ("Bluetooth devices", Err("Pair headphones, controllers ›".into())),
-                Setting::Remote => (
-                    "Remote access",
-                    Err(if v.sys.sshd_listening {
-                        match v.sys.ssh_sessions {
-                            0 => "On ›".into(),
-                            1 => "On · 1 session ›".into(),
-                            n => format!("On · {n} sessions ›"),
-                        }
-                    } else {
-                        "Off ›".into()
-                    }),
-                ),
-                Setting::Updates => (
-                    "Updates",
-                    Err(match v.update {
-                        Some(u) if u.ready => format!("{} ›", u.message),
-                        Some(u) if u.busy => u.message.clone(),
-                        Some(u) => format!("{} · Check now ›", u.message),
-                        None => String::new(),
-                    }),
-                ),
-                Setting::AutoUpdate => ("Auto-check daily", Ok(onoff(v.update.is_some_and(|u| u.auto_check)))),
-                Setting::Logout => ("Log out", Err("Closes all apps".into())),
-            };
-            let lab = ts(Face::Body400, 24.0, fg);
-            b.text(60.0, y + 38.0 - lab.line_px() / 2.0, name, &lab);
-            // value: options with the chosen one bold, others faded
-            let st_on = ts(Face::Mono600, 18.0, fg);
-            let st_off = ts(Face::Mono400, 18.0, with_a(fg, 0.55));
-            let st_txt = ts(Face::Mono400, 18.0, fg);
-            let mut segs: Vec<(String, TextStyle)> = Vec::new();
-            let adjustable = val.is_ok();
-            if on && adjustable {
-                segs.push(("◀ ".into(), st_txt));
-            }
-            match &val {
-                Ok((opts, chosen)) => {
-                    for (j, o) in opts.iter().enumerate() {
-                        if j > 0 {
-                            segs.push((" · ".into(), st_off));
-                        }
-                        segs.push((o.to_string(), if j == *chosen { st_on } else { st_off }));
-                    }
-                }
-                Err(s) => segs.push((s.clone(), st_txt)),
-            }
-            if on && adjustable {
-                segs.push((" ▶".into(), st_txt));
-            }
-            let total: f32 = segs.iter().map(|(s, st)| arrow_text(b, 0.0, 0.0, s, st, false)).sum();
-            let mut x = W - 60.0 - total;
-            let top = y + 38.0 - st_txt.line_px() / 2.0;
-            for (s, st) in &segs {
-                x += arrow_text(b, x, top, s, st, true);
-            }
-        }
-        b.clip(None);
-        // header
-        b.rect(0.0, 0.0, W, 118.0, pal.ground);
-        b.rect(0.0, 118.0, W, 1.0, pal.ink);
-        let sub = ts(Face::Mono400, 15.0, pal.soft);
-        b.text(40.0, 26.0, "MENU · SETTINGS · MORE", &sub);
-        b.text_right(W - 40.0, 26.0, &format!("{} / {}", sel + 1, n), &sub);
-        let title = ts(Face::SerifItalic, 54.0, pal.ink).line_height(1.0);
-        b.text(40.0, 50.0, "Settings", &title);
-        let last = match items[sel] {
-            Setting::TimeZone | Setting::Wifi | Setting::Bluetooth | Setting::Remote => ("A", "Open"),
-            Setting::Updates if v.update.is_some_and(|u| u.ready) => ("A", "Restart"),
-            Setting::Updates => ("A", "Check now"),
-            Setting::Logout => ("A", "Log out"),
-            _ => ("◀▶", "Change"),
-        };
-        hints(b, pal, H - 64.0, &[("▲▼", "Choose"), last, ("B", "Back"), ("MENU", "Close")]);
-        b.pop();
-    }
-    fn draw_tz(&self, b: &mut B, pal: &Pal, p: &TzPicker) {
-        b.push(Xf::translate(p.x.x, 0.0));
-        b.block(0.0, 0.0, W + 2.0, H, pal.ground, pal.ink);
-        let rows = p.rows();
-        let n = rows.len();
-        let sel = p.sel.min(n.saturating_sub(1));
-        b.clip(Some([0.0, 119.0, W, H - 64.0 - 119.0]));
-        b.push(Xf::translate((1.0 - p.swap.x) * 60.0, 0.0));
-        b.push_alpha(p.swap.x.clamp(0.0, 1.0));
-        let cur_region = crate::tz::region(&p.current).to_string();
-        for (i, r) in rows.iter().enumerate() {
-            let y = 136.0 + i as f32 * 76.0 - p.scroll.x;
-            if y > H || y + 76.0 < 100.0 {
-                continue;
-            }
-            let on = i == sel;
-            let fg = if on { pal.lime_ink } else { pal.ink };
-            let soft = if on { pal.lime_ink } else { pal.soft };
-            if on {
-                b.rect(40.0, y, W - 80.0, 76.0, pal.lime);
-            } else {
-                b.rect(40.0, y + 75.0, W - 80.0, 1.0, pal.faint);
-            }
-            let lab = ts(Face::Body400, 24.0, fg);
-            let mono = ts(Face::Mono400, 18.0, soft);
-            let ty = y + 38.0 - lab.line_px() / 2.0;
-            let my = y + 38.0 - mono.line_px() / 2.0;
-            let (is_cur, right_txt) = match r {
-                TzRow::Region(name, c) => {
-                    b.text(60.0, ty, name, &lab);
-                    let t = if name == "UTC" { "Coordinated Universal Time".to_string() } else { format!("{c} zones ›") };
-                    (*name == cur_region || (name == "UTC" && p.current == "UTC"), t)
-                }
-                TzRow::Zone(zi) => {
-                    let z = &p.zones[*zi];
-                    let (city, sub) = crate::tz::pretty(&z.id);
-                    let w = b.text(60.0, ty, &city, &lab);
-                    if let Some(sub) = sub {
-                        let st = ts(Face::Mono400, 15.0, soft);
-                        b.text(60.0 + w + 14.0, y + 38.0 - st.line_px() / 2.0, &sub.to_uppercase(), &st);
-                    }
-                    (z.id == p.current, format!("{}   {}", crate::tz::hhmm_at(z.offset), crate::tz::fmt_offset(z.offset)))
-                }
-            };
-            let w = b.text_right(W - 60.0, my, &right_txt, &mono);
-            if is_cur {
-                chip(b, W - 60.0 - w - 16.0, y + 38.0, "CURRENT", 13.0, (7.0, 1.0), pal.lavender, pal.lavender_ink);
-            }
-        }
-        b.pop_alpha();
-        b.pop();
-        b.clip(None);
-        // header
-        b.rect(0.0, 0.0, W, 118.0, pal.ground);
-        b.rect(0.0, 118.0, W, 1.0, pal.ink);
-        let crumb = match &p.region {
-            Some(_) => "SETTINGS · TIME ZONE · CITY",
-            None => "SETTINGS · TIME ZONE · REGION",
-        };
-        let sub = ts(Face::Mono400, 15.0, pal.soft);
-        b.text(40.0, 26.0, crumb, &sub);
-        b.text_right(W - 40.0, 26.0, &format!("{} / {}", sel + 1, n), &sub);
-        let title = ts(Face::SerifItalic, 54.0, pal.ink).line_height(1.0);
-        b.text(40.0, 50.0, p.region.as_deref().unwrap_or("Time zone"), &title);
-        let now = format!("{} · {}", crate::tz::pretty(&p.current).0, mortar_ui::status::clock());
-        let st = ts(Face::Mono600, 17.0, pal.lime_ink);
-        let tw = b.measure(&now, &st);
-        let (w, h) = (tw + 26.0, st.line_px() + 10.0);
-        let (x, y) = ((W - 40.0 - w).round(), (104.0 - h).round());
-        b.block(x, y, w.round(), h.round(), pal.lime, pal.lime_ink);
-        b.text(x + 13.0, y + 5.0, &now, &st);
-        let last = if p.region.is_some() { ("A", "Set") } else { ("A", "Open") };
-        hints(b, pal, H - 64.0, &[("▲▼", "Choose"), ("L1/R1", "Page"), ("B", "Back"), last]);
         b.pop();
     }
 
@@ -2575,8 +1882,12 @@ mod tests {
     fn run(uid: u32, entry: &str) -> RunningInfo {
         RunningInfo { uid, entry: Some(entry.into()), name: entry.into(), art: Art::Generic, has_buffer: true, closing: false, geom: [0.0, 0.0, W, H], game: false, asleep: false, pic: None }
     }
+    /// Prefs with every tip already shown (no tip toasts in the way).
+    fn quiet() -> Prefs {
+        Prefs { tips_seen: ["menu", "keyboard", "game", "controls"].map(String::from).to_vec(), ..Prefs::default() }
+    }
     fn launcher() -> Vec<LauncherInfo> {
-        [("term", Category::Apps), ("m8", Category::Music), ("pico", Category::Games)]
+        [("term", Category::Apps), ("files", Category::Apps), ("m8", Category::Music), ("pico", Category::Games)]
             .iter()
             .map(|(i, c)| LauncherInfo { id: i.to_string(), name: i.to_string(), description: String::new(), art: Art::Generic, running: false, category: *c, single_instance: true })
             .collect()
@@ -2599,6 +1910,7 @@ mod tests {
             net: None,
             mixer: &[],
             games: None,
+            dash: Dash::default(),
         }
     }
     fn settle(ui: &mut ShellUi, v: &View) -> Vec<Out> {
@@ -2624,13 +1936,48 @@ mod tests {
         press(ui, v, &[Button::R1]);
         assert_eq!(ui.menu_category(), Some(Cat::Settings));
     }
-    /// Settings > More settings: the full settings screen.
-    fn to_settings(ui: &mut ShellUi, v: &View) {
+    /// MENU > Settings > a page (its row, then A).
+    fn to_page(ui: &mut ShellUi, v: &View, k: SubKind) -> Vec<Out> {
         to_quick(ui, v);
-        press(ui, v, &[Button::Down; 6]);
-        assert_eq!(sel_row(ui), Some(cross::Row::MoreSettings));
-        ui.button(Button::A, false, v);
-        assert!(ui.settings_open());
+        let i = cross::settings_rows(v).iter().position(|r| *r == cross::Row::Page(k)).expect("no such row");
+        press(ui, v, &vec![Button::Up; 12]);
+        press(ui, v, &vec![Button::Down; i]);
+        assert_eq!(sel_row(ui), Some(cross::Row::Page(k)));
+        let out = press(ui, v, &[Button::A]);
+        if k != SubKind::TimeZone {
+            assert_eq!(ui.menu_sub(), Some(k));
+        }
+        out
+    }
+    /// Where the UI is, for the B / MENU table.
+    fn place(ui: &ShellUi) -> String {
+        if ui.power_menu_open() {
+            return if ui.power.as_ref().is_some_and(|p| p.confirm.is_some()) { "power-menu:confirm".into() } else { "power-menu".into() };
+        }
+        if ui.page.is_some() {
+            return "setup-page".into();
+        }
+        let Some(m) = ui.menu.as_ref().filter(|m| !m.closing) else { return "closed".into() };
+        if let Some(u) = ui.game_panel() {
+            return format!("game-panel:{u}");
+        }
+        if let Some(sys) = ui.game_page() {
+            return format!("game-page:{sys}");
+        }
+        if m.ctx.is_some() {
+            return "options".into();
+        }
+        let pages: Vec<&str> = ui.menu_pages().iter().map(|k| k.name()).collect();
+        if !pages.is_empty() {
+            let top = m.top().unwrap();
+            let extra = if top.adjusting() { ":adjust" } else { "" };
+            return format!("page:{}{extra}", pages.join("/"));
+        }
+        match ui.menu_category() {
+            Some(Cat::Running) => "running".into(),
+            Some(c) => format!("cross:{}{}", c.name(), if m.adjusting { ":adjust" } else { "" }),
+            None => "closed".into(),
+        }
     }
 
     #[test]
@@ -2647,23 +1994,46 @@ mod tests {
     }
 
     #[test]
-    fn home_launches_focused_tile() {
+    fn home_is_a_dashboard() {
         let sys = Sys::demo(None);
         let l = launcher();
-        let v = view(&[], &l, &sys, None);
-        let mut ui = ShellUi::new(Prefs::default(), false);
+        let ws = crate::widgets::defaults();
+        let dash = Dash { widgets: &ws, ..Dash::default() };
+        let v = View { dash, ..view(&[], &l, &sys, None) };
+        let mut ui = ShellUi::new(quiet(), false);
         settle(&mut ui, &v);
-        ui.button(Button::Right, false, &v);
-        let out = ui.button(Button::A, false, &v);
-        assert_eq!(actions(&out), vec![Out::Launch("m8".into())]);
-        assert!(out.contains(&Out::Haptic(Haptic::Double)));
-        assert!(ui.captures_input(false));
-        // the app maps and is shown: the transition ends
-        let r = [run(5, "m8")];
-        let v2 = view(&r, &l, &sys, Some(5));
+        // nothing to continue yet: A does nothing, it is not a launcher
+        assert!(press(&mut ui, &v, &[Button::A, Button::Right, Button::Down]).is_empty());
+        assert_eq!(ui.pace(false), Pace::Idle, "a still screen: nothing drifts");
+        // the last app on screen: Continue starts it again, growing from the card
+        ui.prefs.last_app = Some("m8".into());
+        settle(&mut ui, &v);
+        assert_eq!(press(&mut ui, &v, &[Button::A]), vec![Out::Launch("m8".into())]);
+        let card = ui.continue_rect(&v).unwrap();
+        assert!(matches!(&ui.trans, Some(Trans::Launch { from, .. }) if *from == card));
+        // an app running: Continue resumes it
+        ui.trans = None;
+        let r = [run(5, "m8"), run(6, "term")];
+        let v2 = View { dash, ..view(&r, &l, &sys, None) };
         settle(&mut ui, &v2);
-        assert!(!ui.captures_input(true));
-        assert!(!ui.layer_visible(true));
+        assert_eq!(press(&mut ui, &v2, &[Button::A]), vec![Out::Focus(5)]);
+        // Needs you: ▼ moves to it, A switches to that app
+        ui.trans = None;
+        let att = [crate::attention::Item { app: "term".into(), text: "Approve: ls".into(), seq: 1 }];
+        let v3 = View { dash: Dash { attention: &att, ..dash }, ..view(&r, &l, &sys, None) };
+        settle(&mut ui, &v3);
+        press(&mut ui, &v3, &[Button::Down]);
+        assert_eq!(press(&mut ui, &v3, &[Button::A]), vec![Out::Focus(6)]);
+        // the app on screen is remembered for Continue
+        let v4 = View { dash, ..view(&r, &l, &sys, Some(6)) };
+        let out = ui.step(0.01, &v4);
+        assert_eq!(ui.prefs.last_app.as_deref(), Some("term"));
+        assert!(out.contains(&Out::Remember));
+        // shortcuts still open the MENU
+        ui.trans = None;
+        settle(&mut ui, &v);
+        press(&mut ui, &v, &[Button::R1]);
+        assert_eq!(ui.menu_category(), Some(Cat::Settings));
     }
 
     #[test]
@@ -2672,7 +2042,7 @@ mod tests {
         let l = launcher();
         let r = [run(2, "term"), run(1, "m8")];
         let v = view(&r, &l, &sys, Some(2));
-        let mut ui = ShellUi::new(Prefs::default(), false);
+        let mut ui = ShellUi::new(quiet(), false);
         ui.menu_key(&v);
         assert_eq!(ui.menu_category(), Some(Cat::Running));
         // Home, the app on screen, the previous one (selected)
@@ -2692,7 +2062,7 @@ mod tests {
         let l = launcher();
         let r = [run(2, "term"), run(1, "m8")];
         let v = view(&r, &l, &sys, Some(2));
-        let mut ui = ShellUi::new(Prefs::default(), false);
+        let mut ui = ShellUi::new(quiet(), false);
         ui.menu_key(&v);
         settle(&mut ui, &v);
         assert_eq!(actions(&ui.button(Button::X, false, &v)), vec![Out::Close(1)]);
@@ -2715,7 +2085,7 @@ mod tests {
         let l = launcher();
         let r = [run(2, "term")];
         let v = view(&r, &l, &sys, Some(2));
-        let mut ui = ShellUi::new(Prefs::default(), false);
+        let mut ui = ShellUi::new(quiet(), false);
         ui.menu_key(&v);
         settle(&mut ui, &v);
         assert_eq!(sel_row(&ui), Some(cross::Row::App(2)));
@@ -2729,13 +2099,15 @@ mod tests {
         let sys = Sys::demo(None);
         let l = launcher();
         let v = view(&[], &l, &sys, None);
-        let mut ui = ShellUi::new(Prefs::default(), false);
+        let mut ui = ShellUi::new(quiet(), false);
         ui.menu_key(&v);
         assert_eq!(cross::cats(&v), vec![Cat::Apps, Cat::Games, Cat::Music, Cat::Settings]);
+        // Apps lists tools only: games and music apps are not repeated there
+        assert_eq!(cross::rows(Cat::Apps, &v), vec![cross::Row::Launch("term".into()), cross::Row::Launch("files".into())]);
         // ▶ from Running: the cross on Apps
-        press(&mut ui, &v, &[Button::Right, Button::Down, Button::Down]);
+        press(&mut ui, &v, &[Button::Right, Button::Down]);
         assert_eq!(ui.menu_category(), Some(Cat::Apps));
-        assert_eq!(sel_row(&ui), Some(cross::Row::Launch("pico".into())));
+        assert_eq!(sel_row(&ui), Some(cross::Row::Launch("files".into())));
         press(&mut ui, &v, &[Button::Right]);
         assert_eq!(ui.menu_category(), Some(Cat::Games));
         assert_eq!(sel_row(&ui), Some(cross::Row::Launch("pico".into())));
@@ -2751,14 +2123,14 @@ mod tests {
         assert_eq!(ui.menu_category(), Some(Cat::Running));
         assert!(press(&mut ui, &v, &[Button::Left, Button::L1]).is_empty());
         assert_eq!(ui.menu_category(), Some(Cat::Running));
-        // closed and opened again: Apps is still on its third row
+        // closed and opened again: Apps is still on its second row
         ui.menu_key(&v);
         settle(&mut ui, &v);
         assert!(ui.menu.is_none());
         ui.menu_key(&v);
         press(&mut ui, &v, &[Button::Right]);
-        assert_eq!(sel_row(&ui), Some(cross::Row::Launch("pico".into())));
-        assert_eq!(press(&mut ui, &v, &[Button::A]), vec![Out::Launch("pico".into())]);
+        assert_eq!(sel_row(&ui), Some(cross::Row::Launch("files".into())));
+        assert_eq!(press(&mut ui, &v, &[Button::A]), vec![Out::Launch("files".into())]);
         // Games only shows with something in it; Music always has the Mixer
         let l2: Vec<LauncherInfo> = l.into_iter().filter(|x| x.category == Category::Apps).collect();
         let v2 = view(&[], &l2, &sys, None);
@@ -2771,7 +2143,7 @@ mod tests {
         let l = launcher();
         let r = [run(2, "term"), run(1, "m8")];
         let v = view(&r, &l, &sys, Some(2));
-        let mut ui = ShellUi::new(Prefs::default(), false);
+        let mut ui = ShellUi::new(quiet(), false);
         ui.menu_key(&v);
         // Home, the app on screen, the previous one (selected)
         assert_eq!(sel_row(&ui), Some(cross::Row::App(1)));
@@ -2819,14 +2191,16 @@ mod tests {
         let l = launcher();
         let r = [run(2, "term"), run(1, "m8")];
         let v = view(&r, &l, &sys, Some(2));
-        let mut ui = ShellUi::new(Prefs::default(), false);
+        let mut ui = ShellUi::new(quiet(), false);
         ui.menu_key(&v);
-        assert_eq!(press(&mut ui, &v, &[Button::Right, Button::Down, Button::A]), vec![Out::Focus(1)]);
+        // M8 is under Music (after the Mixer)
+        assert_eq!(press(&mut ui, &v, &[Button::Right, Button::Right, Button::Right, Button::Down, Button::A]), vec![Out::Focus(1)]);
         // the one in front: the MENU just closes
         ui.trans = None;
         settle(&mut ui, &v);
         ui.menu_key(&v);
-        press(&mut ui, &v, &[Button::Right, Button::Up]);
+        press(&mut ui, &v, &[Button::Right, Button::Left, Button::Right]);
+        assert_eq!(sel_row(&ui), Some(cross::Row::Launch("term".into())));
         assert!(press(&mut ui, &v, &[Button::A]).is_empty());
         assert!(!ui.menu_open());
     }
@@ -2837,7 +2211,7 @@ mod tests {
         let l = launcher();
         let r = [run(2, "term")];
         let v = view(&r, &l, &sys, Some(2));
-        let mut ui = ShellUi::new(Prefs::default(), false);
+        let mut ui = ShellUi::new(quiet(), false);
         to_quick(&mut ui, &v);
         assert_eq!(sel_row(&ui), Some(cross::Row::Brightness));
         // ◀▶ change category, also on a value row
@@ -2854,10 +2228,16 @@ mod tests {
         // ▲▼ in adjust mode leave it and move
         assert_eq!(press(&mut ui, &v, &[Button::Down, Button::A, Button::Left]), vec![Out::Volume(-10)]);
         assert!(press(&mut ui, &v, &[Button::Down]).is_empty());
-        assert_eq!(sel_row(&ui), Some(cross::Row::Mixer));
+        // the one place for settings: a page per group
+        let keys: Vec<cross::Row> = cross::settings_rows(&v);
+        use cross::Row::*;
+        assert_eq!(
+            keys,
+            vec![Brightness, Volume, Page(SubKind::Display), Page(SubKind::Sound), Page(SubKind::Wifi), Page(SubKind::Bluetooth), Page(SubKind::TimeZone), Remote, Page(SubKind::About), Page(SubKind::Power)]
+        );
         // the pages: A opens, B closes (the MENU stays)
-        for (row, kind) in [(cross::Row::Mixer, SubKind::Mixer), (cross::Row::Wifi, SubKind::Wifi), (cross::Row::Bluetooth, SubKind::Bluetooth)] {
-            assert_eq!(sel_row(&ui), Some(row));
+        for kind in [SubKind::Display, SubKind::Sound, SubKind::Wifi, SubKind::Bluetooth] {
+            assert_eq!(sel_row(&ui), Some(Page(kind)));
             press(&mut ui, &v, &[Button::A]);
             assert_eq!(ui.menu_sub(), Some(kind));
             press(&mut ui, &v, &[Button::B]);
@@ -2866,26 +2246,47 @@ mod tests {
             // the page is still sliding out: the next press is the cross's
             press(&mut ui, &v, &[Button::Down]);
         }
-        // Sleep closes the MENU and sleeps
-        assert_eq!(press(&mut ui, &v, &[Button::A]), vec![Out::Sleep]);
-        assert!(!ui.menu_open());
+        // Time zone: the compositor loads the zones; Remote access: mortar-setup's page
+        assert_eq!(press(&mut ui, &v, &[Button::A]), vec![Out::OpenTimeZone]);
+        press(&mut ui, &v, &[Button::Down]);
+        assert_eq!(press(&mut ui, &v, &[Button::A]), vec![Out::OpenSetup(SetupPage::Remote)]);
+        // Updates only with mortar.update; Keyboard only with a keyboard app
+        let u = UpdateView::default();
+        let vu = View { update: Some(&u), keyboard_app: true, ..view(&r, &l, &sys, Some(2)) };
+        let k = cross::settings_rows(&vu);
+        assert_eq!(k[2], Keyboard);
+        assert!(k.contains(&Page(SubKind::Updates)));
     }
 
     #[test]
-    fn power_needs_a_second_a() {
+    fn power_page_needs_a_second_a() {
         let sys = Sys::demo(None);
         let l = launcher();
         let v = view(&[], &l, &sys, None);
-        let mut ui = ShellUi::new(Prefs::default(), false);
-        ui.menu_key(&v);
-        press(&mut ui, &v, &[Button::R1]);
-        press(&mut ui, &v, &[Button::Down; 7]);
-        assert_eq!(sel_row(&ui), Some(cross::Row::Restart));
+        let mut ui = ShellUi::new(quiet(), false);
+        to_page(&mut ui, &v, SubKind::Power);
+        // Sleep, Sleep mode, Sleep when idle, Restart, Power off, Log out
+        press(&mut ui, &v, &[Button::Down; 3]);
         assert!(press(&mut ui, &v, &[Button::A]).is_empty());
         assert_eq!(press(&mut ui, &v, &[Button::A]), vec![Out::Reboot]);
         // moving away forgets the first press
         assert!(press(&mut ui, &v, &[Button::Down, Button::A, Button::Up, Button::Down, Button::A]).is_empty());
         assert_eq!(press(&mut ui, &v, &[Button::A]), vec![Out::PowerOff]);
+        press(&mut ui, &v, &[Button::Down]);
+        assert!(press(&mut ui, &v, &[Button::A]).is_empty());
+        assert_eq!(press(&mut ui, &v, &[Button::A]), vec![Out::Logout]);
+        // sleep mode and sleep when idle are choices (A: the next one)
+        press(&mut ui, &v, &[Button::Up; 4]);
+        assert!(!ui.prefs.suspend);
+        assert_eq!(press(&mut ui, &v, &[Button::A]), vec![Out::Prefs]);
+        assert!(ui.prefs.suspend);
+        press(&mut ui, &v, &[Button::Down]);
+        assert_eq!(press(&mut ui, &v, &[Button::Right]), vec![Out::Prefs], "▶ also picks the next");
+        assert_eq!(ui.prefs.idle_minutes, 1);
+        // Sleep closes the MENU and sleeps
+        press(&mut ui, &v, &[Button::Up, Button::Up]);
+        assert_eq!(press(&mut ui, &v, &[Button::A]), vec![Out::Sleep]);
+        assert!(!ui.menu_open());
     }
 
     fn net_demo() -> NetState {
@@ -2920,12 +2321,10 @@ mod tests {
         let l = launcher();
         let net = net_demo();
         let v = View { net: Some(&net), radios: Radios { wifi: Some(true), bluetooth: Some(true) }, ..view(&[], &l, &sys, None) };
-        let mut ui = ShellUi::new(Prefs::default(), false);
-        to_quick(&mut ui, &v);
-        assert!(ui.wants_net());
-        press(&mut ui, &v, &[Button::Down; 3]);
+        let mut ui = ShellUi::new(quiet(), false);
         // opening Wi-Fi scans
-        assert_eq!(press(&mut ui, &v, &[Button::A]), vec![Out::Setup(Request::WifiScan)]);
+        assert_eq!(to_page(&mut ui, &v, SubKind::Wifi), vec![Out::Setup(Request::WifiScan)]);
+        assert!(ui.wants_net());
         // toggle, connected network, Details, Forget, Open, Locked, Other
         assert_eq!(press(&mut ui, &v, &[Button::A]), vec![Out::Radio(Radio::Wifi, false)]);
         press(&mut ui, &v, &[Button::Down, Button::Down, Button::Down]);
@@ -2962,9 +2361,9 @@ mod tests {
         let sys = Sys::demo(None);
         let l = launcher();
         let r = [run(2, "term"), run(1, "m8")];
-        let mix = [MixChan { uid: 1, level: 70, muted: false }];
+        let mix = [MixChan { uid: 1, level: 70, muted: false, playing: true }];
         let v = View { mixer: &mix, ..view(&r, &l, &sys, Some(2)) };
-        let mut ui = ShellUi::new(Prefs::default(), false);
+        let mut ui = ShellUi::new(quiet(), false);
         ui.menu_key(&v);
         press(&mut ui, &v, &[Button::Right, Button::Right, Button::Right]);
         assert_eq!(ui.menu_category(), Some(Cat::Music));
@@ -2984,6 +2383,11 @@ mod tests {
         assert_eq!(ui.prefs.sound_volume, 55);
         assert_eq!(press(&mut ui, &v, &[Button::A]), vec![Out::Prefs]);
         assert!(!ui.prefs.sounds);
+        // ◀ on Master goes back, like on every page
+        press(&mut ui, &v, &[Button::Left, Button::Left, Button::Left]);
+        assert_eq!(ui.menu_sub(), Some(SubKind::Mixer));
+        press(&mut ui, &v, &[Button::Left]);
+        assert_eq!(ui.menu_sub(), None);
     }
 
     #[test]
@@ -2992,7 +2396,7 @@ mod tests {
         let l = launcher();
         let r = [run(2, "term"), run(1, "m8")];
         let v = view(&r, &l, &sys, Some(2));
-        let mut ui = ShellUi::new(Prefs::default(), false);
+        let mut ui = ShellUi::new(quiet(), false);
         ui.menu_key(&v);
         assert_eq!(press(&mut ui, &v, &[Button::Y, Button::Down, Button::A]), vec![Out::Restart(1)]);
         assert!(ui.menu_open());
@@ -3007,46 +2411,54 @@ mod tests {
     }
 
     #[test]
-    fn settings_change_prefs() {
+    fn display_and_sound_pages() {
         let sys = Sys::demo(None);
         let l = launcher();
         let v = view(&[], &l, &sys, None);
-        let mut ui = ShellUi::new(Prefs::default(), false);
-        to_settings(&mut ui, &v);
-        let out = ui.button(Button::Right, false, &v);
-        assert!(out.contains(&Out::Prefs));
-        assert!(!ui.prefs.sounds);
-        press(&mut ui, &v, &[Button::Down, Button::Down, Button::Right]);
-        assert_eq!(ui.prefs.motion, Preset::Calm);
-        // log out needs a second press
-        press(&mut ui, &v, &[Button::Down; 10]);
+        let mut ui = ShellUi::new(quiet(), false);
+        to_page(&mut ui, &v, SubKind::Display);
+        // Brightness (a level), Palette, Motion, Reduce motion, Screensaver
         assert!(press(&mut ui, &v, &[Button::A]).is_empty());
-        assert_eq!(press(&mut ui, &v, &[Button::A]), vec![Out::Logout]);
-        // Screensaver, Sleep when idle, then Sleep (Suspend / Screen off),
-        // above Log out
-        assert!(!ui.prefs.suspend);
-        ui.button(Button::Up, false, &v);
+        assert_eq!(press(&mut ui, &v, &[Button::Right]), vec![Out::Brightness(10)]);
+        assert!(press(&mut ui, &v, &[Button::A]).is_empty(), "A: done");
+        assert_eq!(press(&mut ui, &v, &[Button::Down, Button::A]), vec![Out::Prefs]);
+        assert!(ui.prefs.night);
+        press(&mut ui, &v, &[Button::Down, Button::A]);
+        assert_eq!(ui.prefs.motion, Preset::Calm);
+        press(&mut ui, &v, &[Button::Right]);
+        assert_eq!(ui.prefs.motion, Preset::Snappy);
+        press(&mut ui, &v, &[Button::Down, Button::A]);
+        assert!(ui.prefs.reduce_motion);
         assert_eq!(ui.prefs.screensaver, 60);
-        assert!(ui.button(Button::Right, false, &v).contains(&Out::Prefs));
+        press(&mut ui, &v, &[Button::Down, Button::A]);
         assert_eq!(ui.prefs.screensaver, 120);
-        press(&mut ui, &v, &[Button::Right, Button::Right]);
-        assert_eq!(ui.prefs.screensaver, 0, "wraps around to Off");
-        ui.button(Button::Up, false, &v);
-        assert!(ui.button(Button::Right, false, &v).contains(&Out::Prefs));
-        assert_eq!(ui.prefs.idle_minutes, 1);
-        press(&mut ui, &v, &[Button::Left, Button::Left]);
-        assert_eq!(ui.prefs.idle_minutes, 30, "wraps around");
-        press(&mut ui, &v, &[Button::Up, Button::A]);
-        assert!(ui.prefs.suspend);
-        // B: back to the MENU; MENU closes everything
-        ui.button(Button::B, false, &v);
+        // ◀ goes back to the cross
+        press(&mut ui, &v, &[Button::Left]);
+        assert_eq!(ui.menu_sub(), None);
+        assert!(ui.menu_open());
+        ui.prefs.reduce_motion = false;
         settle(&mut ui, &v);
-        assert!(!ui.settings_open() && ui.menu_open());
-        ui.button(Button::A, false, &v);
-        assert!(ui.settings_open());
+        // Sound: Volume, Mixer ›, UI sounds, UI sound level, Vibration
+        press(&mut ui, &v, &[Button::Down]);
+        press(&mut ui, &v, &[Button::A]);
+        assert_eq!(ui.menu_sub(), Some(SubKind::Sound));
+        press(&mut ui, &v, &[Button::Down, Button::A]);
+        assert_eq!(ui.menu_pages(), vec![SubKind::Sound, SubKind::Mixer]);
+        press(&mut ui, &v, &[Button::B]);
+        assert_eq!(ui.menu_pages(), vec![SubKind::Sound], "B: one level back");
+        assert_eq!(press(&mut ui, &v, &[Button::Down, Button::A]), vec![Out::Prefs]);
+        assert!(!ui.prefs.sounds);
+        press(&mut ui, &v, &[Button::Down, Button::A]);
+        assert_eq!(press(&mut ui, &v, &[Button::Right]), vec![Out::Prefs]);
+        assert_eq!(ui.prefs.sound_volume, 70);
+        press(&mut ui, &v, &[Button::B]);
+        assert_eq!(ui.menu_sub(), Some(SubKind::Sound), "B leaves adjust mode first");
+        press(&mut ui, &v, &[Button::Down, Button::A]);
+        assert!(!ui.prefs.haptics);
+        // MENU closes everything
         ui.menu_key(&v);
         settle(&mut ui, &v);
-        assert!(ui.settings.is_none() && ui.menu.is_none());
+        assert!(ui.menu.is_none());
     }
 
     #[test]
@@ -3054,16 +2466,12 @@ mod tests {
         let sys = Sys::demo(None);
         let l = launcher();
         let mut u = UpdateView { message: "Up to date".into(), ready: false, busy: false, auto_check: true };
-        let mut ui = ShellUi::new(Prefs::default(), false);
+        let mut ui = ShellUi::new(quiet(), false);
         {
             let v = View { update: Some(&u), ..view(&[], &l, &sys, None) };
-            to_settings(&mut ui, &v);
-            let rows = settings(&v);
-            let row = rows.iter().position(|s| *s == Setting::Updates).unwrap();
-            assert_eq!(rows[row + 1], Setting::AutoUpdate);
-            press(&mut ui, &v, &vec![Button::Down; row]);
+            to_page(&mut ui, &v, SubKind::Updates);
             assert_eq!(press(&mut ui, &v, &[Button::A]), vec![Out::UpdateCheck]);
-            assert_eq!(press(&mut ui, &v, &[Button::Down, Button::Right]), vec![Out::UpdateAuto(false)]);
+            assert_eq!(press(&mut ui, &v, &[Button::Down, Button::A]), vec![Out::UpdateAuto(false)]);
             press(&mut ui, &v, &[Button::Up]);
         }
         // staged: A twice restarts
@@ -3072,9 +2480,9 @@ mod tests {
         let v = View { update: Some(&u), ..view(&[], &l, &sys, None) };
         assert!(press(&mut ui, &v, &[Button::A]).is_empty());
         assert_eq!(press(&mut ui, &v, &[Button::A]), vec![Out::Reboot]);
-        // no update module: no rows
+        // no update module: no row
         let v0 = view(&[], &l, &sys, None);
-        assert!(!settings(&v0).contains(&Setting::Updates));
+        assert!(!cross::settings_rows(&v0).contains(&cross::Row::Page(SubKind::Updates)));
     }
 
     #[test]
@@ -3083,7 +2491,7 @@ mod tests {
         let l = launcher();
         let r = [run(2, "term")];
         let v = view(&r, &l, &sys, Some(2));
-        let mut ui = ShellUi::new(Prefs::default(), false);
+        let mut ui = ShellUi::new(quiet(), false);
         assert_eq!(ui.frost(), 0.0);
         ui.menu_key(&v);
         assert_eq!(ui.frost(), 0.0, "eases in with the open spring");
@@ -3092,10 +2500,11 @@ mod tests {
         assert!(early > 0.0 && early < 1.0);
         settle(&mut ui, &v);
         assert_eq!(ui.frost(), 1.0);
-        // the settings screen covers it: no blur work behind an opaque panel
-        to_settings_from_menu(&mut ui, &v);
+        // a glass page keeps the frost (it is frosted itself)
+        press(&mut ui, &v, &[Button::R1, Button::Down, Button::Down, Button::A]);
+        assert_eq!(ui.menu_sub(), Some(SubKind::Display));
         settle(&mut ui, &v);
-        assert_eq!(ui.frost(), 0.0);
+        assert_eq!(ui.frost(), 1.0);
         ui.menu_key(&v);
         settle(&mut ui, &v);
         assert_eq!(ui.frost(), 0.0, "closed: nothing extra drawn");
@@ -3112,19 +2521,12 @@ mod tests {
         assert_eq!(ui.frost(), 1.0);
     }
 
-    fn to_settings_from_menu(ui: &mut ShellUi, v: &View) {
-        press(ui, v, &[Button::R1]);
-        press(ui, v, &[Button::Down; 6]);
-        ui.button(Button::A, false, v);
-        assert!(ui.settings_open());
-    }
-
     #[test]
     fn menu_at_rest_is_not_full_pace() {
         let sys = Sys::demo(None);
         let l = launcher();
         let v = view(&[], &l, &sys, None);
-        let mut ui = ShellUi::new(Prefs::default(), false);
+        let mut ui = ShellUi::new(quiet(), false);
         ui.menu_key(&v);
         ui.button(Button::Right, false, &v);
         settle(&mut ui, &v);
@@ -3139,35 +2541,152 @@ mod tests {
     }
 
     #[test]
-    fn time_zone_picker() {
+    fn time_zone_pages() {
         let sys = Sys::demo(None);
         let l = launcher();
         let v = view(&[], &l, &sys, None);
-        let mut ui = ShellUi::new(Prefs::default(), false);
-        to_settings(&mut ui, &v);
-        let tz_row = settings(&v).iter().position(|s| *s == Setting::TimeZone).unwrap();
-        for _ in 0..tz_row {
-            ui.button(Button::Down, false, &v);
-        }
-        assert_eq!(actions(&ui.button(Button::A, false, &v)), vec![Out::OpenTimeZone]);
+        let mut ui = ShellUi::new(quiet(), false);
+        assert_eq!(to_page(&mut ui, &v, SubKind::TimeZone), vec![Out::OpenTimeZone]);
         let zones = ["Europe/Lisbon", "Europe/Berlin", "America/Argentina/Buenos_Aires", "America/New_York", "UTC"]
             .iter()
             .map(|z| TzZone { id: z.to_string(), offset: 0 })
             .collect();
         ui.open_tz(zones, "Europe/Lisbon".into());
-        // regions: America, Europe (current, preselected), UTC
-        let p = ui.tz.as_ref().unwrap();
-        assert_eq!(p.rows().len(), 3);
-        assert_eq!(p.sel, 1);
-        ui.button(Button::A, false, &v); // into Europe, on Lisbon
-        let p = ui.tz.as_ref().unwrap();
-        assert_eq!(p.rows(), vec![TzRow::Zone(1), TzRow::Zone(0)]); // Berlin, Lisbon
-        assert_eq!(p.sel, 1);
-        ui.button(Button::Up, false, &v);
-        assert_eq!(actions(&ui.button(Button::A, false, &v)), vec![Out::SetTimeZone("Europe/Berlin".into())]);
+        assert_eq!(ui.menu_sub(), Some(SubKind::TimeZone));
+        // regions: America, Europe (current, preselected), UTC; A or ▶ opens one
+        press(&mut ui, &v, &[Button::Right]);
+        assert_eq!(ui.menu_pages(), vec![SubKind::TimeZone, SubKind::TzCities]);
+        // B: back to the regions, ▶ again: on Lisbon (current); ▲ Berlin
+        press(&mut ui, &v, &[Button::B]);
+        assert_eq!(ui.menu_pages(), vec![SubKind::TimeZone]);
+        press(&mut ui, &v, &[Button::A, Button::Up]);
+        assert_eq!(press(&mut ui, &v, &[Button::A]), vec![Out::SetTimeZone("Europe/Berlin".into())]);
+        // set: both pages slide away, back on Settings
         settle(&mut ui, &v);
-        assert!(!ui.tz_open());
-        assert!(ui.settings_open() && ui.menu_open());
+        assert!(ui.menu_pages().is_empty());
+        assert_eq!(ui.menu_category(), Some(Cat::Settings));
+        // UTC is a zone of its own
+        ui.out.push(Out::Sfx(Sfx::Tick));
+        ui.open_tz(vec![TzZone { id: "UTC".into(), offset: 0 }, TzZone { id: "Europe/Lisbon".into(), offset: 0 }], "UTC".into());
+        assert_eq!(press(&mut ui, &v, &[Button::A]), vec![Out::SetTimeZone("UTC".into())]);
+    }
+
+    /// B goes back one level and closes the MENU only at the top; MENU
+    /// closes everything. Every screen, one row each.
+    #[test]
+    fn b_and_menu_on_every_screen() {
+        use Button::*;
+        let sys = Sys::demo(None);
+        let l = launcher();
+        let r = [run(2, "term"), run(1, "m8")];
+        let u = UpdateView { message: "Up to date".into(), ..Default::default() };
+        let v = View { update: Some(&u), ..view(&r, &l, &sys, Some(2)) };
+        let zones = || vec![TzZone { id: "Europe/Lisbon".into(), offset: 0 }, TzZone { id: "UTC".into(), offset: 0 }];
+        let page = |k: SubKind| move |ui: &mut ShellUi, v: &View| {
+            to_page(ui, v, k);
+        };
+        type Setup = Box<dyn Fn(&mut ShellUi, &View)>;
+        let table: Vec<(&str, Setup, &str, &str)> = vec![
+            ("Running", Box::new(|ui, v| { ui.menu_key(v); }), "closed", "closed"),
+            ("the cross", Box::new(|ui, v| { ui.menu_key(v); press(ui, v, &[Right]); }), "closed", "closed"),
+            ("the cross, adjusting", Box::new(|ui, v| { to_quick(ui, v); press(ui, v, &[A]); }), "cross:Settings", "closed"),
+            ("the options popup", Box::new(|ui, v| { ui.menu_key(v); press(ui, v, &[Y]); }), "running", "closed"),
+            ("Display", Box::new(page(SubKind::Display)), "cross:Settings", "closed"),
+            ("Display, adjusting", Box::new(|ui, v| { to_page(ui, v, SubKind::Display); press(ui, v, &[A]); }), "page:display", "closed"),
+            ("Sound", Box::new(page(SubKind::Sound)), "cross:Settings", "closed"),
+            ("Sound > Mixer", Box::new(|ui, v| { to_page(ui, v, SubKind::Sound); press(ui, v, &[Down, A]); }), "page:sound", "closed"),
+            ("Mixer (Music)", Box::new(|ui, v| { ui.menu_key(v); press(ui, v, &[Right, Right, Right, A]); }), "cross:Music", "closed"),
+            ("Wi-Fi", Box::new(page(SubKind::Wifi)), "cross:Settings", "closed"),
+            ("Bluetooth", Box::new(page(SubKind::Bluetooth)), "cross:Settings", "closed"),
+            ("Time zone", Box::new(move |ui, v| { to_page(ui, v, SubKind::TimeZone); ui.open_tz(zones(), "Europe/Lisbon".into()); }), "cross:Settings", "closed"),
+            ("Time zone > cities", Box::new(move |ui, v| { to_page(ui, v, SubKind::TimeZone); ui.open_tz(zones(), "Europe/Lisbon".into()); press(ui, v, &[Up, A]); }), "page:timezone", "closed"),
+            ("Updates", Box::new(page(SubKind::Updates)), "cross:Settings", "closed"),
+            ("About", Box::new(page(SubKind::About)), "cross:Settings", "closed"),
+            ("About > Controls", Box::new(|ui, v| { to_page(ui, v, SubKind::About); press(ui, v, &[Down; 5]); press(ui, v, &[A]); }), "page:about", "closed"),
+            ("Power", Box::new(page(SubKind::Power)), "cross:Settings", "closed"),
+            ("Power, confirming", Box::new(|ui, v| { to_page(ui, v, SubKind::Power); press(ui, v, &[Down, Down, Down, A]); }), "cross:Settings", "closed"),
+            ("the power menu", Box::new(|ui, _| ui.open_power_menu()), "closed", "closed"),
+            ("the power menu, confirming", Box::new(|ui, v| { ui.open_power_menu(); press(ui, v, &[Down, A]); }), "power-menu", "closed"),
+        ];
+        for (name, setup, after_b, after_menu) in &table {
+            for (key, want) in [("B", after_b), ("MENU", after_menu)] {
+                let mut ui = ShellUi::new(quiet(), false);
+                setup(&mut ui, &v);
+                let before = place(&ui);
+                assert_ne!(before, "closed", "{name}: set up");
+                if key == "B" {
+                    ui.button(B, false, &v);
+                } else {
+                    ui.menu_key(&v);
+                }
+                assert_eq!(place(&ui), **want, "{name} ({before}): {key}");
+            }
+        }
+        // the games (mortar-play): a system's page and the game panel
+        let lib = crate::games::Library::parse(
+            r#"{"systems":[{"id":"gbc","name":"Game Boy Color","tag":"GBC","order":1,"count":2,"games":[{"path":"/r/a.gbc","name":"A"},{"path":"/r/b.gbc","name":"B"}]}],"recent":[]}"#,
+        )
+        .ok();
+        let gv = crate::games::GamesView { lib, ..Default::default() };
+        let mut gr = run(7, "game:gbc:/r/a.gbc");
+        gr.game = true;
+        let rg = [gr, run(2, "term")];
+        let vg = View { games: Some(&gv), ..view(&rg, &l, &sys, Some(2)) };
+        let game_table: Vec<(&str, Setup, &str, &str)> = vec![
+            ("Games > a system", Box::new(|ui, v| { ui.menu_key(v); press(ui, v, &[Right, Right, A]); }), "cross:Games", "closed"),
+            ("the game panel", Box::new(|ui, v| { ui.menu_key(v); press(ui, v, &[Y]); }), "running", "closed"),
+        ];
+        for (name, setup, after_b, after_menu) in &game_table {
+            for (key, want) in [("B", after_b), ("MENU", after_menu)] {
+                let mut ui = ShellUi::new(quiet(), false);
+                setup(&mut ui, &vg);
+                let before = place(&ui);
+                assert!(before.starts_with("game-"), "{name}: set up ({before})");
+                if key == "B" {
+                    ui.button(B, false, &vg);
+                } else {
+                    ui.menu_key(&vg);
+                }
+                assert_eq!(place(&ui), **want, "{name} ({before}): {key}");
+            }
+        }
+        // ◀ on a glass page goes back too (not while adjusting)
+        let mut ui = ShellUi::new(quiet(), false);
+        to_page(&mut ui, &v, SubKind::About);
+        press(&mut ui, &v, &[Left]);
+        assert_eq!(place(&ui), "cross:Settings");
+        // Home: B does nothing; MENU opens the MENU
+        let vh = view(&r, &l, &sys, None);
+        let mut ui = ShellUi::new(quiet(), false);
+        ui.button(B, false, &vh);
+        assert_eq!(place(&ui), "closed");
+        ui.menu_key(&vh);
+        assert_eq!(place(&ui), "running");
+    }
+
+    #[test]
+    fn attention_and_tips() {
+        let sys = Sys::demo(None);
+        let l = launcher();
+        let r = [run(2, "term")];
+        let v = view(&r, &l, &sys, Some(2));
+        let mut ui = ShellUi::new(Prefs::default(), false);
+        // the first app on screen: one tip, once ever
+        let out = ui.step(0.01, &v);
+        assert!(out.contains(&Out::Remember));
+        assert_eq!(ui.toast.as_ref().map(|t| t.toast.title.as_str()), Some("MENU switches apps"));
+        assert_eq!(ui.prefs.tips_seen, vec!["menu".to_string()]);
+        ui.toast = None;
+        ui.step(0.01, &v);
+        assert!(ui.toast.is_none(), "not again");
+        // a keyboard app: its own tip
+        let vk = View { keyboard_app: true, ..view(&r, &l, &sys, Some(2)) };
+        ui.step(0.01, &vk);
+        assert_eq!(ui.toast.as_ref().map(|t| t.toast.title.as_str()), Some("START opens the keyboard"));
+        // an app needs you: one toast with its text
+        ui.attention_raised("Claude", "Approve: ls");
+        let t = &ui.toast.as_ref().unwrap().toast;
+        assert_eq!((t.title.as_str(), t.sub.as_str()), ("Claude needs you", "Approve: ls"));
     }
 
     #[test]
@@ -3176,7 +2695,7 @@ mod tests {
         let l = launcher();
         let r = [run(2, "term")];
         let v = view(&r, &l, &sys, Some(2));
-        let mut ui = ShellUi::new(Prefs::default(), false);
+        let mut ui = ShellUi::new(quiet(), false);
         settle(&mut ui, &v);
         assert!(!ui.captures_input(true));
         ui.sleep();
@@ -3230,7 +2749,7 @@ mod tests {
         let l = launcher();
         let r = [run(2, "term")];
         let v = view(&r, &l, &sys, Some(2));
-        let mut ui = ShellUi::new(Prefs::default(), false);
+        let mut ui = ShellUi::new(quiet(), false);
         ui.set_backdrop(Some([0.0; 3]));
         assert!(ui.veil.x > 0.8, "closed: no animation");
         ui.set_backdrop(Some([0.9; 3]));
@@ -3248,7 +2767,7 @@ mod tests {
         let sys = Sys::demo(None);
         let l = launcher();
         let v = view(&[], &l, &sys, None);
-        let mut ui = ShellUi::new(Prefs { screensaver: 30, ..Prefs::default() }, false);
+        let mut ui = ShellUi::new(Prefs { screensaver: 30, ..quiet() }, false);
         ui.menu_key(&v);
         // on Running it never comes
         for _ in 0..(40 * 30) {
@@ -3297,7 +2816,7 @@ mod tests {
         ui.button(Button::A, false, &v);
         settle(&mut ui, &v);
         press(&mut ui, &v, &[Button::R1, Button::Down, Button::Down, Button::A]);
-        assert_eq!(ui.menu_sub(), Some(SubKind::Mixer));
+        assert_eq!(ui.menu_sub(), Some(SubKind::Display));
         for _ in 0..(40 * 30) {
             ui.step(1.0 / 30.0, &v);
         }
@@ -3310,7 +2829,7 @@ mod tests {
         let l = launcher();
         let r = [run(2, "term")];
         let v = view(&r, &l, &sys, Some(2));
-        let mut ui = ShellUi::new(Prefs::default(), false);
+        let mut ui = ShellUi::new(quiet(), false);
         settle(&mut ui, &v);
         assert_eq!(ui.pace(true), Pace::Idle);
         ui.osd(OsdKind::Volume, 50, false);
@@ -3328,7 +2847,7 @@ mod tests {
         let l = launcher();
         let r = [run(2, "term")];
         let v = view(&r, &l, &sys, Some(2));
-        let mut ui = ShellUi::new(Prefs::default(), false);
+        let mut ui = ShellUi::new(quiet(), false);
         settle(&mut ui, &v);
         ui.osd(OsdKind::Volume, 50, false);
         // the compositor sleeps until the deadline the UI gives it

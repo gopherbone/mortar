@@ -216,6 +216,9 @@ pub struct Config {
     /// Games category's library, the game panel, hibernation.
     #[serde(default)]
     pub games: Option<GamesConfig>,
+    /// The Home dashboard (widgets.rs).
+    #[serde(default)]
+    pub home: HomeConfig,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -246,6 +249,19 @@ fn d_max_games() -> usize {
 }
 fn d_low_mem() -> u64 {
     180
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields, default)]
+pub struct HomeConfig {
+    /// The dashboard's tiles in reading order (`mortar.shell.home.widgets`).
+    pub widgets: Vec<crate::widgets::Widget>,
+}
+
+impl Default for HomeConfig {
+    fn default() -> Self {
+        HomeConfig { widgets: crate::widgets::defaults() }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -307,7 +323,7 @@ pub enum Renderer {
     Cpu,
 }
 
-/// Defaults for the user settings (the settings screen overrides them, saved
+/// Defaults for the user settings (MENU > Settings overrides them, saved
 /// in $XDG_STATE_HOME/mortar-shell/prefs.json) and the fixed UI options.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields, default)]
@@ -429,7 +445,7 @@ impl Config {
             night,
             suspend: u.suspend,
             idle_minutes: u.idle_minutes,
-            screensaver: crate::shellui::Prefs::default().screensaver,
+            ..Default::default()
         }
     }
 }
@@ -531,6 +547,7 @@ mod tests {
         )
         .unwrap();
         c.check().unwrap();
+        assert_eq!(c.home.widgets.len(), crate::widgets::defaults().len(), "the default dashboard");
         assert_eq!(c.apps[0].gamepad, GamepadMode::Keyboard);
         assert_eq!(c.apps[1].gamepad, GamepadMode::Forward);
         assert!(c.apps[1].single_instance);
@@ -597,6 +614,15 @@ mod tests {
         let g = c.games.unwrap();
         assert_eq!((g.max_games, g.hibernate_below_mb, g.library.as_deref()), (2, 180, Some("play")));
         assert!(Config::default().games.is_none());
+    }
+
+    #[test]
+    fn home_widgets() {
+        let c: Config = serde_json::from_str(r#"{"home":{"widgets":[{"kind":"clock"},{"kind":"command","command":["uptime"],"interval":30}]}}"#).unwrap();
+        assert_eq!(c.home.widgets.len(), 2);
+        assert_eq!(c.home.widgets[1].command, vec!["uptime"]);
+        let c: Config = serde_json::from_str(r#"{"home":{"widgets":[]}}"#).unwrap();
+        assert!(c.home.widgets.is_empty(), "an empty dashboard is allowed");
     }
 
     #[test]

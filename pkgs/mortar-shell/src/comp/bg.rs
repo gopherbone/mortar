@@ -112,6 +112,8 @@ pub struct MixerWorker {
     tx: Sender<MixJob>,
     shared: Arc<Shared<Vec<Stream>>>,
     seen: u64,
+    /// Home's Now playing: look every 4 s (the Mixer: every second).
+    slow: Arc<AtomicBool>,
 }
 
 impl MixerWorker {
@@ -119,7 +121,10 @@ impl MixerWorker {
         let (tx, rx) = channel::<MixJob>();
         let shared = Arc::new(Shared { val: Mutex::new(Vec::new()), seq: AtomicU64::new(0), active: AtomicBool::new(false) });
         let sh = shared.clone();
+        let slow = Arc::new(AtomicBool::new(false));
+        let sl = slow.clone();
         let spawned = std::thread::Builder::new().name("mixer".into()).spawn(move || {
+            let mut ticks = 0u32;
             let dump = |sh: &Shared<Vec<Stream>>| {
                 let Some((cmd, args)) = pw_dump.split_first() else { return };
                 match std::process::Command::new(cmd).args(args).stderr(std::process::Stdio::null()).output() {
@@ -144,7 +149,8 @@ impl MixerWorker {
                     }
                     Ok(MixJob::Refresh) => dump(&sh),
                     Err(RecvTimeoutError::Timeout) => {
-                        if sh.active.load(Ordering::Acquire) {
+                        ticks = ticks.wrapping_add(1);
+                        if sh.active.load(Ordering::Acquire) || (sl.load(Ordering::Acquire) && ticks % 4 == 0) {
                             dump(&sh);
                         }
                     }
@@ -155,7 +161,11 @@ impl MixerWorker {
         if let Err(e) = spawned {
             tracing::warn!("mixer thread: {e}");
         }
-        MixerWorker { tx, shared, seen: 0 }
+        MixerWorker { tx, shared, seen: 0, slow }
+    }
+
+    pub fn set_slow(&self, on: bool) {
+        self.slow.store(on, Ordering::Release);
     }
 
     pub fn set_active(&mut self, on: bool) {

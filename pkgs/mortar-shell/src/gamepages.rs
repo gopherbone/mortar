@@ -792,6 +792,7 @@ mod tests {
             net: None,
             mixer: &[],
             games: Some(g),
+            dash: Default::default(),
         }
     }
     fn acts(o: Vec<Out>) -> Vec<Out> {

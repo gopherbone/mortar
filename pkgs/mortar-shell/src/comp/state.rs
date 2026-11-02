@@ -226,6 +226,14 @@ pub struct Shell {
     pub update: super::ui::UpdateWatch,
     /// mortar-play's games (one app each; None: not set up).
     pub games: Option<super::gamectl::GamesState>,
+    /// "Needs you" (attention.rs): set and cleared by apps over ctl.
+    pub attention: crate::attention::Attention,
+    /// The command widgets (run off the loop while Home shows) and their
+    /// last results.
+    pub widget_worker: crate::widgets::Worker,
+    pub widget_out: Vec<Option<crate::widgets::Output>>,
+    /// Settings > About and the storage widget.
+    pub about: crate::about::About,
 }
 
 impl Shell {
@@ -274,6 +282,8 @@ impl Shell {
         let net_worker = cfg.setup_socket.clone().map(super::bg::NetWorker::new);
         let mixer_worker = super::bg::MixerWorker::new(cfg.actions.pw_dump.clone());
         let games = cfg.games.as_ref().map(|g| super::gamectl::GamesState::new(g.library.clone()));
+        let widget_worker = crate::widgets::Worker::new(&cfg.home.widgets);
+        let widget_out = vec![None; cfg.home.widgets.len()];
         let mut shell = Shell {
             dh,
             loop_handle,
@@ -372,6 +382,10 @@ impl Shell {
             last_bg_tick: Instant::now(),
             update: Default::default(),
             games,
+            attention: Default::default(),
+            widget_worker,
+            widget_out,
+            about: crate::about::About::read(),
         };
         shell.apply_prefs();
         shell.refresh_timezone();
@@ -644,6 +658,13 @@ impl Shell {
         let gone = self.apps.tick();
         for uid in &gone {
             tracing::info!(uid, "app gone");
+        }
+        // "Needs you" of a launcher entry that no longer runs goes with it
+        if !gone.is_empty() {
+            let (apps, cfg) = (&self.apps, &self.cfg);
+            if self.attention.retain(|id| cfg.app(id).is_some() && apps.by_entry(id).is_none()) {
+                self.ui_dirty = true;
+            }
         }
         if !gone.is_empty() {
             let used: Vec<u8> = self.apps.list.iter().map(|a| a.slot).collect();

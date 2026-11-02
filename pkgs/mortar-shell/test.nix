@@ -142,6 +142,20 @@ let
         zoneinfo = "${tzdata}/share/zoneinfo";
         localtime = "~/localtime";
       };
+      # the dashboard, with a command widget (JSON output)
+      home.widgets = [
+        { kind = "clock"; }
+        { kind = "continue"; }
+        { kind = "needs-you"; }
+        { kind = "now-playing"; }
+        { kind = "battery"; }
+        { kind = "storage"; }
+        {
+          kind = "command";
+          interval = 2;
+          command = [ "sh" "-c" "echo '{\"title\":\"Test\",\"value\":\"42\",\"accent\":\"lime\"}'" ];
+        }
+      ];
     }
   );
 in
@@ -176,13 +190,19 @@ runCommand "mortar-shell-headless-test"
     }
     visible() { echo "[.apps[] | select(.id == \"$1\" and .visible)] | length == 1"; }
 
-    echo "== boot screen, then home (no apps)"
+    echo "== boot screen, then the Home dashboard (no apps; the command widget ran)"
     wait_for '.ui.booting == false'
     wait_for '.home == true'
+    wait_for '[.widgets[] | select(. != null)] | .[0].value == "42"'
     sleep 0.3
     shot 01-home
 
-    echo "== A on the first tile: weston-fullscreen grows out of its tile"
+    echo "== Home is not a launcher: MENU, Apps, A starts weston-fullscreen"
+    ctl press a
+    jq -e '.apps | length == 0' <(ctl state) >/dev/null || echo "FAIL: A on an empty Home started something" >> $out/result
+    ctl press menu
+    ctl press right
+    wait_for '.category == "Apps"'
     ctl press a
     wait_for "$(visible shm)"
     wait_for '.ui.layer == false'
@@ -234,6 +254,8 @@ runCommand "mortar-shell-headless-test"
     jq -e '.apps | length == 2' $out/state.json || echo "FAIL: two apps" >> $out/result
 
     echo "== MENU, R1: the cross on Settings (its pattern), then its glass pages"
+    # Brightness, Volume, Display, Sound, Wi-Fi, Bluetooth, Time zone,
+    # Remote access, About, Power (no keyboard app in front)
     ctl press menu
     ctl press r1
     wait_for '.category == "Settings"'
@@ -242,10 +264,22 @@ runCommand "mortar-shell-headless-test"
     ctl press down
     ctl press down
     ctl press a
-    wait_for '.menu_page == "mixer"'
+    wait_for '.menu_page == "display"'
+    sleep 0.6
+    shot 08a-display
+    ctl press b
+    wait_for '.menu_page == null'
+    ctl press down
+    ctl press a
+    wait_for '.menu_page == "sound"'
+    ctl press down
+    ctl press a
+    wait_for '.menu_pages == ["sound", "mixer"]'
     sleep 0.6
     shot 08b-mixer
     ctl press b
+    wait_for '.menu_page == "sound"'
+    ctl press left
     wait_for '.menu_page == null'
     ctl press down
     ctl press a
@@ -259,6 +293,25 @@ runCommand "mortar-shell-headless-test"
     wait_for '.menu_page == "bluetooth"'
     sleep 0.6
     shot 08d-bluetooth
+    ctl press b
+    wait_for '.menu_page == null'
+    for _ in 1 2 3; do ctl press down >/dev/null; done
+    ctl press a
+    wait_for '.menu_page == "about"'
+    for _ in 1 2 3 4 5; do ctl press down >/dev/null; done
+    ctl press a
+    wait_for '.menu_pages == ["about", "controls"]'
+    sleep 0.6
+    shot 08e-controls
+    ctl press menu
+    wait_for '.ui.layer == false'
+    ctl press menu
+    ctl press r1
+    for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do ctl press down >/dev/null; done
+    ctl press a
+    wait_for '.menu_page == "power"'
+    sleep 0.6
+    shot 08f-power
     ctl press b
     wait_for '.menu_page == null'
     ctl press l1
@@ -276,6 +329,26 @@ runCommand "mortar-shell-headless-test"
     ctl press b
     wait_for '.ui.layer == false'
     shot 10-after-close
+
+    echo "== Needs you: an app asks for attention (a toast, a badge in Running, Home)"
+    mortar-shell attention set --app shm "Look at me"
+    wait_for '.attention | length == 1 and .[0].app == "shm"'
+    sleep 0.4
+    shot 10b-attention-toast
+    ctl press menu
+    sleep 0.8
+    shot 10c-attention-running
+    ctl press b
+    ctl home
+    wait_for '.home == true'
+    sleep 3.5
+    shot 10d-attention-home
+    MORTAR_APP=shm mortar-shell attention clear
+    wait_for '.attention | length == 0'
+    mortar-shell attention set "no app" 2>/dev/null && echo "FAIL: attention without an app" >> $out/result
+    ctl focus shm
+    wait_for "$(visible shm)"
+    wait_for '.ui.layer == false'
 
     echo "== transition frames (UI time frozen, stepped by hand)"
     tshot() { ctl time +$1 >/dev/null; shot "t-$2"; }
@@ -339,23 +412,23 @@ runCommand "mortar-shell-headless-test"
     tshot 60 close-100
     tshot 800 close-done
 
-    # MENU > Settings > More settings (Brightness, Volume, Mixer, Wi-Fi,
-    # Bluetooth, Sleep, More settings: no keyboard app in front). The
-    # category remembers its row, so go to the top first.
+    # MENU > Settings > the row N (0 Brightness, 1 Volume, 2 Display, ...
+    # 6 Time zone: no keyboard app in front). The category remembers its
+    # row, so go to the top first.
     settings() {
       ctl press menu
       ctl press r1
-      for _ in 1 2 3 4 5 6 7 8 9; do ctl press up >/dev/null; done
-      for _ in 1 2 3 4 5 6; do ctl press down >/dev/null; done
+      for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do ctl press up >/dev/null; done
+      for _ in $(seq "$1"); do ctl press down >/dev/null; done
       ctl press a
     }
 
-    echo "== night palette (MENU > Settings > More settings), saved"
-    settings
+    echo "== night palette (MENU > Settings > Display), saved"
+    settings 2
     tshot 800 settings
-    jq -e '.settings == true' <(ctl state) >/dev/null || echo "FAIL: settings screen" >> $out/result
-    for _ in 1 2 3 4; do ctl press down >/dev/null; done
-    ctl press right
+    jq -e '.menu_page == "display"' <(ctl state) >/dev/null || echo "FAIL: Display page" >> $out/result
+    ctl press down
+    ctl press a
     tshot 800 night-settings
     ctl press menu
     tshot 800 night-home
@@ -364,11 +437,9 @@ runCommand "mortar-shell-headless-test"
 
     echo "== Settings > Time zone: region list, Europe, pick the first city"
     jq -e '.timezone == "UTC"' <(ctl state) >/dev/null || echo "FAIL: starts in UTC" >> $out/result
-    settings
-    for _ in 1 2 3 4 5; do ctl press down >/dev/null; done
-    tshot 700 tz-settings-row
-    ctl press a
+    settings 6
     tshot 700 tz-regions
+    jq -e '.menu_page == "timezone"' <(ctl state) >/dev/null || echo "FAIL: time zone page" >> $out/result
     for _ in 1 2 3; do ctl press up >/dev/null; done   # UTC -> Pacific -> Indian -> Europe
     tshot 300 tz-regions-europe
     ctl press a
@@ -378,6 +449,7 @@ runCommand "mortar-shell-headless-test"
     ctl press a
     tshot 120 tz-set-toast
     tshot 800 tz-back-in-settings
+    jq -e '.menu_pages == [] and .category == "Settings"' <(ctl state) >/dev/null || echo "FAIL: back on Settings after the zone" >> $out/result
     ctl state | jq -r .timezone > $out/timezone.txt
     jq -e '.timezone | startswith("Europe/")' <(ctl state) >/dev/null || echo "FAIL: time zone set" >> $out/result
     ctl press menu

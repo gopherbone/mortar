@@ -16,6 +16,11 @@
 #
 # Without the greeter, start it from any logind session on a VT:
 # `mortar-shell-session` (it needs a seat: logind or seatd via libseat).
+#
+# With `autologin.user` the Brick boots straight into the shell (greetd's
+# initial_session); the greeter shows only after Log out, or when the
+# shell keeps failing: the session restarts a crashed shell, but two
+# failures in a row within 30 s each go back to the greeter (no loop).
 {
   config,
   lib,
@@ -112,6 +117,59 @@ let
   );
 
   arts = [ "m8" "pico8" "games" "claude" "puzzle" "term" "generic" ];
+  widgetKinds = [ "clock" "continue" "needs-you" "battery" "wifi" "storage" "now-playing" "command" ];
+  accents = [ "lime" "lavender" "yellow" "orange" "pink" "ground" ];
+
+  widgetType = types.submodule {
+    options = {
+      kind = mkOption {
+        type = types.enum widgetKinds;
+        description = ''
+          What the tile shows: `clock` (the big clock and date), `continue`
+          (the last app or game; A resumes it), `needs-you` (apps waiting
+          for you, `mortar-shell attention`), `battery`, `wifi`, `storage`,
+          `now-playing` (which app makes sound), or `command` (a script's
+          output, see `command`).
+        '';
+      };
+      size = mkOption {
+        type = types.nullOr (types.enum [ "1x1" "2x1" ]);
+        default = null;
+        description = "Tile size on the 4 x 3 grid (null: 2x1 for clock, continue, needs-you, now-playing; else 1x1).";
+      };
+      title = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        description = "The tile's label (null: from the kind; a command widget's JSON `title` wins).";
+      };
+      command = mkOption {
+        type = types.either types.str (types.listOf types.str);
+        default = [ ];
+        description = ''
+          `command` widgets: what to run (argv, or a shell string), every
+          `interval` seconds while Home shows, off the shell's event loop
+          (killed after 10 s). It prints text (the first line large, the
+          second small) or a JSON object
+          `{"title": "Disk", "value": "42%", "accent": "lime"}`.
+        '';
+      };
+      interval = mkOption {
+        type = types.ints.positive;
+        default = 60;
+        description = "Seconds between runs of a command widget (at least 2).";
+      };
+      accent = mkOption {
+        type = types.nullOr (types.enum accents);
+        default = null;
+        description = "Tile colour (null: a plain tile).";
+      };
+      open = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        description = "A launcher entry id: A on the tile starts (or switches to) it.";
+      };
+    };
+  };
   categories = [ "apps" "games" "music" ];
 
   argv = c: if builtins.isString c then [ "${pkgs.runtimeShell}" "-c" c ] else c;
@@ -234,7 +292,7 @@ let
   );
 
   configFile = pkgs.writeText "mortar-shell.json" (
-    builtins.toJSON {
+    builtins.toJSON ({
       apps = map (
         a:
         let
@@ -273,7 +331,7 @@ let
         streamVolume = [ "${pkgs.wireplumber}/bin/wpctl" "set-volume" "{id}" "{vol}" ];
         streamMute = [ "${pkgs.wireplumber}/bin/wpctl" "set-mute" "{id}" "{mute}" ];
       };
-      # MENU > Settings > Wi-Fi / Bluetooth, More settings > Remote access /
+      # MENU > Settings > Wi-Fi / Bluetooth / Remote access
       # Bluetooth devices (modules/mortar-setup.nix)
       setupSocket = if config.mortar ? setup && config.mortar.setup.enable then "/run/mortar-setup/control.sock" else null;
       # Settings > Updates (modules/mortar-update.nix)
@@ -289,14 +347,54 @@ let
         else
           null;
     }
+    // lib.optionalAttrs (cfg.home.widgets != null) {
+      home.widgets = map (
+        w:
+        { inherit (w) kind interval; }
+        // lib.optionalAttrs (w.size != null) { inherit (w) size; }
+        // lib.optionalAttrs (w.title != null) { inherit (w) title; }
+        // lib.optionalAttrs (w.accent != null) { inherit (w) accent; }
+        // lib.optionalAttrs (w.open != null) { inherit (w) open; }
+        // lib.optionalAttrs (w.command != [ ] && w.command != "") { command = argv w.command; }
+      ) cfg.home.widgets;
+    })
   );
 
   session = pkgs.writeShellScriptBin "mortar-shell-session" ''
     # The Mortar shell as a login session (greetd, or any logind session
     # on a VT). Logs: journalctl -t mortar-shell
+    #
+    # Log out (or `ctl quit`) ends the shell with status 0: the session
+    # ends and greetd shows the greeter. A crash restarts the shell, but
+    # after two failures in a row that each came within 30 s of starting,
+    # the session gives up and the greeter appears (no crash loop); a
+    # shell that ran longer starts the count again.
     export XDG_SESSION_TYPE=wayland XDG_CURRENT_DESKTOP=mortar
-    exec ${pkgs.systemd}/bin/systemd-cat -t mortar-shell --level-prefix=false \
-      ${lib.getExe cfg.package} run --config ${configFile} "$@"
+    export XDG_SESSION_DESKTOP=''${XDG_SESSION_DESKTOP:-mortar} MORTAR_SESSION=''${MORTAR_SESSION:-mortar}
+    pid=
+    stop=
+    trap 'stop=1; [ -n "$pid" ] && kill -TERM "$pid" 2>/dev/null' TERM HUP INT
+    quick=0
+    while :; do
+      start=$(${pkgs.coreutils}/bin/date +%s)
+      ${pkgs.systemd}/bin/systemd-cat -t mortar-shell --level-prefix=false \
+        ${lib.getExe cfg.package} run --config ${configFile} "$@" &
+      pid=$!
+      wait "$pid"; rc=$?
+      # a signal to us interrupts wait: wait for the shell itself
+      while kill -0 "$pid" 2>/dev/null; do wait "$pid"; rc=$?; done
+      pid=
+      [ -n "$stop" ] && exit 0
+      [ "$rc" -eq 0 ] && exit 0
+      ran=$(( $(${pkgs.coreutils}/bin/date +%s) - start ))
+      if [ "$ran" -lt 30 ]; then quick=$((quick + 1)); else quick=0; fi
+      echo "mortar-shell exited with status $rc after ''${ran}s ($quick quick failure(s))" | ${pkgs.systemd}/bin/systemd-cat -t mortar-shell-session -p warning
+      if [ "$quick" -ge 2 ]; then
+        echo "mortar-shell keeps failing: back to the greeter" | ${pkgs.systemd}/bin/systemd-cat -t mortar-shell-session -p err
+        exit "$rc"
+      fi
+      ${pkgs.coreutils}/bin/sleep 1
+    done
   '';
 
   shellSession = {
@@ -449,7 +547,7 @@ in
       motion = mkOption {
         type = types.enum [ "bouncy" "calm" "snappy" ];
         default = "bouncy";
-        description = "Default spring preset (MENU > Settings > More settings > Motion changes it per user).";
+        description = "Default spring preset (MENU > Settings > Display > Motion changes it per user).";
       };
       reduceMotion = mkOption {
         type = types.bool;
@@ -474,7 +572,7 @@ in
       haptics = mkOption {
         type = types.bool;
         default = true;
-        description = "Default for Settings > Haptic ticks (the gpio-vibrator rumble motor).";
+        description = "Default for Settings > Sound > Vibration (the gpio-vibrator rumble motor).";
       };
       hapticMs = mkOption {
         type = types.submodule {
@@ -498,8 +596,9 @@ in
         default = config.hardware.trimui-brick.suspend.enable or false;
         defaultText = lib.literalExpression "config.hardware.trimui-brick.suspend.enable";
         description = ''
-          Default for Settings > Sleep (Suspend / Screen off). Sleep (power
-          key tap, MENU > Settings > Sleep, the power menu) blanks the
+          Default for Settings > Power > Sleep mode (Suspend / Screen off).
+          Sleep (power key tap, MENU > Settings > Power > Sleep, the power
+          menu) blanks the
           screen and backlight and occludes the front app; with Suspend it
           also runs `actions.sleep` (`systemctl suspend`) once the screen
           has been dark for `suspendGraceMs`. Wake sources: see
@@ -515,7 +614,7 @@ in
       idleMinutes = mkOption {
         type = types.ints.unsigned;
         default = 0;
-        description = "Default for Settings > Sleep when idle: minutes without button input before sleeping (0: never).";
+        description = "Default for Settings > Power > Sleep when idle: minutes without button input before sleeping (0: never).";
       };
       bootAnimation = mkOption {
         type = types.bool;
@@ -583,6 +682,43 @@ in
       '';
     };
 
+    autologin.user = mkOption {
+      type = types.nullOr types.str;
+      default = null;
+      example = "brick";
+      description = ''
+        Boot straight into the shell as this user (greetd's
+        initial_session, once per boot). The greeter appears only after
+        Log out, or if the shell fails twice in a row within 30 s of
+        starting. Needs `mortar.greeter.enable`.
+      '';
+    };
+
+    home.widgets = mkOption {
+      type = types.nullOr (types.listOf widgetType);
+      default = null;
+      example = lib.literalExpression ''
+        [
+          { kind = "clock"; }
+          { kind = "continue"; }
+          { kind = "needs-you"; }
+          { kind = "now-playing"; }
+          { kind = "battery"; }
+          { kind = "command"; title = "Uptime"; interval = 60;
+            command = "uptime -p | sed 's/^up //'"; }
+          { kind = "command"; size = "2x1"; open = "terminal"; interval = 300;
+            command = [ "''${pkgs.writeShellScript "disk" '''
+              echo "{\"title\":\"Disk\",\"value\":\"$(df --output=pcent / | tail -1)\"}"
+            '''}" ]; }
+        ]
+      '';
+      description = ''
+        The Home dashboard's tiles, in reading order on a 4 x 3 grid (null:
+        clock, continue, needs-you, now-playing, battery, wifi, storage).
+        Tiles that do not fit are left out.
+      '';
+    };
+
     configFile = mkOption {
       type = types.path;
       readOnly = true;
@@ -597,7 +733,17 @@ in
         assertions = map (id: {
           assertion = allApps ? ${id};
           message = "mortar.shell.autostart: unknown app '${id}'.";
-        }) cfg.autostart;
+        }) cfg.autostart
+        ++ [
+          {
+            assertion = cfg.autologin.user == null || greeter.enable;
+            message = "mortar.shell.autologin needs mortar.greeter.enable (greetd).";
+          }
+          {
+            assertion = cfg.autologin.user == null || config.users.users ? ${cfg.autologin.user};
+            message = "mortar.shell.autologin.user: no such user '${toString cfg.autologin.user}'.";
+          }
+        ];
 
         environment.etc."mortar-shell/config.json".source = configFile;
         environment.systemPackages = [ cfg.package session ] ++ lib.optional cfg.terminal.enable cfg.terminal.package;
@@ -646,6 +792,14 @@ in
       })
       (lib.mkIf (greeter.enable && cfg.exclusive) {
         mortar.greeter.sessions = lib.mkForce { mortar = shellSession; };
+      })
+      # Boot straight into the shell; greetd runs initial_session once per
+      # boot (its runfile), then the greeter (default_session) after it ends.
+      (lib.mkIf (greeter.enable && cfg.autologin.user != null) {
+        services.greetd.settings.initial_session = {
+          command = "${session}/bin/mortar-shell-session";
+          user = cfg.autologin.user;
+        };
       })
     ]
   );
