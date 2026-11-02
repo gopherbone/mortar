@@ -155,7 +155,10 @@ pub fn init(handle: &LoopHandle<'static, Shell>, ui: &crate::config::UiConfig) -
         .next()
         .ok_or("no CRTC for the connector")?;
 
-    let (mut drm, drm_notifier) = DrmDevice::new(fd.clone(), true).map_err(|e| format!("drm: {e:?}"))?;
+    // Not disabling the connectors first: that switches the panel off (0.96 s
+    // at boot, blocking) only for the first frame to switch it on again.
+    let disable_first = std::env::var_os("MORTAR_SHELL_DRM_RESET").is_some();
+    let (mut drm, drm_notifier) = DrmDevice::new(fd.clone(), disable_first).map_err(|e| format!("drm: {e:?}"))?;
     let surface = drm.create_surface(crtc, mode, &[conn.handle()]).map_err(|e| format!("drm surface: {e:?}"))?;
 
     let (w, h) = (mode.size().0 as i32, mode.size().1 as i32);

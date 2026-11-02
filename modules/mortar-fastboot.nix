@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
-# Boot time: Home sooner after power-on (mainline Brick; see the numbers in
-# docs/boot-time.md). What takes time on the Brick is cold code running on
-# A53s, so the work is to do less, not to do it harder.
+# Boot time: Home sooner after power-on (mainline Brick). What takes time on
+# the Brick is cold code running on A53s (a performance governor or more
+# read-ahead change nothing), so the work is to do less.
 #
 #  - No initrd. The kernel has MMC and ext4 built in and mounts the card's
 #    root partition itself. The systemd initrd cost ~4 s (82 MB to load and
@@ -79,6 +79,9 @@ in
     # in (user@.service, the shell) waits for it. Network services come up
     # beside the shell, not before it. At shutdown it still blocks logins
     # first (ordered by Conflicts=shutdown.target like any service).
+    # (Suppressed: NixOS would make this text a drop-in on the upstream unit,
+    # and a drop-in cannot remove its After=.)
+    systemd.suppressedSystemUnits = [ "systemd-user-sessions.service" ];
     systemd.units."systemd-user-sessions.service".text = lib.mkForce ''
       [Unit]
       Description=Permit User Sessions
