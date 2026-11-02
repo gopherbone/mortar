@@ -3,7 +3,8 @@
 //!
 //! Two pages side by side, on one spring:
 //!
-//! - Running, the stack: the dashboard card (home.rs), then every running
+//! - Running, the stack: the dashboard (home.rs; selected: full screen, the
+//!   apps a strip at the bottom; scrolled past: a card), then every running
 //!   app, most recent first, each a live window edge to edge (1024 x 528,
 //!   the app's middle rows), stacked vertically like a scrolling window
 //!   manager; the neighbours peek 36 px above and below as tabs (name and
@@ -1059,10 +1060,21 @@ impl ShellUi {
     }
 
     fn draw_running(&self, b: &mut B, pal: &Pal, v: &View, m: &Cross, g: &Glass) {
+        // the dashboard selected is full screen (f 0); scrolled to the
+        // first app (f 1) it is a card above it like any other. In between
+        // it shrinks into its card and the apps rise from below the screen.
+        let f = m.run_scroll.x.clamp(0.0, 1.0);
+        let push = (1.0 - f) * (H - (RUN_Y + RUN_STEP));
         for (j, r) in m.run_keys.iter().enumerate() {
             let d = j as f32 - m.run_scroll.x;
-            let y = RUN_Y + d * RUN_STEP;
-            if y > H + 40.0 || y + RUN_H < -40.0 {
+            let card_y = RUN_Y + d * RUN_STEP + if j > 0 { push } else { 0.0 };
+            // the rectangle this card fills (the dashboard: the screen,
+            // shrinking to its card)
+            let (y, h, frame) = match r {
+                Row::Home => (lerp(0.0, card_y, f), lerp(H, RUN_H, f), smooth01(f * 1.6)),
+                _ => (card_y, RUN_H, 1.0),
+            };
+            if y >= H || y + h <= 0.0 {
                 continue;
             }
             let on = j == m.run_sel;
@@ -1071,10 +1083,13 @@ impl ShellUi {
             // card is live, so an idle stack draws no frames
             let tab = smooth01((d.abs() - 0.55) / 0.4);
             if tab < 1.0 {
-                b.clip(Some([0.0, y, W, RUN_H]));
+                b.clip(Some([0.0, y, W, h]));
                 match r {
                     Row::Home => {
-                        b.push(Xf::translate(0.0, y));
+                        // the full-screen picture, shrunk to fit the card
+                        let k = h / H;
+                        b.rect(0.0, y, W, h, pal.ground);
+                        b.push(Xf::translate((W - W * k) / 2.0, y).mul(&Xf::scale(k, k)));
                         self.draw_dash(b, pal, v, on && self.home.tiles);
                         b.pop();
                     }
@@ -1102,7 +1117,7 @@ impl ShellUi {
                 b.clip(None);
                 let dim = d.abs().min(1.0) * 0.35;
                 if dim > 0.0 {
-                    b.rect(0.0, y, W, RUN_H, with_a(pal.ground, dim));
+                    b.rect(0.0, y, W, h, with_a(pal.ground, dim));
                 }
                 // an app that waits for you: a yellow badge at its top right
                 if let Some(it) = card_attention(r, v) {
@@ -1111,35 +1126,75 @@ impl ShellUi {
             }
             if tab > 0.0 {
                 b.push_alpha(tab);
-                self.draw_tab(b, pal, v, r, y, d < 0.0);
+                self.draw_tab(b, pal, v, r, y, h, d < 0.0);
                 b.pop_alpha();
             }
-            b.rect(0.0, y, W, 3.0, pal.dark);
-            b.rect(0.0, y + RUN_H - 3.0, W, 3.0, pal.dark);
-            if on {
-                b.rect(0.0, y, 10.0, RUN_H, run_accent(r, v, pal));
-                b.rect(10.0, y, 3.0, RUN_H, pal.dark);
-                if *r != Row::Home {
-                    self.draw_run_label(b, pal, v, r, j, y, g);
+            // the card's frame (the full-screen dashboard has none)
+            if frame > 0.0 {
+                b.push_alpha(frame);
+                b.rect(0.0, y, W, 3.0, pal.dark);
+                b.rect(0.0, y + h - 3.0, W, 3.0, pal.dark);
+                if on {
+                    b.rect(0.0, y, 10.0, h, run_accent(r, v, pal));
+                    b.rect(10.0, y, 3.0, h, pal.dark);
                 }
+                b.pop_alpha();
+            }
+            if on && *r != Row::Home {
+                self.draw_run_label(b, pal, v, r, j, y, g);
             }
         }
-        // only the dashboard: where the apps would be
-        if m.run_keys.len() == 1 {
-            let y = RUN_Y + (1.0 - m.run_scroll.x) * RUN_STEP;
-            let st = ts(Face::Mono600, 17.0, pal.soft).tracking(0.08);
+        // the dashboard full screen: the apps below as a slim, quiet strip
+        // at the bottom (▼ leads to them), gone as the stack comes
+        let a = 1.0 - smooth01(f / 0.45);
+        if a > 0.0 {
+            b.push_alpha(a);
+            self.draw_app_strip(b, pal, v, m, H - HINT_H - 24.0 + f * 30.0);
+            b.pop_alpha();
+        }
+    }
+
+    /// The running apps as small tabs in a row centred on `cy` (on the
+    /// full-screen dashboard): "▼", then each app's accent and name, NEEDS
+    /// YOU in yellow; with nothing running, the way to the apps.
+    fn draw_app_strip(&self, b: &mut B, pal: &Pal, v: &View, m: &Cross, cy: f32) {
+        let st = ts(Face::Mono600, 15.0, pal.soft).tracking(0.08);
+        let apps: Vec<&RunningInfo> = m.run_keys.iter().filter_map(|r| if let Row::App(u) = r { v.app(*u) } else { None }).collect();
+        if apps.is_empty() {
             let s = "NOTHING RUNNING  ·  ▶ APPS";
             let w = arrow_text(b, 0.0, 0.0, s, &st, false);
-            arrow_text(b, (W - w) / 2.0, y + PEEK / 2.0 - st.line_px() / 2.0, s, &st, true);
+            arrow_text(b, (W - w) / 2.0, cy - st.line_px() / 2.0, s, &st, true);
+            return;
+        }
+        let nm = ts(Face::Body500, 17.0, pal.ink);
+        let h = 30.0;
+        let mut x = 56.0;
+        x += arrow_text(b, x, cy - st.line_px() / 2.0, "▼", &st, true) + 14.0;
+        for (n, a) in apps.iter().enumerate() {
+            let waits = card_attention(&Row::App(a.uid), v).is_some();
+            let name = b.fit(&a.name, &nm, 220.0);
+            let w = 12.0 + 8.0 + 8.0 + b.measure(&name, &nm) + 12.0;
+            if x + w > W - 56.0 - 60.0 {
+                b.text(x, cy - st.line_px() / 2.0, &format!("+{}", apps.len() - n), &st);
+                break;
+            }
+            if waits {
+                b.rect(x, cy - h / 2.0, w, h, pal.yellow);
+            }
+            b.frame(x, cy - h / 2.0, w, h, 1.0, if waits { pal.ink } else { with_a(pal.ink, 0.35) });
+            b.rect(x + 12.0, cy - 4.0, 8.0, 8.0, a.art.accent(pal));
+            b.text(x + 28.0, cy - nm.line_px() / 2.0, &name, &nm);
+            x += w + 10.0;
         }
     }
 
     /// A card at rest next to the selected one: a plain card with its
     /// accent, name and state along the edge that shows (`above`: its
     /// bottom edge).
-    fn draw_tab(&self, b: &mut B, pal: &Pal, v: &View, r: &Row, y: f32, above: bool) {
-        b.rect(0.0, y, W, RUN_H, pal.ground_2);
-        let top = if above { y + RUN_H - PEEK } else { y };
+    #[allow(clippy::too_many_arguments)]
+    fn draw_tab(&self, b: &mut B, pal: &Pal, v: &View, r: &Row, y: f32, h: f32, above: bool) {
+        b.rect(0.0, y, W, h, pal.ground_2);
+        let top = if above { y + h - PEEK } else { y };
         b.rect(0.0, top, 10.0, PEEK, run_accent(r, v, pal));
         b.rect(10.0, top, 3.0, PEEK, pal.dark);
         let cy = top + PEEK / 2.0 + if above { -1.0 } else { 1.0 };

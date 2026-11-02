@@ -192,15 +192,27 @@ blocks with 1 px ink outlines, isometric illustrations.
   glass page, a popup, an app's card); on the dashboard itself they do
   nothing. An app that comes to the front by itself (started over SSH,
   `ctl focus`) while home rests on the dashboard closes the stack.
-  - The dashboard (`home.rs`): a calm card, not a launcher (apps start
-    from the cross), the same size as the app cards: widgets on a 4 x 3
-    grid of Pond tiles (flat blocks, 1 px ink outlines; 224 x 152 px,
-    2x1 tiles 464 px wide; see "Home widgets" below): by default the big
-    serif clock and date, Recently closed, Needs you, Now playing,
-    battery, Wi-Fi and storage. While it is selected its big clock is the
-    clock: the status bar's fades out as the stack scrolls onto it (and
-    back as it scrolls away or the cross slides in), so there is never a
-    second one.
+  - The dashboard (`home.rs`), not a launcher (apps start from the
+    cross). Selected, it is full screen: no card frame, inset or accent
+    strip, edge to edge on the plain ground under the status bar and
+    over the hint bar. A reduced presence: the big serif clock (216 px,
+    the focal point), the line under it (date, host and, inline, a small
+    battery and its level), then only the tiles that have something to
+    say, on a 4 x 2 grid (224 x 126 px, 2x1 tiles 464 px wide; see "Home
+    widgets" below): ink text and thin outlines on the ground, Needs you
+    the only yellow one. By default: Needs you (only while something
+    waits), Now playing (only while something plays), Recently closed
+    (only when there is something); a tile with nothing to say is left
+    out and the others move up, no placeholders. The apps below show as
+    a slim, quiet strip at the bottom edge: "▼" and a small tab per app
+    (its accent and name; yellow when it needs you), or "NOTHING RUNNING
+    · ▶ APPS". ▼ turns it into the stack: on the stack's spring the
+    full-screen dashboard shrinks (the same picture, scaled) into its
+    card above the first app and takes the card's frame, while the apps
+    rise from below the screen and the strip fades; ▲ reverses it. While
+    it is selected its big clock is the clock: the status bar's fades
+    out as the stack scrolls onto it (and back as it scrolls away or the
+    cross slides in), so there is never a second one.
   - ▲▼ always scroll the stack; ▶ is the cross, as before. A on the
     dashboard card: with an app in front, "Go home" (the app goes to the
     background and keeps its card, right below; its frosted picture
@@ -219,10 +231,9 @@ blocks with 1 px ink outlines, isometric illustrations.
     card stays rather than zooming to a full-screen dashboard: one
     layout of the widgets, the same bars everywhere, and home is then
     exactly the switcher at rest, with your last app one ▼ away.)
-  - With nothing running the stack is the dashboard alone, and where the
-    next card would peek a small "NOTHING RUNNING · ▶ APPS" sits.
-  - Still: no frames at rest (the neighbours are tabs, below, so no app
-    picture is in the frame and background apps' commits redraw
+  - Still: no frames at rest (the apps are a strip of names, and in the
+    stack the neighbours are tabs, so no app picture is in the frame
+    and background apps' commits redraw
     nothing); a widget update changes only its tile (`damage.rs`); only
     the charging line under the date moves, while it charges.
 - Launch: the app grows out of its MENU row, its card or its dashboard
@@ -517,7 +528,7 @@ back to it. A unit test
 
 | Screen | B | MENU |
 |---|---|---|
-| Home: the dashboard card, no app in front | nothing (the top) | nothing (already home) |
+| Home: the dashboard (full screen), no app in front | nothing (the top) | nothing (already home) |
 | Home: the dashboard's tiles | leaves them | leaves them |
 | Home: an app's card, the cross | back to the dashboard | back to the dashboard |
 | Home: a glass page, the options popup, adjusting | one level back, as over an app | back to the dashboard |
@@ -550,20 +561,23 @@ kept but not running, e.g. a hibernated game).
 
 `mortar.shell.home.widgets` (config `home.widgets`, `widgets.rs`) lists
 the dashboard's tiles in reading order; each takes a 1x1 or 2x1 slot on
-a 4 x 3 grid, placed first-fit (a 2x1 that does not fit at the end of a
+a 4 x 2 grid under the clock, placed first-fit (a 2x1 that does not fit at the end of a
 row goes to the next one and a later 1x1 fills the gap; what does not
-fit is left out). Kinds:
+fit is left out). Only tiles with something to say are placed; the
+clock and the battery are not tiles. Default: clock, needs-you,
+now-playing, recent, battery; Wi-Fi, storage and scripts are there to
+add. Kinds:
 
 | kind | default size | shows | A |
 |---|---|---|---|
-| `clock` | 2x1 | the big serif clock, the date and host, the charging line | — |
-| `recent` | 2x1 | Recently closed: the newest entry on screen lately (`recent` in prefs) that is not running, else mortar-play's most recent game; a game's resume picture or the app's illustration (`continue`, the old name, still parses) | start it again (a game resumes) |
-| `needs-you` | 2x1 | apps waiting for you (yellow), else "All quiet" | switch to the first |
-| `now-playing` | 2x1 | the app making sound (orange) and its level | switch to it |
-| `battery` | 1x1 | level, bar, charging or health | — |
+| `clock` | — | the dashboard's heading: the big serif clock, the date and host, the charging line | — |
+| `recent` | 2x1 | Recently closed: the newest entry on screen lately (`recent` in prefs) that is not running, else mortar-play's most recent game; a game's resume picture; none: left out (`continue`, the old name, still parses) | start it again (a game resumes) |
+| `needs-you` | 2x1 | apps waiting for you (yellow, the only coloured tile); none: left out | switch to the first |
+| `now-playing` | 2x1 | the app making sound and its level; none: left out | switch to it |
+| `battery` | — | inline in the line under the clock: a small battery and its level (charging) | — |
 | `wifi` | 1x1 | on / off / offline, the network | — |
 | `storage` | 1x1 | free space, a bar, of how much | — |
-| `command` | 1x1 | a script's output | `open`, if set |
+| `command` | 1x1 | a script's output (its accent a small square); none yet: left out | `open`, if set |
 
 Every widget takes `size`, `title`, `accent` (lime, lavender, yellow,
 orange, pink, ground) and `open` (a launcher entry A starts or switches

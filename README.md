@@ -43,13 +43,14 @@ Not yet: deep suspend (it resumes with a fuzzy panel, see modules/trimui-brick.n
 ## Using it
 
 The Brick boots straight into the shell (as `brick`); the greeter appears
-after Log out (Settings › Power) or if the shell keeps failing. Home and
-the app switcher are one vertical stack: on top a dashboard card (the
-clock, **Recently closed** (A starts it again), **Needs you** (apps waiting
-for you, e.g. a Claude approval), what is playing, battery, Wi-Fi, storage
-and your own widgets, `mortar.shell.home.widgets`), then your running
-apps, most recent first, as live windows. Home is that stack on the
-dashboard with no app in front. Apps start from the cross (▶). Every
+after Log out (Settings › Power) or if the shell keeps failing. Home is a
+quiet full-screen dashboard: a big clock, the date and battery, and only
+what has something to say: **Needs you** (apps waiting for you, e.g. a
+Claude approval), what is playing, **Recently closed** (A starts it again);
+Wi-Fi, storage and scripts can be added (`mortar.shell.home.widgets`).
+Your running apps show as a slim strip at the bottom: ▼ turns home into
+the app switcher, a vertical stack of live windows (most recent first)
+under the dashboard, now a card. Apps start from the cross (▶). Every
 button and chord is listed in Settings › About › Controls.
 
 | Button | Does |

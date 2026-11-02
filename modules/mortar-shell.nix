@@ -136,7 +136,7 @@ let
       size = mkOption {
         type = types.nullOr (types.enum [ "1x1" "2x1" ]);
         default = null;
-        description = "Tile size on the 4 x 3 grid (null: 2x1 for clock, recent, needs-you, now-playing; else 1x1).";
+        description = "Tile size on the 4 x 2 grid (null: 2x1 for clock, recent, needs-you, now-playing; else 1x1).";
       };
       title = mkOption {
         type = types.nullOr types.str;
@@ -714,8 +714,9 @@ in
         ]
       '';
       description = ''
-        The dashboard's tiles (the top card of the MENU's stack: home), in reading order on a 4 x 3 grid (null:
-        clock, recent, needs-you, now-playing, battery, wifi, storage).
+        The dashboard's widgets (home: full screen, the top of the MENU's stack), in reading order on a 4 x 2 grid under the clock (null:
+        clock, needs-you, now-playing, recent, battery: a quiet one; tiles
+        with nothing to say are left out, the clock and battery are not tiles).
         Tiles that do not fit are left out.
       '';
     };

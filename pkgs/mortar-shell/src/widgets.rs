@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //! Home widgets: what the dashboard shows, declared in the NixOS module
 //! (`mortar.shell.home.widgets`, config `home.widgets`), laid out on a
-//! 4 x 3 grid of tiles (1x1 or 2x1), and the worker that runs "command"
+//! 4 x 2 grid of tiles (1x1 or 2x1) under the clock, and the worker that runs "command"
 //! widgets off the event loop.
 //!
 //! Built-in kinds: `clock` (the big clock and date), `recent` (what you
@@ -129,13 +129,24 @@ impl Widget {
     }
 }
 
-/// The dashboard without any configuration.
+/// The dashboard without any configuration: a quiet one (the big clock,
+/// the battery inline under it, and tiles only while they have something
+/// to say). Wi-Fi, storage and scripts are there to add.
 pub fn defaults() -> Vec<Widget> {
-    [Kind::Clock, Kind::Recent, Kind::NeedsYou, Kind::NowPlaying, Kind::Battery, Kind::Wifi, Kind::Storage].into_iter().map(Widget::new).collect()
+    [Kind::Clock, Kind::NeedsYou, Kind::NowPlaying, Kind::Recent, Kind::Battery].into_iter().map(Widget::new).collect()
+}
+
+impl Kind {
+    /// Not a tile: the clock is the dashboard's heading and the battery a
+    /// small item in the line under it.
+    pub fn inline(self) -> bool {
+        matches!(self, Kind::Clock | Kind::Battery)
+    }
 }
 
 pub const COLS: usize = 4;
-pub const ROWS: usize = 3;
+/// Rows of tiles under the clock.
+pub const ROWS: usize = 2;
 
 /// A widget's place: (widget index, column, row, columns wide).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -148,11 +159,12 @@ pub struct Slot {
 
 /// First fit in reading order (a 2x1 that does not fit at the end of a row
 /// goes to the next one, and a later 1x1 fills the gap). Widgets that do
-/// not fit are left out.
-pub fn layout(ws: &[Widget]) -> Vec<Slot> {
+/// not fit are left out. Only the tiles `keep` says show (one with nothing
+/// to say is left out and the rest move up), never the inline kinds.
+pub fn layout(ws: &[Widget], keep: impl Fn(usize) -> bool) -> Vec<Slot> {
     let mut used = [[false; COLS]; ROWS];
     let mut out = Vec::new();
-    for (i, w) in ws.iter().enumerate() {
+    for (i, w) in ws.iter().enumerate().filter(|(i, w)| !w.kind.inline() && keep(*i)) {
         let n = w.size().cols();
         'find: for row in 0..ROWS {
             for col in 0..=(COLS - n) {
@@ -347,29 +359,28 @@ mod tests {
         assert_eq!(w[2].label(), "Now playing");
         assert!(serde_json::from_str::<Widget>(r#"{"kind":"weather"}"#).is_err());
         assert!(serde_json::from_str::<Widget>(r#"{"kind":"clock","colour":1}"#).is_err());
-        assert_eq!(defaults().len(), 7);
+        assert_eq!(defaults().len(), 5);
         // `continue` is the old name of `recent`
         assert_eq!(serde_json::from_str::<Widget>(r#"{"kind":"continue"}"#).unwrap().kind, Kind::Recent);
     }
 
     #[test]
     fn layout_fills_the_grid() {
-        // clock 2, recent 2 | needs-you 2, now-playing 2 | three 1x1
-        let s = layout(&defaults());
-        assert_eq!(s.len(), 7);
-        assert_eq!(s[0], Slot { i: 0, col: 0, row: 0, w: 2 });
-        assert_eq!(s[1], Slot { i: 1, col: 2, row: 0, w: 2 });
-        assert_eq!(s[3], Slot { i: 3, col: 2, row: 1, w: 2 });
-        assert_eq!(s[6], Slot { i: 6, col: 2, row: 2, w: 1 });
-        // 1x1, 2x1, 2x1: the second 2x1 goes to the next row, a 1x1 fills the gap
+        // the clock and battery are not tiles: needs-you 2, now-playing 2 | recent 2
+        let s = layout(&defaults(), |_| true);
+        assert_eq!(s, vec![Slot { i: 1, col: 0, row: 0, w: 2 }, Slot { i: 2, col: 2, row: 0, w: 2 }, Slot { i: 3, col: 0, row: 1, w: 2 }]);
+        // one with nothing to say goes, the rest move up
+        let s = layout(&defaults(), |i| i != 1);
+        assert_eq!(s, vec![Slot { i: 2, col: 0, row: 0, w: 2 }, Slot { i: 3, col: 2, row: 0, w: 2 }]);
+        // 1x1, 2x1, 2x1, 1x1: the second 2x1 goes to the next row, a 1x1 fills the gap
         let w = |k: Kind, s: Size| Widget { size: Some(s), ..Widget::new(k) };
-        let ws = vec![w(Kind::Battery, Size::One), w(Kind::Clock, Size::Two), w(Kind::Recent, Size::Two), w(Kind::Wifi, Size::One)];
-        let s = layout(&ws);
+        let ws = vec![w(Kind::Storage, Size::One), w(Kind::NeedsYou, Size::Two), w(Kind::Recent, Size::Two), w(Kind::Wifi, Size::One)];
+        let s = layout(&ws, |_| true);
         assert_eq!(s[2], Slot { i: 2, col: 0, row: 1, w: 2 });
         assert_eq!(s[3], Slot { i: 3, col: 3, row: 0, w: 1 });
         // more than fits: left out
-        let many: Vec<Widget> = (0..20).map(|_| w(Kind::Battery, Size::One)).collect();
-        assert_eq!(layout(&many).len(), COLS * ROWS);
+        let many: Vec<Widget> = (0..20).map(|_| w(Kind::Wifi, Size::One)).collect();
+        assert_eq!(layout(&many, |_| true).len(), COLS * ROWS);
     }
 
     #[test]

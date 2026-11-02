@@ -282,12 +282,14 @@ pub fn run(o: &Opts) -> Result<(), String> {
     let demo_st = { use mortar_setup::ui::Device; mortar_setup::ui::demo::DemoDevice::settings().status().clone() };
     let net = crate::shellui::NetState { wifi: demo_st.wifi.clone(), bt: demo_st.bluetooth.clone(), error: None };
     let mixer = vec![crate::shellui::MixChan { uid: 2, level: 40, muted: false, playing: false }, crate::shellui::MixChan { uid: 1, level: 70, muted: false, playing: true }];
-    // the dashboard: the default widgets plus two command widgets
+    // the dashboard: the defaults; home-custom adds Wi-Fi, storage and two
+    // command widgets
     let mut widgets = crate::widgets::defaults();
-    if s != "home-default" {
-        widgets.truncate(6);
+    if s == "home-custom" {
         let cmd = |title: &str| crate::widgets::Widget { title: Some(title.into()), command: vec!["true".into()], ..crate::widgets::Widget::new(crate::widgets::Kind::Command) };
-        widgets.insert(4, cmd("Uptime"));
+        widgets.push(crate::widgets::Widget::new(crate::widgets::Kind::Wifi));
+        widgets.push(crate::widgets::Widget::new(crate::widgets::Kind::Storage));
+        widgets.push(cmd("Uptime"));
         widgets.push(cmd("Backup"));
     }
     let mut outputs: Vec<Option<crate::widgets::Output>> = vec![None; widgets.len()];
@@ -297,7 +299,7 @@ pub fn run(o: &Opts) -> Result<(), String> {
     if let Some(i) = widgets.iter().position(|w| w.title.as_deref() == Some("Backup")) {
         outputs[i] = Some(crate::widgets::parse_output(r#"{"title":"Backup","value":"OK","accent":"lime"}"#));
     }
-    let attention = if s.ends_with("attention") || s == "home" {
+    let attention = if s.ends_with("attention") || matches!(s, "home" | "home-custom" | "home-tiles") {
         vec![crate::attention::Item { app: "claude".into(), text: "Approve: systemd-run --user free -m".into(), seq: 1 }]
     } else {
         Vec::new()
@@ -334,7 +336,7 @@ pub fn run(o: &Opts) -> Result<(), String> {
     let v0 = mk(current, 0.0);
     settle(&mut ui, &v0, 0.05);
     match s {
-        "boot" | "home" | "home-default" | "home-attention" | "home-empty" | "nothing-running" | "home-charging" | "home-low" | "app" => {}
+        "boot" | "home" | "home-default" | "home-custom" | "home-attention" | "home-empty" | "nothing-running" | "home-charging" | "home-low" | "app" => {}
         // home, A: into the dashboard's tiles
         "home-tiles" => {
             ui.button(Button::A, false, &v0);
@@ -521,7 +523,7 @@ pub fn run(o: &Opts) -> Result<(), String> {
         }
         other => {
             return Err(format!(
-                "unknown preview screen '{other}' (boot, home (the stack on the dashboard, Claude needs you), home-tiles (A: in its tiles), home-down (the last app, the dashboard above), home-default (the default widgets), home-attention, home-empty or nothing-running, home-charging, home-low, app, tip, running, running-attention, running-dash (the dashboard over the app), menu-open (MENU from the app: use --frames), cross-apps, cross-attention, home-menu (the cross over home), menu-games, menu-music, games, games-system, game-panel, game-asleep, cross-settings, menu-adjust, menu-options, cross-games, cross-music, cross-switch (Apps to Games: use --frames), saver-apps, saver-games, saver-music, saver-settings, saver-exit, page-display, page-display-adjust, page-sound, page-mixer, page-wifi, page-bluetooth, page-timezone, page-timezone-cities, page-updates, page-about, page-controls, page-power, page-power-confirm, remote, setup-wifi, setup-bluetooth, launch, close, swap, osd, osd-mute, osd-bri, osd-home, toast, achievement, flash, osk, osk-chips, osk-chips-focus, power)"
+                "unknown preview screen '{other}' (boot, home (the stack on the dashboard, Claude needs you), home-tiles (A: in its tiles), home-down (the last app, the dashboard above), home-default (no one needs you), home-custom (Wi-Fi, storage, scripts), home-attention, home-empty or nothing-running, home-charging, home-low, app, tip, running, running-attention, running-dash (the dashboard over the app), menu-open (MENU from the app: use --frames), cross-apps, cross-attention, home-menu (the cross over home), menu-games, menu-music, games, games-system, game-panel, game-asleep, cross-settings, menu-adjust, menu-options, cross-games, cross-music, cross-switch (Apps to Games: use --frames), saver-apps, saver-games, saver-music, saver-settings, saver-exit, page-display, page-display-adjust, page-sound, page-mixer, page-wifi, page-bluetooth, page-timezone, page-timezone-cities, page-updates, page-about, page-controls, page-power, page-power-confirm, remote, setup-wifi, setup-bluetooth, launch, close, swap, osd, osd-mute, osd-bri, osd-home, toast, achievement, flash, osk, osk-chips, osk-chips-focus, power)"
             ))
         }
     }

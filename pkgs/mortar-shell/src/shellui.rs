@@ -2036,7 +2036,7 @@ mod tests {
         assert!(!ui.in_tiles() && ui.dash_selected());
         press(&mut ui, &v, &[Button::A]);
         assert_eq!(press(&mut ui, &v, &[Button::A]), vec![Out::Launch("m8".into())]);
-        assert!(matches!(&ui.trans, Some(Trans::Launch { from, .. }) if from.y >= cross::RUN_Y && from.w < W));
+        assert!(matches!(&ui.trans, Some(Trans::Launch { from, .. }) if Some([from.x, from.y, from.w, from.h]) == ui.dash_tile_rect(&v, 3)));
         assert!(!ui.menu_open(), "the stack fades under the launch");
         // apps running (in the background): the stack shows them below the
         // dashboard; ▼ A switches to the last one
@@ -2088,7 +2088,7 @@ mod tests {
         let mut ws = crate::widgets::defaults();
         ws.push(crate::widgets::Widget { title: Some("Up".into()), command: vec!["true".into()], ..crate::widgets::Widget::new(crate::widgets::Kind::Command) });
         let mut outs: Vec<Option<crate::widgets::Output>> = vec![None; ws.len()];
-        outs[7] = Some(crate::widgets::parse_output("3 days"));
+        outs[5] = Some(crate::widgets::parse_output("3 days"));
         let mk = |o: &[Option<crate::widgets::Output>]| -> Scene {
             let v = View { dash: Dash { widgets: &ws, outputs: o, ..Dash::default() }, ..view(&r, &l, &sys, None) };
             let mut ui = ShellUi::new(quiet(), false);
@@ -2113,17 +2113,22 @@ mod tests {
         let mut g = crate::damage::Grid::new(W, H);
         g.diff(&a, &infos(&mk(&outs)));
         assert_eq!(g.rects(), Some(Vec::new()), "the same frame: nothing to redraw");
-        // the 1x1 command tile (row 2, column 3) gets a new value
-        outs[7] = Some(crate::widgets::parse_output("4 days"));
+        // the command tile (the only one with something to say) gets a
+        // new value: only its cells change
+        let tile = {
+            let v = View { dash: Dash { widgets: &ws, outputs: &outs, ..Dash::default() }, ..view(&r, &l, &sys, None) };
+            let mut ui = ShellUi::new(quiet(), false);
+            settle(&mut ui, &v);
+            ui.dash_tile_rect(&v, 5).expect("the command tile shows")
+        };
+        outs[5] = Some(crate::widgets::parse_output("4 days"));
         let mut g = crate::damage::Grid::new(W, H);
         g.diff(&a, &infos(&mk(&outs)));
         let rects = g.rects().expect("a small change");
         assert!(!rects.is_empty());
-        let slot = crate::widgets::layout(&ws).into_iter().find(|s| s.i == 7).unwrap();
-        assert_eq!((slot.row, slot.col), (2, 3));
-        let tile_x = W - 40.0 - (W - 80.0 - 48.0) / 4.0;
         for rc in rects {
-            assert!(rc[0] >= tile_x - 32.0 && rc[1] >= cross::RUN_Y + 200.0 && rc[1] + rc[3] <= cross::RUN_Y + cross::RUN_H + 32.0, "outside the tile: {rc:?}");
+            let inside = rc[0] >= tile[0] - 32.0 && rc[1] >= tile[1] - 32.0 && rc[0] + rc[2] <= tile[0] + tile[2] + 32.0 && rc[1] + rc[3] <= tile[1] + tile[3] + 32.0;
+            assert!(inside, "{rc:?} outside the tile {tile:?}");
         }
     }
 
