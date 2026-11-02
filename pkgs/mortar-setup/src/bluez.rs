@@ -20,6 +20,7 @@
 //! built-in pad.
 
 use crate::control::{BtDeviceView, BtView};
+use crate::iwd::Watched;
 use std::collections::HashMap;
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
@@ -44,12 +45,15 @@ enum Cmd {
     Connect(String),
     Disconnect(String),
     Forget(String),
+    /// Someone looks again after a quiet while: refresh now.
+    Refresh,
 }
 
 #[derive(Clone)]
 pub struct Bluetooth {
     view: Arc<Mutex<BtView>>,
     tx: Sender<Cmd>,
+    watched: Watched,
 }
 
 #[derive(Debug, zbus::DBusError)]
@@ -257,14 +261,19 @@ impl Bluetooth {
         let view = Arc::new(Mutex::new(BtView::default()));
         let (tx, rx) = channel();
         let v = view.clone();
+        let watched = Watched::new();
+        let w = watched.clone();
         thread::Builder::new()
             .name("bluez".into())
-            .spawn(move || worker(v, rx))
+            .spawn(move || worker(v, rx, w))
             .expect("spawn bluez worker");
-        Bluetooth { view, tx }
+        Bluetooth { view, tx, watched }
     }
 
     pub fn view(&self) -> BtView {
+        if self.watched.touch() {
+            let _ = self.tx.send(Cmd::Refresh);
+        }
         self.view.lock().unwrap().clone()
     }
 
@@ -336,7 +345,7 @@ fn pair_and_connect(conn: Connection, path: OwnedObjectPath, pair: bool, view: A
     }
 }
 
-fn worker(view: Arc<Mutex<BtView>>, rx: Receiver<Cmd>) {
+fn worker(view: Arc<Mutex<BtView>>, rx: Receiver<Cmd>, watched: Watched) {
     let pairing: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
     let paired: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     loop {
@@ -386,8 +395,13 @@ fn worker(view: Arc<Mutex<BtView>>, rx: Receiver<Cmd>) {
                 let _ = ad("StopDiscovery");
             }
             let discovering = view.lock().unwrap().discovering;
-            let wait = if discovering { 1 } else { 2 };
-            let cmd = match rx.recv_timeout(Duration::from_secs(wait)) {
+            let wait = if discovering || scan_until.is_some() {
+                // a scan in progress ends on time, watched or not
+                Duration::from_secs(1)
+            } else {
+                watched.wait(Duration::from_secs(2))
+            };
+            let cmd = match rx.recv_timeout(wait) {
                 Ok(c) => c,
                 Err(RecvTimeoutError::Timeout) => continue,
                 Err(RecvTimeoutError::Disconnected) => return,
@@ -404,6 +418,7 @@ fn worker(view: Arc<Mutex<BtView>>, rx: Receiver<Cmd>) {
                 p
             };
             match cmd {
+                Cmd::Refresh => {}
                 Cmd::Power(on) => {
                     let r = adapter
                         .as_ref()

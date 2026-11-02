@@ -32,12 +32,49 @@ enum Cmd {
     Wps,
     Forget { ssid: String },
     Disconnect,
+    /// Someone looks again after a quiet while: refresh now.
+    Refresh,
 }
 
 #[derive(Clone)]
 pub struct Wifi {
     view: Arc<Mutex<WifiView>>,
     tx: Sender<Cmd>,
+    watched: Watched,
+}
+
+/// When the view was last asked for. The workers refresh every 2 s (1 s
+/// while discovering) while someone looks (Settings pages, setup screens),
+/// and once a minute otherwise: each refresh is a few D-Bus calls that
+/// wake iwd or bluetoothd and the bus, and nobody reads them at idle.
+#[derive(Clone)]
+pub(crate) struct Watched(Arc<Mutex<Option<std::time::Instant>>>);
+
+/// The view counts as watched this long after it was last asked for.
+const WATCHED_FOR: Duration = Duration::from_secs(20);
+/// How often the workers refresh when nobody looks.
+pub(crate) const IDLE_REFRESH: Duration = Duration::from_secs(60);
+
+impl Watched {
+    pub(crate) fn new() -> Watched {
+        Watched(Arc::new(Mutex::new(None)))
+    }
+
+    /// Note a look; true when it ends a quiet while (time to refresh).
+    pub(crate) fn touch(&self) -> bool {
+        let mut g = self.0.lock().unwrap();
+        let quiet = g.is_none_or(|t| t.elapsed() >= WATCHED_FOR);
+        *g = Some(std::time::Instant::now());
+        quiet
+    }
+
+    /// How long a worker may wait for a command before refreshing.
+    pub(crate) fn wait(&self, busy: Duration) -> Duration {
+        match *self.0.lock().unwrap() {
+            Some(t) if t.elapsed() < WATCHED_FOR => busy,
+            _ => IDLE_REFRESH,
+        }
+    }
 }
 
 /// Passphrases waiting for iwd to ask, by network object path.
@@ -188,14 +225,19 @@ impl Wifi {
         let view = Arc::new(Mutex::new(WifiView { state: "off".into(), ..Default::default() }));
         let (tx, rx) = channel();
         let v = view.clone();
+        let watched = Watched::new();
+        let w = watched.clone();
         thread::Builder::new()
             .name("iwd".into())
-            .spawn(move || worker(v, rx))
+            .spawn(move || worker(v, rx, w))
             .expect("spawn iwd worker");
-        Wifi { view, tx }
+        Wifi { view, tx, watched }
     }
 
     pub fn view(&self) -> WifiView {
+        if self.watched.touch() {
+            let _ = self.tx.send(Cmd::Refresh);
+        }
         self.view.lock().unwrap().clone()
     }
 
@@ -223,7 +265,7 @@ impl Wifi {
     }
 }
 
-fn worker(view: Arc<Mutex<WifiView>>, rx: Receiver<Cmd>) {
+fn worker(view: Arc<Mutex<WifiView>>, rx: Receiver<Cmd>, watched: Watched) {
     let pending: Pending = Arc::new(Mutex::new(HashMap::new()));
     loop {
         let conn = match Connection::system() {
@@ -256,12 +298,13 @@ fn worker(view: Arc<Mutex<WifiView>>, rx: Receiver<Cmd>) {
                     .map_err(|e| eprintln!("iwd: RegisterAgent: {e}"))
                     .is_ok();
             }
-            let cmd = match rx.recv_timeout(Duration::from_secs(2)) {
+            let cmd = match rx.recv_timeout(watched.wait(Duration::from_secs(2))) {
                 Ok(c) => c,
                 Err(RecvTimeoutError::Timeout) => continue,
                 Err(RecvTimeoutError::Disconnected) => return,
             };
             match cmd {
+                Cmd::Refresh => {}
                 Cmd::Scan => {
                     if let Some(st) = &snap.station
                         && let Err(e) = Proxy::new(&conn, SVC, st.as_str(), STATION).and_then(|p| p.call_method("Scan", &()).map(|_| ()))
@@ -327,5 +370,19 @@ fn worker(view: Arc<Mutex<WifiView>>, rx: Receiver<Cmd>) {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn refreshes_slowly_until_someone_looks() {
+        let w = Watched::new();
+        assert_eq!(w.wait(Duration::from_secs(2)), IDLE_REFRESH);
+        assert!(w.touch(), "the first look ends the quiet");
+        assert!(!w.touch(), "a look right after does not");
+        assert_eq!(w.wait(Duration::from_secs(2)), Duration::from_secs(2));
     }
 }
