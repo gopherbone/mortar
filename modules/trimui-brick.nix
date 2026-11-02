@@ -351,6 +351,12 @@ in {
     systemd.tmpfiles.rules = [
       "w- /sys/devices/system/cpu/cpufreq/schedutil/rate_limit_us - - - - 20000"
     ];
+    # Real-time tasks (PipeWire's data loop, the audio threads of games and
+    # m8c) no longer pin the clock at 1992 MHz whenever they run: they are
+    # clocked by their load like everything else (UCLAMP_TASK in
+    # pkgs/linux-trimui-brick.nix). The audio work per quantum is well
+    # under 1 ms even at 1008 MHz, where everything ran before schedutil.
+    boot.kernel.sysctl."kernel.sched_util_clamp_min_rt_default" = 0;
 
     # The device kernel only builds what the Brick needs; NixOS' default
     # initrd module list (ahci, xhci_pci, usbhid, ...) mostly doesn't exist.

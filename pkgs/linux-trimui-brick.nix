@@ -210,6 +210,14 @@ buildLinux (
       CPU_FREQ_GOV_PERFORMANCE = yes;
       CPU_FREQ_DEFAULT_GOV_SCHEDUTIL = yes;
       CPU_FREQ_DEFAULT_GOV_USERSPACE = no;
+      # Without utilization clamping, schedutil asks for the top OPP
+      # (1992 MHz, 1.25 V) whenever a real-time task is runnable: every
+      # PipeWire quantum (5.8 ms) while sound plays, so the clock and
+      # vdd-cpu bounced on each one (67 transitions/s with a silent
+      # stream, 2026-11-01). With UCLAMP_TASK, real-time tasks get
+      # kernel.sched_util_clamp_min_rt_default (set to 0 in
+      # modules/trimui-brick.nix) and the clock follows the load.
+      UCLAMP_TASK = yes;
 
       # console=tty0 on the panel
       VT = yes;
