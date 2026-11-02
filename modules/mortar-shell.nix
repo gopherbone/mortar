@@ -117,7 +117,7 @@ let
   );
 
   arts = [ "m8" "pico8" "games" "claude" "puzzle" "term" "generic" ];
-  widgetKinds = [ "clock" "continue" "needs-you" "battery" "wifi" "storage" "now-playing" "command" ];
+  widgetKinds = [ "clock" "recent" "continue" "needs-you" "battery" "wifi" "storage" "now-playing" "command" ];
   accents = [ "lime" "lavender" "yellow" "orange" "pink" "ground" ];
 
   widgetType = types.submodule {
@@ -125,9 +125,10 @@ let
       kind = mkOption {
         type = types.enum widgetKinds;
         description = ''
-          What the tile shows: `clock` (the big clock and date), `continue`
-          (the last app or game; A resumes it), `needs-you` (apps waiting
-          for you, `mortar-shell attention`), `battery`, `wifi`, `storage`,
+          What the tile shows: `clock` (the big clock and date), `recent`
+          (Recently closed: the last app or game that no longer runs; A
+          starts it again; `continue` is its old name), `needs-you` (apps
+          waiting for you, `mortar-shell attention`), `battery`, `wifi`, `storage`,
           `now-playing` (which app makes sound), or `command` (a script's
           output, see `command`).
         '';
@@ -135,7 +136,7 @@ let
       size = mkOption {
         type = types.nullOr (types.enum [ "1x1" "2x1" ]);
         default = null;
-        description = "Tile size on the 4 x 3 grid (null: 2x1 for clock, continue, needs-you, now-playing; else 1x1).";
+        description = "Tile size on the 4 x 3 grid (null: 2x1 for clock, recent, needs-you, now-playing; else 1x1).";
       };
       title = mkOption {
         type = types.nullOr types.str;
@@ -700,7 +701,7 @@ in
       example = lib.literalExpression ''
         [
           { kind = "clock"; }
-          { kind = "continue"; }
+          { kind = "recent"; }
           { kind = "needs-you"; }
           { kind = "now-playing"; }
           { kind = "battery"; }
@@ -713,8 +714,8 @@ in
         ]
       '';
       description = ''
-        The Home dashboard's tiles, in reading order on a 4 x 3 grid (null:
-        clock, continue, needs-you, now-playing, battery, wifi, storage).
+        The dashboard's tiles (the top card of the MENU's stack: home), in reading order on a 4 x 3 grid (null:
+        clock, recent, needs-you, now-playing, battery, wifi, storage).
         Tiles that do not fit are left out.
       '';
     };

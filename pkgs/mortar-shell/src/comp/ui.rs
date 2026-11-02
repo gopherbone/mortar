@@ -126,8 +126,6 @@ pub struct CpuImages {
     blurs: HashMap<u32, (ObjectId, CommitCounter, Instant, Pixmap)>,
     pub osk: Option<Pixmap>,
     pub page: Option<Pixmap>,
-    /// The home screen blurred (Shell::home_gen it was made from).
-    pub home_blur: Option<(u64, Pixmap)>,
     /// Pictures (`Src::Pic`): game thumbnails, sleeping games' last frames.
     pub pics: HashMap<u32, Pixmap>,
 }
@@ -139,7 +137,6 @@ impl Images for CpuImages {
             Src::Blur(u) => self.blurs.get(&u).map(|e| &e.3),
             Src::Layer(Layer::Osk) => self.osk.as_ref(),
             Src::Layer(Layer::Page) => self.page.as_ref(),
-            Src::HomeBlur => self.home_blur.as_ref().map(|e| &e.1),
             Src::Pic(p) => self.pics.get(&p),
         }
     }
@@ -451,7 +448,7 @@ impl Shell {
                         }
                         self.sys.brightness = b.get();
                         let level = self.sys.brightness.unwrap_or(0);
-                        if self.sui.menu_open() {
+                        if self.sui.levels_on_screen() {
                             // MENU > Settings shows the value in its row
                             self.play_sfx(Sfx::Vol(level));
                         } else {
@@ -592,9 +589,9 @@ impl Shell {
             }
         }
         self.games_poll();
-        // Home: the command widgets run, and Now playing looks at the
-        // streams now and then
-        let home = self.visible_app().is_none() && self.sui.sleep_phase() == crate::shellui::SleepPhase::Awake;
+        // the dashboard on screen (the stack on its card): the command
+        // widgets run, and Now playing looks at the streams now and then
+        let home = self.sui.dashboard_visible() && self.sui.sleep_phase() == crate::shellui::SleepPhase::Awake;
         self.widget_worker.set_active(home);
         if let Some(o) = self.widget_worker.take() {
             self.widget_out = o;
@@ -726,7 +723,7 @@ impl Shell {
         let old = self.volume.unwrap_or(50);
         let v = (old as i32 + d).clamp(0, 100) as u8;
         self.set_volume(v);
-        if !self.sui.menu_open() {
+        if !self.sui.levels_on_screen() {
             self.sui.osd(OsdKind::Volume, v, self.muted);
         }
         self.play_sfx(Sfx::Vol(v));
@@ -827,20 +824,6 @@ impl Shell {
             Some(t) => self.with_view(|ui, v| ui.build(t, v, w, h)),
             None => Scene::new(w, h, mortar_ui::gfx::Color(0, 0, 0, 255)),
         };
-        // the MENU over home blurs the home screen: drawn once when it is
-        // first needed (the renderers blur it and keep it while frames use
-        // it), dropped when no frame does
-        if scene.home_blur() {
-            if self.home_scene.is_none()
-                && let Some(t) = &typo
-            {
-                let home = self.with_view(|ui, v| ui.build_home(t, v, w, h));
-                self.home_scene = Some(home);
-                self.home_gen += 1;
-            }
-        } else {
-            self.home_scene = None;
-        }
         self.typo = typo;
         self.scene_apps = scene.apps();
         self.sui.dirty = false;
@@ -863,21 +846,6 @@ impl Shell {
             }
         }
         // blurred backdrops: again when the app committed, at most ~15/s
-        // the blurred home screen (CPU: drawn full size, then the same
-        // quarter-size blur as an app)
-        match &self.home_scene {
-            Some(hs) if self.cpu_imgs.home_blur.as_ref().map(|e| e.0) != Some(self.home_gen) => {
-                if let (Some(t), Some(mut pm)) = (self.typo.as_ref(), Pixmap::new(self.size.0 as u32, self.size.1 as u32)) {
-                    self.raster.render(&mut pm, hs, t, &self.cpu_imgs);
-                    if let Some(b) = crate::raster::blur_quarter(&pm) {
-                        self.backdrop_rgb = Some(crate::raster::mean_rgb(&b));
-                        self.cpu_imgs.home_blur = Some((self.home_gen, b));
-                    }
-                }
-            }
-            Some(_) => {}
-            None => self.cpu_imgs.home_blur = None,
-        }
         let blurs = scene.blurs();
         self.cpu_imgs.blurs.retain(|u, _| blurs.contains(u));
         for uid in blurs {

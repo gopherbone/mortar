@@ -43,24 +43,27 @@ Not yet: deep suspend (it resumes with a fuzzy panel, see modules/trimui-brick.n
 ## Using it
 
 The Brick boots straight into the shell (as `brick`); the greeter appears
-after Log out (Settings › Power) or if the shell keeps failing. Home is a
-dashboard: the clock, **Continue** (A resumes the last app), **Needs you**
-(apps waiting for you, e.g. a Claude approval), what is playing, battery,
-Wi-Fi, storage and your own widgets (`mortar.shell.home.widgets`). Apps
-start from the MENU. Every button and chord is listed in Settings › About ›
-Controls.
+after Log out (Settings › Power) or if the shell keeps failing. Home and
+the app switcher are one vertical stack: on top a dashboard card (the
+clock, **Recently closed** (A starts it again), **Needs you** (apps waiting
+for you, e.g. a Claude approval), what is playing, battery, Wi-Fi, storage
+and your own widgets, `mortar.shell.home.widgets`), then your running
+apps, most recent first, as live windows. Home is that stack on the
+dashboard with no app in front. Apps start from the cross (▶). Every
+button and chord is listed in Settings › About › Controls.
 
 | Button | Does |
 |---|---|
-| D-pad, A | Move, open (on Home: between the tiles; A resumes, switches) |
-| B | Back one step; at the top it closes the menu |
-| MENU | Opens the menu on Running (your open windows, Home first, stacked full screen); closes everything, from anywhere |
+| D-pad, A | Move, open |
+| B | Back one step; at the top it closes the menu (at home: back to the dashboard) |
+| MENU | Opens the stack over the app (the previous app selected); closes everything, from anywhere; at home: back to the dashboard |
 | MENU, then A | Flip back to the previous app |
-| In Running: ▲▼, A, X, Y | Scroll, switch to it, close it, options (switch, restart, close) |
-| In Running, on a game: Y | Game menu: save or load a state (◀▶ picks one of four slots, with pictures), reset, fast-forward, change disc, quit |
-| In Running: ▶ (R1) | The cross: Apps, Games, Music, Settings (R1: straight to Settings); ◀ from Apps or L1 goes back |
+| In the stack: ▲▼, A, X, Y | Scroll, switch to it, close it, options (switch, restart, close) |
+| In the stack, on the dashboard: A | With an app in front: go home (it keeps running). At home: into the tiles (D-pad between them, A opens, B leaves) |
+| In the stack, on a game: Y | Game menu: save or load a state (◀▶ picks one of four slots, with pictures), reset, fast-forward, change disc, quit |
+| In the stack: ▶ (R1) | The cross: Apps, Games, Music, Settings (R1: straight to Settings); ◀ from Apps or L1 goes back |
 | In the cross: ◀▶, ▲▼, A | Category, item, open (Apps holds the tools; games and music have their own) |
-| Games | Continue, recently played, one row per system (A: its games, L1/R1 page, A plays), PICO-8, PuzzleScript, All systems. Every game is its own window in Running; a game you have not used for a while sleeps (saved) and wakes where it was |
+| Games | Continue, recently played, one row per system (A: its games, L1/R1 page, A plays), PICO-8, PuzzleScript, All systems. Every game is its own window in the stack; a game you have not used for a while sleeps (saved) and wakes where it was |
 | Settings | Brightness and volume (A, then ◀▶, A when done), then pages: Display (palette, motion, screensaver), Sound (Mixer, UI sounds, vibration), Wi-Fi, Bluetooth, Time zone, Remote access, Updates, About (version, storage, battery, Controls), Power (sleep, restart, power off, log out: press A twice). B or ◀ goes back a page |
 | Settings › Wi-Fi | On/off, the network you are on (details, forget), networks nearby (A joins; a password keyboard for new secured ones) |
 | Settings › Bluetooth | On/off, your devices (A connects or disconnects, X forgets), Pair new device |

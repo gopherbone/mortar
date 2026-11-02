@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //! The shell's own UI, after the approved motion prototype
 //! (plan/mortar-motion) and Cross Menu 2 (plan/mortar-cross-2): boot, the
-//! Home dashboard (home.rs, widgets.rs), the MENU (cross.rs: Running, then
+//! MENU (cross.rs: the Running stack, its top card the dashboard, home.rs
+//! and widgets.rs, which is home with no app in front; then
 //! Apps, Games, Music, Settings and its glass pages, menupages.rs),
 //! launch/close/switch transitions, the volume OSD, toasts, first-time
 //! tips and the screenshot flash.
@@ -11,7 +12,7 @@
 //! ticks) and builds a `Scene` for a renderer. Everything is laid out in
 //! the prototype's 1024x768 logical pixels.
 //!
-//! Layers, bottom to top: home or the visible app (+ on-screen keyboard),
+//! Layers, bottom to top: the plain ground (home) or the visible app (+ on-screen keyboard),
 //! the MENU and its veil (with its glass pages), the launch/close/switch
 //! transition, a setup page, the power menu, the OSD, a toast, the shutter
 //! flash, the boot screen, the power-key hold indicator, and the black of
@@ -85,8 +86,8 @@ pub const H: f32 = 768.0;
 
 /// User settings changed in MENU > Settings (persisted by the compositor;
 /// defaults from the NixOS module), plus what the shell remembers for the
-/// person: the first-time tips already shown and the last app (Home's
-/// Continue card).
+/// person: the first-time tips already shown and what was on screen
+/// lately (the dashboard's Recently closed).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Prefs {
@@ -106,8 +107,8 @@ pub struct Prefs {
     pub screensaver: u32,
     /// First-time tips already shown (TIPS ids).
     pub tips_seen: Vec<String>,
-    /// The launcher entry last on screen (Continue starts it again).
-    pub last_app: Option<String>,
+    /// Entries on screen lately, newest first (Recently closed).
+    pub recent: Vec<String>,
 }
 
 impl Default for Prefs {
@@ -123,7 +124,7 @@ impl Default for Prefs {
             idle_minutes: 0,
             screensaver: 60,
             tips_seen: Vec::new(),
-            last_app: None,
+            recent: Vec::new(),
         }
     }
 }
@@ -415,11 +416,9 @@ enum Target {
 }
 
 enum Trans {
-    /// An app grows out of its home tile or MENU row, over `prev` (the app
-    /// that was in front, or home).
+    /// An app grows out of its dashboard tile or MENU row (or card), over
+    /// `prev` (the app that was in front, or home).
     Launch { target: Target, name: String, art: Art, from: R4, prev: Option<u32>, t0: f64 },
-    /// The front app shrinks back into its tile.
-    Close { uid: u32, art: Art, to: R4 },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -504,7 +503,7 @@ const DRIFT_SECS: f64 = 30.0;
 pub enum Pace {
     /// Something moves: every vblank.
     Full,
-    /// Only the charging line's slow highlight on Home: ~20 fps.
+    /// Only the charging line's slow highlight on the dashboard: ~20 fps.
     Ambient,
     /// Only the MENU's background pattern moves: ~30 fps.
     Pattern,
@@ -517,9 +516,13 @@ pub struct ShellUi {
     t: f64,
     drift_t: f64,
     drift_until: f64,
-    /// Home is on screen and the battery charges (the charging line moves).
+    /// The dashboard is on screen and the battery charges (the charging
+    /// line moves).
     charging_home: bool,
     home: home::Home,
+    /// The app just sent home: its frosted picture fades out behind the
+    /// stack (1 -> 0).
+    leaving: Option<(u32, Spring)>,
     lp: Spring,
     /// The veil over the blurred backdrop: FROST_VEIL, raised over dark
     /// backdrops so ink-soft text keeps 4.5:1 (`set_backdrop`).
@@ -560,6 +563,7 @@ impl ShellUi {
             drift_until: DRIFT_SECS,
             charging_home: false,
             home: home::Home::default(),
+            leaving: None,
             lp: Spring::new(0.0),
             veil: Spring::new(FROST_VEIL),
             trans: None,
@@ -628,6 +632,28 @@ impl ShellUi {
 
     pub fn menu_open(&self) -> bool {
         self.menu.as_ref().is_some_and(|m| !m.closing)
+    }
+
+    /// The stack is on the dashboard card (the Running page, settled or
+    /// on its way there, nothing over it).
+    pub fn dash_selected(&self) -> bool {
+        self.menu.as_ref().is_some_and(|m| !m.closing && !m.on_cross() && m.run_sel == 0 && m.ctx.is_none() && m.top().is_none() && m.gpanel.is_none())
+    }
+
+    /// In the dashboard's tiles (for `ctl state`).
+    pub fn in_tiles(&self) -> bool {
+        self.home.tiles
+    }
+
+    /// The dashboard shows (its command widgets run, Now playing looks at
+    /// the streams).
+    pub fn dashboard_visible(&self) -> bool {
+        self.page.is_none() && self.sleep.is_none() && self.menu.as_ref().is_some_and(|m| !m.closing && m.page_x.x < 0.99 && m.run_scroll.x < 1.0 && m.top().is_none())
+    }
+
+    /// Settings shows the volume and brightness in its rows (no OSD).
+    pub fn levels_on_screen(&self) -> bool {
+        self.menu.as_ref().is_some_and(|m| !m.closing && m.on_cross() && (m.cat == Cat::Settings || m.top().is_some()))
     }
 
     /// The MENU's category (while it shows).
@@ -781,10 +807,10 @@ impl ShellUi {
         if timed || menu_moving || power_moving || sleep_moving || springs {
             return Pace::Full;
         }
-        // home visible (no app, nothing over it) and charging: the charging
-        // line's slow highlight
-        let over_home = self.menu.is_none() && self.power.is_none() && self.sleep.is_none() && self.page.is_none();
-        if !has_app && over_home && self.drifting() {
+        // the dashboard on screen and charging: the charging line's slow
+        // highlight
+        let _ = has_app;
+        if self.power.is_none() && self.dashboard_visible() && self.drifting() {
             return Pace::Ambient;
         }
         // the screensaver growing or shrinking; full for a long while: it
@@ -828,13 +854,13 @@ impl ShellUi {
 
     fn springs_ref(&self) -> Vec<&Spring> {
         let mut v: Vec<&Spring> = vec![&self.lp, &self.veil];
-        v.extend(self.home.springs_ref());
+        v.extend(self.leaving.as_ref().map(|l| &l.1));
         v
     }
 
     fn springs_mut(&mut self) -> Vec<&mut Spring> {
         let mut v: Vec<&mut Spring> = vec![&mut self.lp, &mut self.veil];
-        v.extend(self.home.springs_mut());
+        v.extend(self.leaving.as_mut().map(|l| &mut l.1));
         if let Some(m) = &mut self.menu {
             v.extend(m.springs());
         }
@@ -874,8 +900,9 @@ impl ShellUi {
             self.drift_t += dt;
         }
         self.t += real;
-        self.charging_home = v.sys.charging && v.current.is_none();
+        self.charging_home = v.sys.charging && self.dashboard_visible();
         self.sync_home(v);
+        self.ensure_home(v);
         let p = self.params();
         {
             let mut s = self.springs_mut();
@@ -890,6 +917,23 @@ impl ShellUi {
         self.timers(v);
         self.tips(v);
         std::mem::take(&mut self.out)
+    }
+
+    /// Home is the stack on the dashboard: with no app in front (and none
+    /// on its way), it is always there. Under the boot screen it is simply
+    /// there; otherwise (the last app went, a start went to the
+    /// background) it fades in like the MENU.
+    fn ensure_home(&mut self, v: &View) {
+        if v.current.is_none() && self.menu.is_none() && self.trans.is_none() {
+            // at start (with or without the boot screen) and while dark it
+            // is simply there
+            let snap = self.boot.is_some() || self.sleep.is_some() || self.t < 0.25;
+            self.open_home(v, snap);
+        }
+        if self.leaving.as_ref().is_some_and(|l| l.1.x < 0.01) {
+            self.leaving = None;
+            self.dirty = true;
+        }
     }
 
     fn timers(&mut self, v: &View) {
@@ -959,12 +1003,6 @@ impl ShellUi {
                     self.dirty = true;
                     self.show_toast(Toast::info(format!("{name} did not start")));
                     self.fx(Sfx::Deny, None);
-                }
-            }
-            Some(Trans::Close { .. }) => {
-                if self.lp.x < 0.01 && self.lp.v.abs() < 0.5 {
-                    self.trans = None;
-                    self.dirty = true;
                 }
             }
             None => {}
@@ -1138,13 +1176,16 @@ impl ShellUi {
         } else if self.trans.is_some() {
             self.trans_button(b, v);
         } else if v.current.is_none() {
-            self.home_button(b, repeat, v);
+            // home before the stack came up (it always does)
+            self.open_home(v, true);
+            self.menu_button(b, repeat, v);
         }
         std::mem::take(&mut self.out)
     }
 
-    /// MENU (on its own) opens the cross menu, or closes it and whatever
-    /// was opened from it.
+    /// MENU (on its own) opens the MENU over the app, or closes it and
+    /// whatever was opened from it; at home it comes back to the
+    /// dashboard.
     pub fn menu_key(&mut self, v: &View) -> Vec<Out> {
         self.drift_until = self.t + DRIFT_SECS;
         self.last_input = self.t;
@@ -1166,7 +1207,7 @@ impl ShellUi {
         // everything closes at once: a setup page, the glass pages, the MENU
         let sub = self.page.take().is_some();
         if sub || self.menu.as_ref().is_some_and(|m| !m.closing) {
-            self.close_menu();
+            self.leave_menu(v);
         } else {
             if let Some(Trans::Launch { .. }) = &self.trans {
                 // still starting: leave it to start in the background
@@ -1195,15 +1236,17 @@ impl ShellUi {
         }
     }
 
-    /// The front app shrinks into Home's Continue card (it is what
-    /// Continue resumes).
+    /// A on the dashboard card over an app: home. The app goes to the
+    /// background (its card stays in the stack, right below), its frosted
+    /// picture fades out behind the stack, and the stack stays.
     fn go_home(&mut self, v: &View) {
         let Some(cur) = v.current else { return };
-        let art = v.app(cur).map(|a| a.art).unwrap_or_default();
-        let to = self.continue_rect(v).unwrap_or(R4 { x: W / 2.0 - 116.0, y: 302.0, w: 232.0, h: 174.0 });
-        self.trans = Some(Trans::Close { uid: cur, art, to });
-        self.lp.snap(1.0);
-        self.lp.set(0.0);
+        let mut s = Spring::new(1.0);
+        s.set(0.0);
+        if self.prefs.reduce_motion {
+            s.snap(0.0);
+        }
+        self.leaving = v.app(cur).filter(|a| a.has_buffer).map(|_| (cur, s));
         self.out.push(Out::Home);
         self.fx(Sfx::Close, Some(Haptic::Tick));
     }
@@ -1343,25 +1386,6 @@ fn arrow_text(b: &mut B, x: f32, top: f32, s: &str, st: &TextStyle, draw: bool) 
     pen - x
 }
 
-/// The hint bar: right-aligned (cap, label) pairs.
-fn hints(b: &mut B, pal: &Pal, y: f32, items: &[(&str, &str)]) {
-    b.rect(0.0, y, W, 64.0, pal.ground);
-    b.rect(0.0, y, W, 1.0, pal.ink);
-    let cap_st = ts(Face::Mono600, 14.0, pal.ground);
-    let lab = ts(Face::Body400, 18.0, pal.soft);
-    let mut right = W - 30.0;
-    for (cap, label) in items.iter().rev() {
-        let lw = b.measure(label, &lab);
-        b.text(right - lw, y + 32.0 - lab.line_px() / 2.0, label, &lab);
-        right -= lw + 9.0;
-        let tw = arrow_text(b, 0.0, 0.0, cap, &cap_st, false);
-        let cw = (tw + 18.0).max(30.0);
-        b.rrect(right - cw, y + 17.0, cw, 30.0, 15.0, pal.ink);
-        arrow_text(b, right - cw + (cw - tw) / 2.0, y + 32.0 - cap_st.line_px() / 2.0, cap, &cap_st, true);
-        right -= cw + 26.0;
-    }
-}
-
 /// A tag: mono label in a filled box with an outline.
 fn chip(b: &mut B, right: f32, cy: f32, text: &str, size: f32, pad: (f32, f32), fill: Color, ink: Color) -> f32 {
     let st = ts(Face::Mono400, size, ink);
@@ -1424,25 +1448,19 @@ impl ShellUi {
         // base: what is under any transition
         let base_app = match &self.trans {
             Some(Trans::Launch { prev, .. }) => prev.filter(|u| v.app(*u).is_some()),
-            Some(Trans::Close { .. }) => None,
             None => v.current,
         };
         // the app behind the MENU or the power menu: frosted (blurred
-        // under a light veil) as they open
+        // under a light veil) as they open (an app still starting has
+        // nothing to blur; at home the stack sits on the plain ground)
         let frost_app = base_app.and_then(|u| v.app(u)).filter(|a| a.has_buffer).map(|a| (a.uid, a.geom));
-        // what gets blurred: the app, or the home screen when none is in
-        // front (an app still starting has nothing to blur)
-        let backdrop = match (base_app, frost_app) {
-            (Some(_), Some((uid, g))) => Some((Src::Blur(uid), g)),
-            (Some(_), None) => None,
-            (None, _) => Some((Src::HomeBlur, [0.0, 0.0, W, H])),
-        };
+        let backdrop = frost_app.map(|(uid, g)| (Src::Blur(uid), g));
         let frost = if backdrop.is_some() { self.frost() } else { 0.0 };
         match base_app {
             // fully frosted: the sharp screen would be drawn for nothing
             _ if frost >= 0.999 => b.rect(0.0, 0.0, W, H, Color(0, 0, 0, 255)),
             Some(uid) => self.draw_app(&mut b, v, uid, true),
-            None => self.draw_home(&mut b, &pal, v),
+            None => b.rect(0.0, 0.0, W, H, pal.ground),
         }
         if let Some((src, g)) = backdrop
             && frost > 0.0
@@ -1451,6 +1469,18 @@ impl ShellUi {
             b.image(src, g[0], g[1], g[2], g[3], [0.0, 0.0, 1.0, 1.0]);
             b.pop_alpha();
             b.rect(0.0, 0.0, W, H, with_a(pal.ground, frost * self.veil.x));
+        }
+        // the app just sent home: its frosted picture fades out
+        if base_app.is_none()
+            && let Some((uid, s)) = &self.leaving
+            && let Some(a) = v.app(*uid).filter(|a| a.has_buffer)
+        {
+            let k = s.x.clamp(0.0, 1.0);
+            let g = a.geom;
+            b.push_alpha(k);
+            b.image(Src::Blur(*uid), g[0], g[1], g[2], g[3], [0.0, 0.0, 1.0, 1.0]);
+            b.rect(0.0, 0.0, W, H, with_a(pal.ground, self.veil.x));
+            b.pop_alpha();
         }
         // the MENU fades out under the transition it started
         if let Some(m) = &self.menu {
@@ -1626,16 +1656,6 @@ impl ShellUi {
         b.pop_alpha();
     }
 
-    /// The home screen alone (what `Src::HomeBlur` blurs).
-    pub fn build_home(&self, typo: &Typo, v: &View, out_w: f32, out_h: f32) -> Scene {
-        let mut b = B::new(typo, out_w, out_h, Color(0, 0, 0, 255));
-        if (out_w, out_h) != (W, H) {
-            b.push(Xf::scale(out_w / W, out_h / H));
-        }
-        self.draw_home(&mut b, &self.pal(), v);
-        b.finish()
-    }
-
     fn draw_trans(&self, b: &mut B, pal: &Pal, v: &View) {
         match &self.trans {
             Some(Trans::Launch { target, name, art, from, .. }) => {
@@ -1664,17 +1684,6 @@ impl ShellUi {
                         b.pop_alpha();
                     }
                     None => {}
-                }
-            }
-            Some(Trans::Close { uid, art, to }) => {
-                let p = self.lp.x;
-                let r = R4 { x: lerp(to.x, 0.0, p), y: lerp(to.y, 0.0, p), w: lerp(to.w, W, p), h: lerp(to.h, H, p) };
-                b.block(r.x, r.y, r.w, r.h, art.accent(pal), pal.ink);
-                let a = ((p - 0.6) / 0.3).clamp(0.0, 1.0);
-                if a > 0.0 {
-                    b.push_alpha(a);
-                    self.app_in_rect(b, v, *uid, r);
-                    b.pop_alpha();
                 }
             }
             None => {}
@@ -1974,6 +1983,8 @@ mod tests {
             return format!("page:{}{extra}", pages.join("/"));
         }
         match ui.menu_category() {
+            Some(Cat::Running) if ui.in_tiles() => "tiles".into(),
+            Some(Cat::Running) if ui.dash_selected() => "dashboard".into(),
             Some(Cat::Running) => "running".into(),
             Some(c) => format!("cross:{}{}", c.name(), if m.adjusting { ":adjust" } else { "" }),
             None => "closed".into(),
@@ -2002,38 +2013,141 @@ mod tests {
         let v = View { dash, ..view(&[], &l, &sys, None) };
         let mut ui = ShellUi::new(quiet(), false);
         settle(&mut ui, &v);
-        // nothing to continue yet: A does nothing, it is not a launcher
-        assert!(press(&mut ui, &v, &[Button::A, Button::Right, Button::Down]).is_empty());
+        // home is the stack on the dashboard card, at rest
+        assert!(ui.dash_selected() && ui.dashboard_visible());
+        assert_eq!(ui.menu_category(), Some(Cat::Running));
         assert_eq!(ui.pace(false), Pace::Idle, "a still screen: nothing drifts");
-        // the last app on screen: Continue starts it again, growing from the card
-        ui.prefs.last_app = Some("m8".into());
+        // nothing to do yet: A does nothing (it is not a launcher), B and
+        // MENU stay; ▶ is the way to the apps
+        assert!(press(&mut ui, &v, &[Button::A, Button::B, Button::Down]).is_empty());
+        assert!(actions(&ui.menu_key(&v)).is_empty());
+        assert!(ui.dash_selected() && !ui.in_tiles() && ui.menu_open());
+        let m = ui.menu.as_ref().unwrap();
+        assert_eq!(ui.menu_hints(m, &v), vec![("▶", "Apps")]);
+        // Recently closed: A enters the tiles, A starts it again, growing
+        // from its tile inside the card
+        ui.prefs.recent = vec!["m8".into()];
         settle(&mut ui, &v);
+        press(&mut ui, &v, &[Button::A]);
+        assert!(ui.in_tiles());
+        assert_eq!(ui.tiles_hints(&v), vec![("◀▶▲▼", "Choose"), ("A", "Open"), ("B", "Back")]);
+        // B leaves the tiles, A goes back in
+        press(&mut ui, &v, &[Button::B]);
+        assert!(!ui.in_tiles() && ui.dash_selected());
+        press(&mut ui, &v, &[Button::A]);
         assert_eq!(press(&mut ui, &v, &[Button::A]), vec![Out::Launch("m8".into())]);
-        let card = ui.continue_rect(&v).unwrap();
-        assert!(matches!(&ui.trans, Some(Trans::Launch { from, .. }) if *from == card));
-        // an app running: Continue resumes it
-        ui.trans = None;
+        assert!(matches!(&ui.trans, Some(Trans::Launch { from, .. }) if from.y >= cross::RUN_Y && from.w < W));
+        assert!(!ui.menu_open(), "the stack fades under the launch");
+        // apps running (in the background): the stack shows them below the
+        // dashboard; ▼ A switches to the last one
         let r = [run(5, "m8"), run(6, "term")];
         let v2 = View { dash, ..view(&r, &l, &sys, None) };
+        let mut ui = ShellUi::new(quiet(), false);
         settle(&mut ui, &v2);
+        assert!(ui.dash_selected());
+        assert!(ui.live_previews().is_empty(), "the cards next to the dashboard are tabs: nothing live, no frames");
+        assert_eq!(ui.pace(false), Pace::Idle);
+        press(&mut ui, &v2, &[Button::Down]);
+        assert_eq!(sel_row(&ui), Some(cross::Row::App(5)));
+        // MENU (or B) at home: back to the dashboard
+        assert!(actions(&ui.menu_key(&v2)).is_empty());
+        assert!(ui.dash_selected() && ui.menu_open());
+        press(&mut ui, &v2, &[Button::Down]);
         assert_eq!(press(&mut ui, &v2, &[Button::A]), vec![Out::Focus(5)]);
-        // Needs you: ▼ moves to it, A switches to that app
-        ui.trans = None;
+        // Needs you: A into the tiles (on Needs you first), A switches to it
         let att = [crate::attention::Item { app: "term".into(), text: "Approve: ls".into(), seq: 1 }];
         let v3 = View { dash: Dash { attention: &att, ..dash }, ..view(&r, &l, &sys, None) };
+        let mut ui = ShellUi::new(quiet(), false);
         settle(&mut ui, &v3);
-        press(&mut ui, &v3, &[Button::Down]);
+        press(&mut ui, &v3, &[Button::A]);
         assert_eq!(press(&mut ui, &v3, &[Button::A]), vec![Out::Focus(6)]);
-        // the app on screen is remembered for Continue
+        // the app on screen is remembered for Recently closed
         let v4 = View { dash, ..view(&r, &l, &sys, Some(6)) };
         let out = ui.step(0.01, &v4);
-        assert_eq!(ui.prefs.last_app.as_deref(), Some("term"));
+        assert_eq!(ui.prefs.recent.first().map(String::as_str), Some("term"));
         assert!(out.contains(&Out::Remember));
-        // shortcuts still open the MENU
-        ui.trans = None;
+        // R1 from home: Settings; B comes back to the dashboard
+        let mut ui = ShellUi::new(quiet(), false);
         settle(&mut ui, &v);
         press(&mut ui, &v, &[Button::R1]);
         assert_eq!(ui.menu_category(), Some(Cat::Settings));
+        press(&mut ui, &v, &[Button::B]);
+        assert!(ui.dash_selected() && ui.menu_open());
+    }
+
+    /// Home at rest draws the same frame (nothing to redraw), and a widget
+    /// update changes only its own tile.
+    #[test]
+    fn idle_dashboard_damages_nothing_and_a_widget_its_tile() {
+        // needs the fonts (baked into the package build; else skipped)
+        let Ok(fonts) = mortar_ui::gfx::Fonts::load(&mortar_ui::gfx::font_dir()) else { return };
+        let typo = Typo::new(fonts);
+        let sys = Sys::demo(Some("08:42".into()));
+        let l = launcher();
+        let r = [run(5, "m8"), run(6, "term")];
+        let mut ws = crate::widgets::defaults();
+        ws.push(crate::widgets::Widget { title: Some("Up".into()), command: vec!["true".into()], ..crate::widgets::Widget::new(crate::widgets::Kind::Command) });
+        let mut outs: Vec<Option<crate::widgets::Output>> = vec![None; ws.len()];
+        outs[7] = Some(crate::widgets::parse_output("3 days"));
+        let mk = |o: &[Option<crate::widgets::Output>]| -> Scene {
+            let v = View { dash: Dash { widgets: &ws, outputs: o, ..Dash::default() }, ..view(&r, &l, &sys, None) };
+            let mut ui = ShellUi::new(quiet(), false);
+            settle(&mut ui, &v);
+            assert_eq!(ui.pace(false), Pace::Idle);
+            assert!(ui.dashboard_visible() && ui.live_previews().is_empty());
+            let s = ui.build(&typo, &v, W, H);
+            assert!(s.apps().is_empty(), "no live app picture at rest: an app's frames do not redraw home");
+            s
+        };
+        let infos = |s: &Scene| {
+            let mut ink = |t: &crate::scene::TextRun| {
+                let lay = typo.layout(&t.s, t.face, t.size, t.tracking);
+                let end = lay.last().map_or(0.0, |g| g.1) + t.size;
+                Some([t.x - 2.0, t.base - t.size * 1.2, t.x + end, t.base + t.size * 0.4])
+            };
+            let mut out = Vec::new();
+            crate::damage::infos(s, &mut ink, &mut out);
+            out
+        };
+        let a = infos(&mk(&outs));
+        let mut g = crate::damage::Grid::new(W, H);
+        g.diff(&a, &infos(&mk(&outs)));
+        assert_eq!(g.rects(), Some(Vec::new()), "the same frame: nothing to redraw");
+        // the 1x1 command tile (row 2, column 3) gets a new value
+        outs[7] = Some(crate::widgets::parse_output("4 days"));
+        let mut g = crate::damage::Grid::new(W, H);
+        g.diff(&a, &infos(&mk(&outs)));
+        let rects = g.rects().expect("a small change");
+        assert!(!rects.is_empty());
+        let slot = crate::widgets::layout(&ws).into_iter().find(|s| s.i == 7).unwrap();
+        assert_eq!((slot.row, slot.col), (2, 3));
+        let tile_x = W - 40.0 - (W - 80.0 - 48.0) / 4.0;
+        for rc in rects {
+            assert!(rc[0] >= tile_x - 32.0 && rc[1] >= cross::RUN_Y + 200.0 && rc[1] + rc[3] <= cross::RUN_Y + cross::RUN_H + 32.0, "outside the tile: {rc:?}");
+        }
+    }
+
+    #[test]
+    fn home_comes_back_by_itself() {
+        let sys = Sys::demo(None);
+        let l = launcher();
+        // the boot screen slides up off the dashboard
+        let v = view(&[], &l, &sys, None);
+        let mut ui = ShellUi::new(quiet(), true);
+        ui.step(0.01, &v);
+        assert!(ui.booting() && ui.dash_selected());
+        // the last app exits: home comes back
+        let r = [run(2, "term")];
+        let v1 = view(&r, &l, &sys, Some(2));
+        let mut ui = ShellUi::new(quiet(), false);
+        settle(&mut ui, &v1);
+        assert!(ui.menu.is_none());
+        settle(&mut ui, &v);
+        assert!(ui.dash_selected());
+        // an app shown by itself (over SSH) while home rests: it shows
+        let v2 = view(&r, &l, &sys, Some(2));
+        settle(&mut ui, &v2);
+        assert!(ui.menu.is_none());
     }
 
     #[test]
@@ -2080,7 +2194,7 @@ mod tests {
     }
 
     #[test]
-    fn home_row_goes_home_with_close_transition() {
+    fn dashboard_card_goes_home() {
         let sys = Sys::demo(None);
         let l = launcher();
         let r = [run(2, "term")];
@@ -2088,10 +2202,24 @@ mod tests {
         let mut ui = ShellUi::new(quiet(), false);
         ui.menu_key(&v);
         settle(&mut ui, &v);
+        // the one app, the dashboard above it
         assert_eq!(sel_row(&ui), Some(cross::Row::App(2)));
         ui.button(Button::Up, false, &v);
+        assert_eq!(sel_row(&ui), Some(cross::Row::Home));
+        let m = ui.menu.as_ref().unwrap();
+        assert!(ui.menu_hints(m, &v).contains(&("A", "Go home")));
+        // A: the app goes to the background; the stack stays, its frosted
+        // picture fades out behind it
         assert_eq!(actions(&ui.button(Button::A, false, &v)), vec![Out::Home]);
-        assert!(matches!(ui.trans, Some(Trans::Close { uid: 2, .. })));
+        assert!(ui.menu_open() && ui.leaving.is_some() && ui.trans.is_none());
+        let home = view(&r, &l, &sys, None);
+        settle(&mut ui, &home);
+        assert!(ui.dash_selected() && ui.menu_open() && ui.leaving.is_none());
+        // its card is right below; MENU now stays home
+        press(&mut ui, &home, &[Button::Down]);
+        assert_eq!(sel_row(&ui), Some(cross::Row::App(2)));
+        ui.menu_key(&home);
+        assert!(ui.dash_selected() && ui.menu_open());
     }
 
     #[test]
@@ -2123,11 +2251,11 @@ mod tests {
         assert_eq!(ui.menu_category(), Some(Cat::Running));
         assert!(press(&mut ui, &v, &[Button::Left, Button::L1]).is_empty());
         assert_eq!(ui.menu_category(), Some(Cat::Running));
-        // closed and opened again: Apps is still on its second row
+        // back home and out again: Apps is still on its second row
+        press(&mut ui, &v, &[Button::Right]);
         ui.menu_key(&v);
         settle(&mut ui, &v);
-        assert!(ui.menu.is_none());
-        ui.menu_key(&v);
+        assert!(ui.dash_selected());
         press(&mut ui, &v, &[Button::Right]);
         assert_eq!(sel_row(&ui), Some(cross::Row::Launch("files".into())));
         assert_eq!(press(&mut ui, &v, &[Button::A]), vec![Out::Launch("files".into())]);
@@ -2455,10 +2583,10 @@ mod tests {
         assert_eq!(ui.menu_sub(), Some(SubKind::Sound), "B leaves adjust mode first");
         press(&mut ui, &v, &[Button::Down, Button::A]);
         assert!(!ui.prefs.haptics);
-        // MENU closes everything
+        // MENU closes everything (at home: back to the dashboard)
         ui.menu_key(&v);
         settle(&mut ui, &v);
-        assert!(ui.menu.is_none());
+        assert!(ui.menu_pages().is_empty() && ui.dash_selected());
     }
 
     #[test]
@@ -2655,13 +2783,34 @@ mod tests {
         to_page(&mut ui, &v, SubKind::About);
         press(&mut ui, &v, &[Left]);
         assert_eq!(place(&ui), "cross:Settings");
-        // Home: B does nothing; MENU opens the MENU
-        let vh = view(&r, &l, &sys, None);
-        let mut ui = ShellUi::new(quiet(), false);
-        ui.button(B, false, &vh);
-        assert_eq!(place(&ui), "closed");
-        ui.menu_key(&vh);
-        assert_eq!(place(&ui), "running");
+        // Home (no app in front): B goes back one level as anywhere, but
+        // the top is the dashboard, and MENU always comes back to it
+        let att = [crate::attention::Item { app: "term".into(), text: "Approve: ls".into(), seq: 1 }];
+        let vh = View { update: Some(&u), dash: Dash { attention: &att, widgets: &crate::widgets::defaults(), ..Dash::default() }, ..view(&r, &l, &sys, None) };
+        let home_table: Vec<(&str, Setup, &str, &str)> = vec![
+            ("Home (the dashboard)", Box::new(|ui, v| { ui.step(0.01, v); }), "dashboard", "dashboard"),
+            ("the dashboard's tiles", Box::new(|ui, v| { ui.step(0.01, v); press(ui, v, &[A]); }), "dashboard", "dashboard"),
+            ("Running, an app", Box::new(|ui, v| { ui.step(0.01, v); press(ui, v, &[Down]); }), "dashboard", "dashboard"),
+            ("the cross", Box::new(|ui, v| { ui.step(0.01, v); press(ui, v, &[Right]); }), "dashboard", "dashboard"),
+            ("the cross, adjusting", Box::new(|ui, v| { to_quick(ui, v); press(ui, v, &[A]); }), "cross:Settings", "dashboard"),
+            ("the options popup", Box::new(|ui, v| { ui.step(0.01, v); press(ui, v, &[Down, Y]); }), "running", "dashboard"),
+            ("Display", Box::new(page(SubKind::Display)), "cross:Settings", "dashboard"),
+            ("Sound > Mixer", Box::new(|ui, v| { to_page(ui, v, SubKind::Sound); press(ui, v, &[Down, A]); }), "page:sound", "dashboard"),
+            ("the power menu", Box::new(|ui, v| { ui.step(0.01, v); ui.open_power_menu(); }), "dashboard", "dashboard"),
+        ];
+        for (name, setup, after_b, after_menu) in &home_table {
+            for (key, want) in [("B", after_b), ("MENU", after_menu)] {
+                let mut ui = ShellUi::new(quiet(), false);
+                setup(&mut ui, &vh);
+                let before = place(&ui);
+                if key == "B" {
+                    ui.button(B, false, &vh);
+                } else {
+                    ui.menu_key(&vh);
+                }
+                assert_eq!(place(&ui), **want, "home: {name} ({before}): {key}");
+            }
+        }
     }
 
     #[test]

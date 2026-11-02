@@ -3,11 +3,15 @@
 //!
 //! Two pages side by side, on one spring:
 //!
-//! - Running: Home, then every running app, each a live window edge to
-//!   edge (1024 x 600, the app's middle rows), stacked vertically like a
-//!   scrolling window manager; the neighbours show at the top and bottom
-//!   edges. The selected one has an accent strip and a label. MENU opens
-//!   here with the previous app selected (MENU, A flips back).
+//! - Running, the stack: the dashboard card (home.rs), then every running
+//!   app, most recent first, each a live window edge to edge (1024 x 528,
+//!   the app's middle rows), stacked vertically like a scrolling window
+//!   manager; the neighbours peek 36 px above and below as tabs (name and
+//!   state on a plain card: only the selected card is live). The selected
+//!   app has an accent strip and a label. MENU opens here with the
+//!   previous app selected (MENU, A flips back). Home is this stack on the
+//!   dashboard with no app in front: it is always there then, and B and
+//!   MENU come back to the dashboard instead of closing.
 //! - The cross: Apps, Games, Music and Settings across the middle, the
 //!   selected category lifted in its accent; the selected item right under
 //!   it as a bold band from the left edge, the items below continuing down
@@ -21,7 +25,8 @@
 //! Bluetooth, Time zone, Remote access, Updates, About and Power.
 //!
 //! B goes back one level (adjusting, the options popup, a page) and closes
-//! the MENU at the top (Running or the cross); MENU closes everything.
+//! the MENU at the top (Running or the cross); MENU closes everything. At
+//! home "closing" lands on the dashboard.
 //!
 //! A child module of `shellui`: it works on the `ShellUi` state directly.
 
@@ -162,7 +167,7 @@ pub(super) struct Cross {
     // Running
     run_keys: Vec<Row>,
     pub(super) run_sel: usize,
-    run_scroll: Spring,
+    pub(super) run_scroll: Spring,
     pub(super) ctx: Option<Ctx>,
     /// Apps closed with X, hidden until they are gone.
     hidden: Vec<u32>,
@@ -179,6 +184,9 @@ pub(super) struct Cross {
     pub(super) gpage: Option<GamePage>,
     /// The game panel (Y on a game in Running).
     pub(super) gpanel: Option<GamePanel>,
+    /// No app in front: this is home (B and MENU come back to the
+    /// dashboard instead of closing).
+    pub(super) home: bool,
     pub(super) patterns: Patterns,
     /// The pattern a category change leaves (it slides out as the new one
     /// slides in, `pat_x` 0 -> 1, `pat_dir` the way the categories move).
@@ -190,9 +198,13 @@ pub(super) struct Cross {
 
 // layout: the mockup's 1024x768 stage, scaled up about 1.4x for the
 // Brick's 3.2" panel (about 400 ppi, held at arm's length)
-const RUN_Y: f32 = 84.0;
-const RUN_H: f32 = 600.0;
-const RUN_STEP: f32 = 612.0;
+/// The stack: the selected card between the bars, its neighbours showing
+/// PEEK px above and below it (as tabs once they rest there).
+pub(super) const RUN_H: f32 = 528.0;
+const RUN_GAP: f32 = 12.0;
+pub(super) const RUN_Y: f32 = BAR_H + (H - BAR_H - HINT_H - RUN_H) / 2.0;
+const RUN_STEP: f32 = RUN_H + RUN_GAP;
+const PEEK: f32 = RUN_Y - RUN_GAP - BAR_H;
 /// The selected category's column, and the step between categories.
 const COLX: f32 = 100.0;
 const CATW: f32 = 180.0;
@@ -402,23 +414,46 @@ impl ShellUi {
         self.cross_sel[cat.i()]
     }
 
-    /// MENU: open on Running with the previous app selected.
+    /// MENU: open on Running with the previous app selected (the stack
+    /// comes up on the app in front and scrolls on to it); with no app in
+    /// front, on the dashboard.
     pub(super) fn open_menu(&mut self, v: &View) {
         let keys = running_rows(v, &[]);
-        let pre = match v.current {
-            Some(cur) => keys.iter().position(|r| matches!(r, Row::App(u) if *u != cur)).or_else(|| keys.iter().position(|r| *r == Row::App(cur))),
-            None => keys.iter().position(|r| matches!(r, Row::App(_))),
+        let (run_sel, from) = match v.current {
+            Some(cur) => {
+                let here = keys.iter().position(|r| *r == Row::App(cur));
+                let pre = keys.iter().position(|r| matches!(r, Row::App(u) if *u != cur)).or(here).unwrap_or(0);
+                (pre, here.unwrap_or(pre))
+            }
+            None => (0, 0),
         };
-        let run_sel = pre.unwrap_or(0);
+        self.build_menu(v, keys, run_sel, from, false);
+        self.fx(Sfx::Drawer, Some(Haptic::Tick));
+    }
+
+    /// Home: the stack on the dashboard, with no app in front (boot, the
+    /// last app gone, back from a start that went to the background).
+    /// `snap`: already there (under the boot screen).
+    pub(super) fn open_home(&mut self, v: &View, snap: bool) {
+        self.build_menu(v, running_rows(v, &[]), 0, 0, snap);
+        self.home.tiles = false;
+        self.dirty = true;
+    }
+
+    fn build_menu(&mut self, v: &View, keys: Vec<Row>, run_sel: usize, from: usize, snap: bool) {
         let mut op = Spring::new(0.0);
         op.set(1.0);
-        if self.prefs.reduce_motion {
+        if snap || self.prefs.reduce_motion {
             op.snap(1.0);
         }
         let mut page_x = Spring::new(0.0);
         page_x.k_mul = 0.9;
-        let mut run_scroll = Spring::new(run_sel as f32);
+        let mut run_scroll = Spring::new(from as f32);
         run_scroll.k_mul = 0.9;
+        run_scroll.set(run_sel as f32);
+        if snap || self.prefs.reduce_motion {
+            run_scroll.snap(run_sel as f32);
+        }
         let cat = cats(v).first().copied().unwrap_or(Cat::Apps);
         let mut m = Cross {
             op,
@@ -437,6 +472,7 @@ impl ShellUi {
             subs: Vec::new(),
             gpage: None,
             gpanel: None,
+            home: v.current.is_none(),
             patterns: Patterns::new(),
             pat_from: None,
             pat_x: Spring { k_mul: 0.7, ..Spring::new(1.0) },
@@ -447,16 +483,54 @@ impl ShellUi {
         m.set_rows(rows(cat, v), s, false);
         self.menu = Some(m);
         self.set_cat(cat, v, true);
-        self.fx(Sfx::Drawer, Some(Haptic::Tick));
     }
 
-    /// Open the menu straight on a category of the cross (home shortcuts).
-    pub(super) fn open_menu_on(&mut self, cat: Cat, v: &View) {
-        self.open_menu(v);
-        if cats(v).contains(&cat) {
-            self.set_cat(cat, v, true);
-            self.go_cross(true);
+    /// B at the top, or MENU: close the MENU back to the app in front; with
+    /// none (home), come back to the dashboard instead (everything opened
+    /// from it slides away; on the dashboard already, nothing happens).
+    pub(super) fn leave_menu(&mut self, v: &View) {
+        if v.current.is_some() || self.trans.is_some() {
+            self.close_menu();
+        } else {
+            self.back_home(v);
         }
+    }
+
+    /// Home: back to the dashboard card (pages, popups and the cross slide
+    /// away; the stack scrolls up).
+    pub(super) fn back_home(&mut self, v: &View) {
+        let reduce = self.prefs.reduce_motion;
+        let tiles = std::mem::take(&mut self.home.tiles);
+        let Some(m) = &self.menu else { return };
+        if m.closing {
+            return;
+        }
+        let there = !tiles && !m.on_cross && m.run_sel == 0 && m.ctx.is_none() && m.top().is_none() && !self.games_take();
+        if there {
+            return;
+        }
+        let n0 = self.out.len();
+        while self.top_sub().is_some() {
+            self.close_sub(v);
+        }
+        if self.menu.as_ref().is_some_and(|m| m.gpanel.as_ref().is_some_and(|p| !p.closing)) {
+            self.close_gpanel();
+        }
+        if self.menu.as_ref().is_some_and(|m| m.gpage.as_ref().is_some_and(|p| !p.closing)) {
+            self.close_gpage();
+        }
+        self.go_running();
+        let Some(m) = &mut self.menu else { return };
+        m.ctx = None;
+        m.run_sel = 0;
+        m.run_scroll.set(0.0);
+        if reduce {
+            m.run_scroll.snap(0.0);
+        }
+        // one sound for all of it
+        let rest: Vec<Out> = self.out.split_off(n0).into_iter().filter(|o| !matches!(o, Out::Sfx(_) | Out::Haptic(_))).collect();
+        self.out.extend(rest);
+        self.fx(Sfx::DrawerUp, Some(Haptic::Tick));
     }
 
     pub(super) fn close_menu(&mut self) {
@@ -469,6 +543,7 @@ impl ShellUi {
             m.ctx = None;
             m.adjusting = false;
         }
+        self.home.tiles = false;
         self.fx(Sfx::DrawerUp, Some(Haptic::Tick));
     }
 
@@ -548,6 +623,14 @@ impl ShellUi {
         if m.closing {
             return;
         }
+        // an app came to the front by itself (started over SSH, `ctl
+        // focus`) while home rested on the dashboard: show it
+        let home = v.current.is_none();
+        if m.home && !home && self.trans.is_none() && !m.on_cross && m.run_sel == 0 && m.ctx.is_none() && m.top().is_none() && !self.home.tiles {
+            self.close_menu();
+            return;
+        }
+        m.home = home;
         m.hidden.retain(|u| v.app(*u).is_some());
         let keys = running_rows(v, &m.hidden);
         if keys != m.run_keys {
@@ -647,7 +730,7 @@ impl ShellUi {
         let list = cats(v);
         let i = list.iter().position(|c| *c == cat).unwrap_or(0);
         match b {
-            Button::B if !repeat => self.close_menu(),
+            Button::B if !repeat => self.leave_menu(v),
             Button::L1 if !repeat => {
                 self.go_running();
                 self.fx(Sfx::Move, Some(Haptic::Tick));
@@ -693,6 +776,11 @@ impl ShellUi {
     }
 
     fn running_button(&mut self, b: Button, repeat: bool, v: &View) {
+        // inside the dashboard: the D-pad moves between its tiles
+        if self.home.tiles {
+            self.tiles_button(b, repeat, v);
+            return;
+        }
         let Some(m) = &mut self.menu else { return };
         let n = m.run_keys.len();
         let row = m.run_keys.get(m.run_sel).cloned();
@@ -721,7 +809,7 @@ impl ShellUi {
                 self.fx(Sfx::Tab, Some(Haptic::Tick));
             }
             Button::Left | Button::L1 => self.fx(Sfx::Deny, None),
-            Button::B if !repeat => self.close_menu(),
+            Button::B if !repeat => self.leave_menu(v),
             Button::X if !repeat => match row {
                 Some(Row::App(uid)) => self.close_from_menu(uid, v),
                 _ => self.fx(Sfx::Deny, None),
@@ -742,12 +830,10 @@ impl ShellUi {
                 _ => self.fx(Sfx::Deny, None),
             },
             Button::A | Button::Start if !repeat => match row {
-                Some(Row::Home) => {
-                    self.close_menu();
-                    if v.current.is_some() {
-                        self.go_home(v);
-                    }
-                }
+                // with an app in front: go home (it keeps running, its
+                // card stays in the stack); at home: into the tiles
+                Some(Row::Home) if v.current.is_some() => self.go_home(v),
+                Some(Row::Home) => self.enter_tiles(v),
                 Some(Row::App(uid)) => self.switch_from_menu(uid, v),
                 _ => {}
             },
@@ -891,17 +977,18 @@ impl ShellUi {
     }
 
     /// The apps the Running page shows live (they get frame callbacks):
-    /// the selected window and its visible neighbours.
+    /// the selected window, and a neighbour while the stack scrolls (at
+    /// rest the neighbours are tabs).
     pub fn live_previews(&self) -> Vec<u32> {
         if self.page.is_some() {
             return Vec::new();
         }
         let Some(m) = self.menu.as_ref().filter(|m| !m.closing && m.page_x.x < 0.99) else { return Vec::new() };
-        let s = m.run_sel;
+        let (s, at) = (m.run_sel, m.run_scroll.x);
         m.run_keys
             .iter()
             .enumerate()
-            .filter(|(j, _)| (*j as i64 - s as i64).abs() <= 1)
+            .filter(|(j, _)| *j == s || (*j as f32 - at).abs() < 0.95)
             .filter_map(|(_, r)| match r {
                 Row::App(u) => Some(*u),
                 _ => None,
@@ -928,7 +1015,7 @@ impl ShellUi {
     /// veil instead).
     pub(super) fn draw_menu(&self, b: &mut B, pal: &Pal, v: &View, m: &Cross, g: &Glass) {
         let o = m.op.x.clamp(0.0, 1.0);
-        if g.src.is_none() {
+        if g.src.is_none() && v.current.is_some() {
             b.rect(0.0, 0.0, W, H, with_a(pal.ground, o * 0.9));
         }
         if o < 0.01 {
@@ -964,7 +1051,7 @@ impl ShellUi {
         // the bars fade with the menu under the screensaver
         let (e, _) = self.saver();
         b.push_alpha(1.0 - e);
-        self.glass_status(b, pal, v, g);
+        self.glass_status(b, pal, v, m, g);
         let hints = self.menu_hints(m, v);
         glass_hints(b, pal, g, &hints);
         b.pop_alpha();
@@ -979,50 +1066,106 @@ impl ShellUi {
                 continue;
             }
             let on = j == m.run_sel;
-            b.clip(Some([0.0, y, W, RUN_H]));
-            b.push(Xf::translate(0.0, y - RUN_Y));
-            match r {
-                Row::Home => self.draw_home(b, pal, v),
-                Row::App(uid) => match v.app(*uid) {
-                    Some(a) if a.has_buffer => {
-                        b.rect(0.0, 0.0, W, H, Color(0, 0, 0, 255));
-                        let gg = a.geom;
-                        b.image(Src::App(*uid), gg[0], gg[1], gg[2], gg[3], [0.0, 0.0, 1.0, 1.0]);
+            // a card turns into a tab (its name on a plain card) as it
+            // settles next to the selected one: at rest only the selected
+            // card is live, so an idle stack draws no frames
+            let tab = smooth01((d.abs() - 0.55) / 0.4);
+            if tab < 1.0 {
+                b.clip(Some([0.0, y, W, RUN_H]));
+                match r {
+                    Row::Home => {
+                        b.push(Xf::translate(0.0, y));
+                        self.draw_dash(b, pal, v, on && self.home.tiles);
+                        b.pop();
                     }
-                    // a game asleep (or waking): its last frame
-                    Some(a) if a.pic.is_some() => {
-                        b.rect(0.0, 0.0, W, H, Color(0, 0, 0, 255));
-                        b.image(Src::Pic(a.pic.unwrap_or(0)), 0.0, 0.0, W, H, [0.0, 0.0, 1.0, 1.0]);
+                    Row::App(uid) => {
+                        // the app's middle rows (where they are on screen)
+                        b.push(Xf::translate(0.0, y - RUN_Y));
+                        match v.app(*uid) {
+                            Some(a) if a.has_buffer => {
+                                b.rect(0.0, 0.0, W, H, Color(0, 0, 0, 255));
+                                let gg = a.geom;
+                                b.image(Src::App(*uid), gg[0], gg[1], gg[2], gg[3], [0.0, 0.0, 1.0, 1.0]);
+                            }
+                            // a game asleep (or waking): its last frame
+                            Some(a) if a.pic.is_some() => {
+                                b.rect(0.0, 0.0, W, H, Color(0, 0, 0, 255));
+                                b.image(Src::Pic(a.pic.unwrap_or(0)), 0.0, 0.0, W, H, [0.0, 0.0, 1.0, 1.0]);
+                            }
+                            Some(a) => self.splash(b, pal, a.art, &a.name, 0.0),
+                            None => {}
+                        }
+                        b.pop();
                     }
-                    Some(a) => self.splash(b, pal, a.art, &a.name, 0.0),
-                    None => {}
-                },
-                _ => {}
+                    _ => {}
+                }
+                b.clip(None);
+                let dim = d.abs().min(1.0) * 0.35;
+                if dim > 0.0 {
+                    b.rect(0.0, y, W, RUN_H, with_a(pal.ground, dim));
+                }
+                // an app that waits for you: a yellow badge at its top right
+                if let Some(it) = card_attention(r, v) {
+                    needs_you_badge(b, pal, W - 28.0, y + 24.0, &it.text);
+                }
             }
-            b.pop();
-            b.clip(None);
-            let dim = d.abs().min(1.0) * 0.35;
-            if dim > 0.0 {
-                b.rect(0.0, y, W, RUN_H, with_a(pal.ground, dim));
+            if tab > 0.0 {
+                b.push_alpha(tab);
+                self.draw_tab(b, pal, v, r, y, d < 0.0);
+                b.pop_alpha();
             }
             b.rect(0.0, y, W, 3.0, pal.dark);
             b.rect(0.0, y + RUN_H - 3.0, W, 3.0, pal.dark);
-            // an app that waits for you: a yellow badge at its top right
-            if let Row::App(u) = r
-                && let Some(it) = v.app(*u).and_then(|a| a.entry.as_deref()).and_then(|e| v.dash.attention.iter().find(|i| i.app == e))
-            {
-                needs_you_badge(b, pal, W - 28.0, y + 24.0, &it.text);
-            }
             if on {
-                let accent = match r {
-                    Row::Home => pal.lime,
-                    Row::App(u) => v.app(*u).map(|a| a.art.accent(pal)).unwrap_or(pal.lavender),
-                    _ => pal.lavender,
-                };
-                b.rect(0.0, y, 10.0, RUN_H, accent);
+                b.rect(0.0, y, 10.0, RUN_H, run_accent(r, v, pal));
                 b.rect(10.0, y, 3.0, RUN_H, pal.dark);
-                self.draw_run_label(b, pal, v, r, j, y, g);
+                if *r != Row::Home {
+                    self.draw_run_label(b, pal, v, r, j, y, g);
+                }
             }
+        }
+        // only the dashboard: where the apps would be
+        if m.run_keys.len() == 1 {
+            let y = RUN_Y + (1.0 - m.run_scroll.x) * RUN_STEP;
+            let st = ts(Face::Mono600, 17.0, pal.soft).tracking(0.08);
+            let s = "NOTHING RUNNING  ·  ▶ APPS";
+            let w = arrow_text(b, 0.0, 0.0, s, &st, false);
+            arrow_text(b, (W - w) / 2.0, y + PEEK / 2.0 - st.line_px() / 2.0, s, &st, true);
+        }
+    }
+
+    /// A card at rest next to the selected one: a plain card with its
+    /// accent, name and state along the edge that shows (`above`: its
+    /// bottom edge).
+    fn draw_tab(&self, b: &mut B, pal: &Pal, v: &View, r: &Row, y: f32, above: bool) {
+        b.rect(0.0, y, W, RUN_H, pal.ground_2);
+        let top = if above { y + RUN_H - PEEK } else { y };
+        b.rect(0.0, top, 10.0, PEEK, run_accent(r, v, pal));
+        b.rect(10.0, top, 3.0, PEEK, pal.dark);
+        let cy = top + PEEK / 2.0 + if above { -1.0 } else { 1.0 };
+        let (name, state) = match r {
+            Row::Home => ("Home".to_string(), date_line(v.host)),
+            Row::App(u) => match v.app(*u) {
+                Some(a) => (a.name.clone(), AppState::of(a, v).label().to_uppercase()),
+                None => (String::new(), String::new()),
+            },
+            _ => (String::new(), String::new()),
+        };
+        let nm = ts(Face::SerifItalic, 28.0, pal.ink).line_height(1.0);
+        let name = b.fit(&name, &nm, 520.0);
+        let nw = b.text(32.0, cy - nm.line_px() / 2.0, &name, &nm);
+        let st = ts(Face::Mono400, 15.0, pal.soft).tracking(0.06);
+        b.text(32.0 + nw + 16.0, cy - st.line_px() / 2.0, &state, &st);
+        let waiting = match r {
+            Row::Home => match v.dash.attention.len() {
+                0 => None,
+                1 => Some("NEEDS YOU".to_string()),
+                n => Some(format!("{n} NEED YOU")),
+            },
+            _ => card_attention(r, v).map(|_| "NEEDS YOU".to_string()),
+        };
+        if let Some(w) = waiting {
+            chip(b, W - 28.0, cy, &w, 14.0, (8.0, 2.0), pal.yellow, pal.dark);
         }
     }
 
@@ -1233,6 +1376,21 @@ impl ShellUi {
     /// Adjust / Channel, A Open / Switch / Adjust / Change / Done, B Back
     /// (one level), MENU Close (everything).
     pub(super) fn menu_hints(&self, m: &Cross, v: &View) -> Vec<(&'static str, &'static str)> {
+        let mut h = self.menu_hints_inner(m, v);
+        // home: MENU comes back to the dashboard rather than closing
+        if v.current.is_none() {
+            let rest = !m.on_cross && m.run_sel == 0 && !self.home.tiles && m.ctx.is_none() && m.top().is_none() && !self.games_take();
+            h.retain(|x| !(rest && x.0 == "MENU"));
+            for x in &mut h {
+                if *x == ("MENU", "Close") {
+                    x.1 = "Home";
+                }
+            }
+        }
+        h
+    }
+
+    fn menu_hints_inner(&self, m: &Cross, v: &View) -> Vec<(&'static str, &'static str)> {
         if let Some(sub) = m.top() {
             return self.sub_hints(sub, v);
         }
@@ -1242,10 +1400,19 @@ impl ShellUi {
         if m.ctx.is_some() {
             return vec![("▲▼", "Choose"), ("A", "Select"), ("B", "Back")];
         }
+        if !m.on_cross && self.home.tiles {
+            return self.tiles_hints(v);
+        }
         if !m.on_cross {
-            let mut h = vec![("▲▼", "Choose"), ("▶", "Apps")];
+            let mut h = if m.run_keys.len() > 1 { vec![("▲▼", "Choose")] } else { Vec::new() };
+            h.push(("▶", "Apps"));
             match m.run_keys.get(m.run_sel) {
-                Some(Row::Home) => h.push(("A", "Go home")),
+                Some(Row::Home) if v.current.is_some() => h.push(("A", "Go home")),
+                Some(Row::Home) => {
+                    if self.dash_acts(v) {
+                        h.push(("A", "Widgets"));
+                    }
+                }
                 Some(Row::App(u)) if v.app(*u).is_some_and(|a| a.game) => {
                     let wake = v.app(*u).is_some_and(|a| a.asleep);
                     h.extend([("X", "Close app"), ("Y", "Game menu"), ("A", if wake { "Wake" } else { "Switch" })]);
@@ -1278,10 +1445,16 @@ impl ShellUi {
 
     /// The status bar: frosted glass with the clock and the device's state
     /// (no hairline, no category tabs).
-    fn glass_status(&self, b: &mut B, pal: &Pal, v: &View, g: &Glass) {
+    fn glass_status(&self, b: &mut B, pal: &Pal, v: &View, m: &Cross, g: &Glass) {
         glass(b, pal, g, 0.0, 0.0, W, BAR_H, 0.42);
-        let clock = ts(Face::SerifItalic, 48.0, pal.ink).line_height(1.0);
-        b.text(28.0, BAR_H / 2.0 - clock.line_px() / 2.0, &v.sys.time, &clock);
+        // the dashboard's big clock is the clock while it is selected:
+        // this one fades as the stack scrolls onto it
+        let dash = m.run_keys.iter().position(|r| *r == Row::Home).map(|i| i as f32);
+        let a = dash.map(|i| (m.run_scroll.x - i).abs().min(1.0).max(m.page_x.x.clamp(0.0, 1.0))).unwrap_or(1.0);
+        if a > 0.01 {
+            let clock = ts(Face::SerifItalic, 48.0, with_a(pal.ink, a)).line_height(1.0);
+            b.text(28.0, BAR_H / 2.0 - clock.line_px() / 2.0, &v.sys.time, &clock);
+        }
         let mono = ts(Face::Mono400, 19.0, pal.ink);
         let mut right = W - 28.0;
         if let Some(bat) = v.sys.battery {
@@ -1403,7 +1576,7 @@ fn row_info(row: &Row, v: &View, prefs: &Prefs) -> RowInfo {
     let ri = |title: &str, sub: String, icon: Ic| RowInfo { title: title.to_string(), sub, icon, level: None, value: None, chevron: false };
     let page = |k: SubKind, sub: String| RowInfo { chevron: true, ..ri(k.title(), sub, k.icon()) };
     match row {
-        Row::Home => ri("Home", "Clock, Continue, Needs you".into(), Ic::Home),
+        Row::Home => ri("Home", "Clock, Needs you, Now playing".into(), Ic::Home),
         Row::App(uid) => match v.app(*uid) {
             Some(a) => ri(&a.name, String::new(), Ic::art(a.art)),
             None => ri("", String::new(), Ic::Apps),
@@ -1456,6 +1629,28 @@ fn row_info(row: &Row, v: &View, prefs: &Prefs) -> RowInfo {
             page(*k, sub)
         }
     }
+}
+
+/// Smoothstep of `x` clamped to 0..1.
+fn smooth01(x: f32) -> f32 {
+    let x = x.clamp(0.0, 1.0);
+    x * x * (3.0 - 2.0 * x)
+}
+
+/// A card's colour down its left edge (the dashboard's is lime).
+fn run_accent(r: &Row, v: &View, pal: &Pal) -> Color {
+    match r {
+        Row::Home => pal.lime,
+        Row::App(u) => v.app(*u).map(|a| a.art.accent(pal)).unwrap_or(pal.lavender),
+        _ => pal.lavender,
+    }
+}
+
+/// What a running app's card says it waits for (Needs you).
+fn card_attention<'v>(r: &Row, v: &View<'v>) -> Option<&'v crate::attention::Item> {
+    let Row::App(u) = r else { return None };
+    let e = v.app(*u)?.entry.as_deref()?;
+    v.dash.attention.iter().find(|i| i.app == e)
 }
 
 /// "NEEDS YOU" on a window in Running, right-aligned at `right`.

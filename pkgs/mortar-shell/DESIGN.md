@@ -17,7 +17,7 @@ pkgs/mortar-shell/
   src/router.rs      who gets a pad button (pure, unit-tested)
   src/shellui.rs     the shell UI: boot, transitions, OSD, toasts, app
                      states (pure state + scene building, unit-tested)
-  src/home.rs        Home: the dashboard, its navigation, first-time tips
+  src/home.rs        the dashboard (the stack's top card: home), its tiles, first-time tips
                      (a child module of shellui)
   src/cross.rs       the MENU: Running page, the cross, glass (a child
                      module of shellui)
@@ -27,7 +27,7 @@ pkgs/mortar-shell/
                      the game panel (a child module of shellui)
   src/games.rs       games as apps: library data, titles, the game socket
                      protocol, the hibernation policy (pure, unit-tested)
-  src/widgets.rs     Home widgets: config, the 4 x 3 grid, command-widget worker
+  src/widgets.rs     dashboard widgets: config, the 4 x 3 grid, command-widget worker
   src/attention.rs   "Needs you": apps asking for attention
   src/about.rs       version, generation, storage, battery health, temperature
   src/patterns.rs    the cross's background patterns (mosaics: zig-zags, Life, a scope, Truchet tiles)
@@ -102,7 +102,7 @@ on black.
   MENU, A flips between two apps.
 - Close: `xdg_toplevel.close`, then SIGTERM to the process group after 3 s
   and SIGKILL after 6 s. Exited apps with no window are dropped and the
-  next app in MRU order is shown, or the home screen.
+  next app in MRU order is shown, or home (the stack on the dashboard).
 - Log out (MENU > Settings > Power) ends the shell (status 0); greetd
   returns to the greeter and all apps get SIGTERM.
 
@@ -183,42 +183,65 @@ blocks with 1 px ink outlines, isometric illustrations.
 - Boot: four coloured blocks fly in and settle into a square (a tick and
   a haptic tick each), the serif wordmark rises with a chime, then the
   screen slides up (2.7 s; `ui.bootAnimation`).
-- Home (no app in front, `home.rs`): a calm dashboard, not a launcher
-  (apps start from the MENU). The status bar (time, "N running", NEEDS
-  YOU, SSH, Wi-Fi, battery), then widgets on a 4 x 3 grid of Pond tiles
-  (flat blocks, 1 px ink outlines; 221 x 186 px, 2x1 tiles 462 px wide;
-  see "Home widgets" below): by default the big serif clock and date,
-  Continue, Needs you, Now playing, battery, Wi-Fi and storage. The D-pad
-  moves between the tiles that do something (the nearest one that way);
-  the focused tile sits on a lavender offset block with a 2 px outline.
-  A acts: Continue resumes the most recent running app (its window shows
-  in the card; the app zooms out of the card), or, with nothing running,
-  starts the last app on screen again (`last_app` in prefs); Needs you
-  switches to the first app waiting; Now playing to the app making
-  sound; a tile with `open` starts or switches to that entry. B does
-  nothing (Home is the top). The drifting shapes are gone: Home is a
-  still screen (no frames at rest); only the charging line under the
-  date moves, while it charges.
-- Launch: the app grows out of its MENU row (or Home's Continue card) in
-  its accent colour (whoosh, double haptic) and fades in once its first
-  buffer arrives; if it is slow, the accent fills the screen with the
-  illustration and "STARTING…" until it maps (B: back, it keeps
-  starting; 20 s timeout). Going Home is the reverse: the app shrinks
-  into the Continue card (it is what Continue resumes).
+- Home is not a screen of its own: the dashboard is the top card of the
+  Running stack (below), and being home means the stack on that card
+  with no app in front. With no app in front the stack is always there
+  (it comes up under the boot screen, when the last app in front exits,
+  when a start goes to the background); B and MENU, which close the MENU
+  over an app, come back to the dashboard instead (from the cross, a
+  glass page, a popup, an app's card); on the dashboard itself they do
+  nothing. An app that comes to the front by itself (started over SSH,
+  `ctl focus`) while home rests on the dashboard closes the stack.
+  - The dashboard (`home.rs`): a calm card, not a launcher (apps start
+    from the cross), the same size as the app cards: widgets on a 4 x 3
+    grid of Pond tiles (flat blocks, 1 px ink outlines; 224 x 152 px,
+    2x1 tiles 464 px wide; see "Home widgets" below): by default the big
+    serif clock and date, Recently closed, Needs you, Now playing,
+    battery, Wi-Fi and storage. While it is selected its big clock is the
+    clock: the status bar's fades out as the stack scrolls onto it (and
+    back as it scrolls away or the cross slides in), so there is never a
+    second one.
+  - ▲▼ always scroll the stack; ▶ is the cross, as before. A on the
+    dashboard card: with an app in front, "Go home" (the app goes to the
+    background and keeps its card, right below; its frosted picture
+    fades out behind the stack, `leaving`, and the stack stays); at
+    home, "Widgets": into the tiles. In the tiles the D-pad moves between
+    the tiles that do something (the nearest one that way; Needs you
+    first); the focused tile sits on a lavender offset block with a 2 px
+    outline (only in the tiles, so the mode shows); A acts: Recently
+    closed starts it again, Needs you switches to the first app waiting,
+    Now playing to the app making sound, a tile with `open` starts or
+    switches to that entry, each growing out of its tile while the stack
+    fades; B leaves the tiles (MENU too). The hint bar says which: "▲▼
+    Choose, ▶ Apps, A Go home / Widgets" on the card, "◀▶▲▼ Choose, A
+    Open / Switch / Play, B Back" in the tiles. (Why A enters rather than
+    ◀▶ moving tiles: ▶ is the cross and ▲▼ must scroll the stack; why the
+    card stays rather than zooming to a full-screen dashboard: one
+    layout of the widgets, the same bars everywhere, and home is then
+    exactly the switcher at rest, with your last app one ▼ away.)
+  - With nothing running the stack is the dashboard alone, and where the
+    next card would peek a small "NOTHING RUNNING · ▶ APPS" sits.
+  - Still: no frames at rest (the neighbours are tabs, below, so no app
+    picture is in the frame and background apps' commits redraw
+    nothing); a widget update changes only its tile (`damage.rs`); only
+    the charging line under the date moves, while it charges.
+- Launch: the app grows out of its MENU row, its card or its dashboard
+  tile in its accent colour (whoosh, double haptic) and fades in once
+  its first buffer arrives; if it is slow, the accent fills the screen
+  with the illustration and "STARTING…" until it maps (B: back home, it
+  keeps starting; 20 s timeout).
 - MENU (anywhere, on its own) opens the MENU, "Cross Menu 2"
   (`cross.rs` and `menupages.rs`, after the approved
   plan/mortar-cross-2.html), over the app, which stays on screen frosted:
   blurred (about 14 px) under a ground-colour veil at 62%, so its
-  colours and layout show but its text does not read. Over home the home
-  screen is frosted the same way (`Src::HomeBlur`: the home scene drawn
-  once into the blur's quarter-size FBO when the MENU first needs it, the
-  same gaussian rounds, kept while frames use it); a lightly veiled
-  sharp home read through and clashed with the menu. The blur and veil
-  fade in and out with the menu's open spring (Reduce motion: on and off
-  at once). The power
-  menu frosts the app the same way (with a lighter scrim); the glass
-  pages are frosted themselves. MENU closes it, and everything opened
-  from it, from anywhere.
+  colours and layout show but its text does not read. At home there is
+  nothing behind: the stack sits on the plain ground (the old blurred
+  home screen, `Src::HomeBlur`, is gone with the home screen). The blur
+  and veil fade in and out with the menu's open spring (Reduce motion:
+  on and off at once). The power menu frosts the app the same way (with
+  a lighter scrim); the glass pages are frosted themselves. MENU closes
+  it, and everything opened from it, from anywhere (at home: back to the
+  dashboard).
   - Two pages side by side on one spring: Running, and the cross to its
     right. ▶ on Running slides it off to the left and the cross in from
     the right (on Apps; R1: on Settings); ◀ on Apps or L1 goes back.
@@ -230,13 +253,20 @@ blocks with 1 px ink outlines, isometric illustrations.
     light ground at 40-62%, a light 1 px top edge. Selected things keep
     solid ink outlines. The veil adapts: over a dark backdrop it rises
     (62% to 90%, eased) until ink-soft text keeps 4.5:1.
-  - Running: Home, then every running app, most recent first, each a
-    live window edge to edge (1024 x 600: the app's middle rows; Home
-    draws the real home screen), stacked vertically like a scrolling
-    window manager (`y = 84 + d x 612`, a spring), the neighbours above
-    and below showing at the top and bottom edges, dimmed (ground at
-    35%), 3 px ink edges. The page eases from 104% to 100% as the MENU
-    opens. The selected window has a strip in the app's accent down its
+  - Running, the stack: the dashboard card, then every running app,
+    most recent first, each a live window edge to edge (1024 x 528: the
+    app's middle rows, where they are on screen), stacked vertically like
+    a scrolling window manager (`y = 120 + d x 540`, a spring), centred
+    between the bars so the neighbours peek 36 px above and below. A
+    card turns into a tab as it settles next to the selected one (from
+    |d| 0.55 to 0.95): a plain card with the accent strip, the serif name
+    and the state (the dashboard's: "Home" and the date) along the edge
+    that shows, and a NEEDS YOU chip; while the stack scrolls the cards
+    are live, dimmed (ground at 35%), with 3 px ink edges. At rest only
+    the selected card is a live picture. The page eases from 104% to
+    100% as the MENU opens; opened over an app, the stack comes up on
+    that app's card (where the app is) and scrolls on to the previous
+    one. The selected window has a strip in the app's accent down its
     left edge and, in its lower left, a label: the index on ink, the
     serif name and the app's state on glass (in the same words
     everywhere, `AppState`: on screen, in the background, starting,
@@ -247,7 +277,7 @@ blocks with 1 px ink outlines, isometric illustrations.
     window goes at once, a "Closed" toast), Y opens Switch to it /
     Restart app / Close (Restart closes the app and starts its entry
     again once it has exited; apps nobody launched have no Restart). The
-    selected window and its neighbours get `ui.cardFps` frame callbacks.
+    selected window (and a neighbour while it scrolls into view) gets `ui.cardFps` frame callbacks.
   - The cross: Apps, Games, Music, Settings across the middle (Games
     only with an entry in it). The selected category is lifted (up-left,
     scaled from 82%) in its accent (Apps yellow, Games lime, Music
@@ -346,7 +376,7 @@ blocks with 1 px ink outlines, isometric illustrations.
       `wpctl set-volume` / `set-mute` (`actions.streamVolume`,
       `streamMute`). An app with no stream shows "no sound". A worker
       thread runs these, every second while the Mixer shows (every 4 s
-      while Home shows, for Now playing: a stream whose node is
+      while the dashboard shows, for Now playing: a stream whose node is
       `running` and not muted is playing). No level
       meters: PipeWire has no cheap way to read peaks without capturing
       every stream.
@@ -406,7 +436,7 @@ blocks with 1 px ink outlines, isometric illustrations.
 - Settings are saved in $XDG_STATE_HOME/mortar-shell/prefs.json over the
   module's defaults (`mortar.shell.ui.*`), with what the shell remembers
   for the person: the tips already shown and the last app.
-- Home shortcuts: L1 or SELECT opens the MENU on Apps, R1 on Settings.
+- Home shortcuts: ▶ (or R1, straight to Settings) from the stack, as anywhere in it. (L1 and SELECT on the old Home screen are gone.)
 - Volume keys work everywhere: the OSD, a frosted-glass pill (72x300) at
   the right edge, fades and scales in (~120 ms), with a speaker (sun for
   brightness), an ink bar that springs to each new level and the number
@@ -480,14 +510,19 @@ One rule everywhere: B goes back one level, and closes the MENU only at
 its top (Running or the cross); MENU closes everything at once (pages,
 popup, a setup page, the MENU). ◀ on a glass page goes back too, except
 while a level is being adjusted (◀▶ adjust it then) and in the Mixer
-(◀ picks the channel to the left; on Master it goes back). A unit test
+(◀ picks the channel to the left; on Master it goes back). With no app in
+front (home) the top is the dashboard: what would close the MENU comes
+back to it. A unit test
 (`b_and_menu_on_every_screen`) checks this table:
 
 | Screen | B | MENU |
 |---|---|---|
-| Home | nothing (the top) | opens the MENU on Running |
-| Running | closes the MENU | closes the MENU |
-| The cross | closes the MENU | closes the MENU |
+| Home: the dashboard card, no app in front | nothing (the top) | nothing (already home) |
+| Home: the dashboard's tiles | leaves them | leaves them |
+| Home: an app's card, the cross | back to the dashboard | back to the dashboard |
+| Home: a glass page, the options popup, adjusting | one level back, as over an app | back to the dashboard |
+| Running, over an app (its card or the dashboard's) | closes the MENU | closes the MENU |
+| The cross, over an app | closes the MENU | closes the MENU |
 | The cross, adjusting a level | stops adjusting | closes the MENU |
 | Options popup (Y) | back to Running | closes the MENU |
 | A glass page (Display, Sound, Wi-Fi, Bluetooth, Updates, About, Power, Time zone) | back to the cross | closes the MENU |
@@ -497,7 +532,7 @@ while a level is being adjusted (◀▶ adjust it then) and in the Mixer
 | mortar-setup page (Remote access, Wi-Fi's Other network, password keyboard) | its own back; at its first page, back to the MENU | closes everything |
 | Power menu (hold the power key) | closes it | closes it |
 | Power menu, waiting for its second A | forgets it | closes it |
-| An app starting (the splash) | back home, it keeps starting | opens the MENU |
+| An app starting (the splash) | back home (the stack on the dashboard), it keeps starting | opens the MENU |
 | On-screen keyboard | Backspace (it is a keyboard; START hides it) | opens the MENU over the app |
 | Games > a system's page (mortar-play) | back to Games (◀ too) | closes the MENU |
 | Game panel (Y on a game in Running) | back to Running (Y too) | closes the MENU |
@@ -507,7 +542,7 @@ while a level is being adjusted (◀▶ adjust it then) and in the Mixer
 ### App states
 
 An app's state reads the same everywhere (Running's window label,
-the cross's subtitles, Home's Continue card): on screen, in the
+the cross's subtitles, the stack's tabs): on screen, in the
 background, starting, closing, asleep (`AppState` in shellui.rs; asleep:
 kept but not running, e.g. a hibernated game).
 
@@ -522,7 +557,7 @@ fit is left out). Kinds:
 | kind | default size | shows | A |
 |---|---|---|---|
 | `clock` | 2x1 | the big serif clock, the date and host, the charging line | — |
-| `continue` | 2x1 | the most recent app (its window, name, state), else the last app | resume / start it |
+| `recent` | 2x1 | Recently closed: the newest entry on screen lately (`recent` in prefs) that is not running, else mortar-play's most recent game; a game's resume picture or the app's illustration (`continue`, the old name, still parses) | start it again (a game resumes) |
 | `needs-you` | 2x1 | apps waiting for you (yellow), else "All quiet" | switch to the first |
 | `now-playing` | 2x1 | the app making sound (orange) and its level | switch to it |
 | `battery` | 1x1 | level, bar, charging or health | — |
@@ -533,7 +568,7 @@ fit is left out). Kinds:
 Every widget takes `size`, `title`, `accent` (lime, lavender, yellow,
 orange, pink, ground) and `open` (a launcher entry A starts or switches
 to). A `command` widget runs `command` every `interval` seconds (at
-least 2) while Home shows, on the widgets thread (never on the event
+least 2) while the dashboard shows, on the widgets thread (never on the event
 loop), each run in its own process group and killed after 10 s. It may
 print text (the first line large, the second small) or a JSON object
 `{"title": "…", "value": "…", "accent": "lime"}`; a failure shows its
@@ -543,7 +578,7 @@ output (or "exit N") with a "!" tag. `ctl state` reports the results
 ```nix
 mortar.shell.home.widgets = [
   { kind = "clock"; }
-  { kind = "continue"; }
+  { kind = "recent"; }
   { kind = "needs-you"; }
   { kind = "now-playing"; }
   { kind = "battery"; }
@@ -566,7 +601,7 @@ socket `attention {"op": "set"|"clear", "app", "text"}`). Raising it
 shows one toast ("Claude needs you" with the text, double haptic; a new
 text for the same app updates it quietly), a NEEDS YOU badge on the
 app's window in Running, a dot on the cross's edge towards Running, the
-Home widget and a NEEDS YOU chip in Home's status bar. An item for a
+dashboard widget, a NEEDS YOU chip on the app's tab and on the dashboard's. An item for a
 launcher entry goes when that app stops; items for other ids stay until
 cleared. mortar-ai (the Claude controller app) sets it while a tool
 approval waits ("Approve: …", "+N more") and clears it when answered
@@ -578,7 +613,7 @@ A tip is a toast shown once ever, the first time its feature matters,
 when nothing else is on screen (no toast, MENU, transition): "MENU
 switches apps" (the first app on screen), "START opens the keyboard"
 (the first keyboard app), "SELECT + MENU: the game's menu" (the first
-game), "Every button, in one place" (back Home with two apps running;
+game), "Every button, in one place" (home on the dashboard with two apps running;
 it points at Settings > About > Controls). The ids shown are saved in
 prefs (`tipsSeen`).
 
@@ -1084,7 +1119,7 @@ the shell, see pkgs/mortar-play/DESIGN.md.)
   memory, Apps without games and music, Settings adjust mode, the glass
   pages (Display, Sound, Mixer, Wi-Fi, Bluetooth, Time zone, Updates,
   About, Power with its second A), options popup, the B / MENU table for
-  every screen), Home (Continue, Needs you, focus, last app), attention
+  every screen), home (the stack on the dashboard: boot, B and MENU at home, going home from an app, Recently closed, the tiles and their focus, Needs you, an app shown by itself, no live picture and no redraw at rest, a widget update damaging only its tile), attention
   and its toast, first-time tips, widgets (config, grid layout, script
   output, the worker and its time limit), About's sysfs readers, the row above clearing the lifted category icon and
   its shadow by 16 px for every category and selection), the patterns
@@ -1100,9 +1135,9 @@ the shell, see pkgs/mortar-play/DESIGN.md.)
   the dashboard with a command widget's JSON result; MENU > Settings and
   its Display, Sound > Mixer, Wi-Fi, Bluetooth, About > Controls and
   Power pages; `mortar-shell attention` set and clear (toast, Running
-  badge, Home);
+  badge, the dashboard); home at rest idle; B, MENU and A on the dashboard;
   then UI time frozen and stepped for transition frames (`t-*.png`:
-  MENU, the cross sliding in, its pattern moving, launch, close, OSD,
+  the stack scrolling from the dashboard and back, the cross sliding in, its pattern moving, launch from a card, MENU from an app, going home, OSD,
   toast, shutter, settings, night palette,
   time zone, power menu, boot), the screenshot file and the saved
   settings checked.

@@ -179,16 +179,16 @@ impl SRow {
 
 /// Every button and chord (About > Controls): (group, keys, what, detail).
 pub(super) const CONTROLS: &[(&str, &str, &str, &str)] = &[
-    ("Everywhere", "MENU", "Open or close the menu", "From any app; closes every page at once"),
+    ("Everywhere", "MENU", "Open or close the menu", "Closes every page; at home: the dashboard"),
     ("Everywhere", "MENU then A", "Back to the app before", "The menu opens on the last app"),
     ("Everywhere", "VOL+ + VOL−", "Volume; both together: screenshot", "Saved in ~/Pictures/Screenshots"),
     ("Everywhere", "POWER", "Tap: sleep or wake", "Any button also wakes it"),
     ("Everywhere", "hold POWER", "The power menu", "Sleep, Restart, Power off"),
     ("Games", "SELECT + MENU", "The game's own menu", "MENU alone opens Mortar's"),
-    ("In the menu", "◀▶ ▲▼", "Move; ◀ from Apps: Running", "B goes back one step"),
+    ("In the menu", "◀▶ ▲▼", "Move; ◀ from Apps: the stack", "B goes back one step"),
     ("In the menu", "L1 / R1", "Running / Settings", "From anywhere in the cross"),
     ("In the menu", "X / Y", "Close app / options", "On a window in Running"),
-    ("Home", "L1 / SELECT", "The menu on Apps", "R1: on Settings"),
+    ("Home", "▲▼", "The dashboard, then your apps", "A on it: home; at home: its tiles"),
     ("Terminals", "START", "The on-screen keyboard", "Pad: A Enter, B Backspace, X Tab"),
     ("Terminals", "L2 / R2", "Esc / hold for Ctrl", "SELECT: Ctrl+C; L1 R1: Page up/down"),
     ("On-screen keyboard", "A / B", "Type / Backspace", "X Space, Y Enter"),
@@ -424,7 +424,7 @@ const CH_GAP: f32 = 18.0;
 const PAGE_ROWS: usize = 6;
 
 impl ShellUi {
-    fn top_sub(&self) -> Option<&Sub> {
+    pub(super) fn top_sub(&self) -> Option<&Sub> {
         self.menu.as_ref()?.subs.iter().rev().find(|s| !s.closing)
     }
 
@@ -467,7 +467,7 @@ impl ShellUi {
     }
 
     /// Pop the page in front.
-    fn close_sub(&mut self, v: &View) {
+    pub(super) fn close_sub(&mut self, v: &View) {
         let reduce = self.prefs.reduce_motion;
         let Some(s) = self.top_sub_mut() else { return };
         s.closing = true;

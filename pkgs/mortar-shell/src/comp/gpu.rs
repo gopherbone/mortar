@@ -87,8 +87,6 @@ pub struct GpuUi {
     pub blur_count: u64,
     /// The newest backdrop blur's mean colour, for the MENU's veil.
     mean: Option<[f32; 3]>,
-    /// The blurred home screen: (Shell::home_gen it shows, result, scratch).
-    home: Option<(u64, Fbo, Fbo)>,
     /// Bumped whenever an image a frame may sample changed (a buffer
     /// that holds an older epoch is drawn in full).
     epoch: u64,
@@ -141,7 +139,6 @@ impl GpuUi {
             blur_ms: 0.0,
             blur_count: 0,
             mean: None,
-            home: None,
             epoch: 0,
             seen: Vec::new(),
             partial: std::env::var("MORTAR_SHELL_FULL_REDRAW").map_or(true, |v| v.is_empty() || v == "0"),
@@ -284,7 +281,6 @@ impl GpuUi {
             })
             .collect();
         let blur = &self.blur;
-        let home = &self.home;
         let lookup = |src: Src| -> Option<(u32, bool, bool, i32, i32)> {
             let t = match src {
                 Src::App(u) => {
@@ -297,10 +293,6 @@ impl GpuUi {
                 }
                 Src::Layer(l) => &layers.get(&l)?.1,
                 Src::Pic(p) => pics.get(&p)?,
-                Src::HomeBlur => {
-                    let (_, a, _) = home.as_ref()?;
-                    return Some((a.tex, false, true, a.w, a.h));
-                }
             };
             Some((t.tex, t.swizzle, t.opaque, t.w, t.h))
         };
@@ -422,7 +414,6 @@ impl GpuUi {
             }
         }
         self.prepare_blur(shell, scene);
-        self.prepare_home(shell);
         // pictures: uploaded once, dropped when unused
         let used = scene.pics();
         let gone: Vec<u32> = self.pics.keys().filter(|p| !used.contains(p)).copied().collect();
@@ -534,55 +525,6 @@ impl GpuUi {
         }
     }
 
-    /// The blurred home screen behind the MENU: the home scene drawn
-    /// straight into a quarter-size FBO, then the gaussian rounds. Once per
-    /// new home scene (the MENU opening over home); freed with it.
-    fn prepare_home(&mut self, shell: &Shell) {
-        let Some(hs) = shell.home_scene.as_ref() else {
-            if let Some((_, a, b)) = self.home.take() {
-                self.gl.drop_fbo(a);
-                self.gl.drop_fbo(b);
-            }
-            return;
-        };
-        if self.home.as_ref().is_some_and(|h| h.0 == shell.home_gen) {
-            return;
-        }
-        if self.home.is_none() {
-            let (w, h) = ((shell.size.0 / 4).max(1), (shell.size.1 / 4).max(1));
-            let a = match self.gl.fbo(w, h) {
-                Ok(a) => a,
-                Err(e) => return tracing::warn!("home blur: {e}"),
-            };
-            match self.gl.fbo(w, h) {
-                Ok(b) => self.home = Some((0, a, b)),
-                Err(e) => {
-                    self.gl.drop_fbo(a);
-                    return tracing::warn!("home blur: {e}");
-                }
-            }
-        }
-        let Some((_, a, b)) = self.home.take() else { return };
-        let (cw, ch) = (shell.size.0 as f32, shell.size.1 as f32);
-        let t0 = Instant::now();
-        let r = match shell.typo.as_ref() {
-            Some(t) => self.gl.render_into(&a, cw, ch, hs, t).and_then(|_| self.gl.blur_in_place(&a, &b)),
-            None => Err("no fonts".into()),
-        };
-        match r {
-            Ok(()) => {
-                self.blur_count += 1;
-                self.gl.finish();
-                self.blur_ms = t0.elapsed().as_secs_f32() * 1000.0;
-                self.mean = self.gl.mean_rgb(&a);
-                self.home = Some((shell.home_gen, a, b));
-            }
-            Err(e) => {
-                tracing::warn!("home blur: {e}");
-                self.home = Some((0, a, b));
-            }
-        }
-    }
     /// A client buffer was destroyed: free its texture (every frame is
     /// finished before the next starts, so nothing on the GPU uses it).
     pub fn forget(&mut self, id: &ObjectId) {
@@ -628,10 +570,6 @@ impl GpuUi {
         if let Some(b) = self.blur.take() {
             self.gl.drop_fbo(b.a);
             self.gl.drop_fbo(b.b);
-        }
-        if let Some((_, a, b)) = self.home.take() {
-            self.gl.drop_fbo(a);
-            self.gl.drop_fbo(b);
         }
         for b in &mut self.bufs {
             if let Some(t) = b.target.take() {

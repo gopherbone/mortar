@@ -266,7 +266,7 @@ pub fn run(o: &Opts) -> Result<(), String> {
         || s.starts_with("cross")
         || s.starts_with("saver")
         || s.starts_with("page-")
-        || matches!(s, "running" | "running-attention" | "setup-wifi" | "setup-bluetooth" | "app" | "osd" | "osd-mute" | "osd-bri" | "osd-home" | "toast" | "achievement" | "flash" | "osk" | "osk-chips" | "osk-chips-focus" | "close" | "swap" | "remote" | "tip");
+        || matches!(s, "running" | "running-attention" | "running-dash" | "menu-open" | "setup-wifi" | "setup-bluetooth" | "app" | "osd" | "osd-mute" | "osd-bri" | "osd-home" | "toast" | "achievement" | "flash" | "osk" | "osk-chips" | "osk-chips-focus" | "close" | "swap" | "remote" | "tip");
     let mut current = if s == "cross-dark" { Some(1) } else if over_app { Some(2) } else { None };
     // games: a demo library (made-up titles), one game running
     let games = demo_games(&mut demo.pix);
@@ -277,7 +277,7 @@ pub fn run(o: &Opts) -> Result<(), String> {
     if game_screen {
         current = Some(3);
     }
-    let run_ref: &[RunningInfo] = if s == "home-empty" { &none } else if game_screen { &with_game } else { &running };
+    let run_ref: &[RunningInfo] = if matches!(s, "home-empty" | "nothing-running") { &none } else if game_screen { &with_game } else { &running };
     let host = "brick";
     let demo_st = { use mortar_setup::ui::Device; mortar_setup::ui::demo::DemoDevice::settings().status().clone() };
     let net = crate::shellui::NetState { wifi: demo_st.wifi.clone(), bt: demo_st.bluetooth.clone(), error: None };
@@ -334,12 +334,25 @@ pub fn run(o: &Opts) -> Result<(), String> {
     let v0 = mk(current, 0.0);
     settle(&mut ui, &v0, 0.05);
     match s {
-        "boot" | "home" | "home-default" | "home-attention" | "home-empty" | "home-charging" | "home-low" | "app" => {}
+        "boot" | "home" | "home-default" | "home-attention" | "home-empty" | "nothing-running" | "home-charging" | "home-low" | "app" => {}
+        // home, A: into the dashboard's tiles
+        "home-tiles" => {
+            ui.button(Button::A, false, &v0);
+        }
+        // home, ▼: the last app selected, the dashboard above it
+        "home-down" => {
+            ui.button(Button::Down, false, &v0);
+        }
         "tip" => ui.show_toast(Toast { sub: "TIP · MENU, THEN A GOES BACK TO THE LAST ONE".into(), ..Toast::info("MENU switches apps") }),
-        "menu" | "menu-running" | "running" | "running-attention" => {
+        "menu" | "menu-running" | "running" | "running-attention" | "running-dash" | "menu-open" => {
             ui.menu_key(&v0);
             if s == "running-attention" {
                 // Claude, the one waiting
+                ui.button(Button::Up, false, &v0);
+            }
+            if s == "running-dash" {
+                // up to the dashboard, over the app in front
+                ui.button(Button::Up, false, &v0);
                 ui.button(Button::Up, false, &v0);
             }
         }
@@ -438,30 +451,24 @@ pub fn run(o: &Opts) -> Result<(), String> {
             });
         }
         "launch" => {
+            // home, ▼ to Claude's card, A: it zooms out of its card
             settle(&mut ui, &v0, 1.0);
-            ui.button(Button::Right, false, &v0);
-            settle(&mut ui, &v0, 0.5);
-            ui.button(Button::Left, false, &v0);
-            settle(&mut ui, &v0, 0.5);
-            ui.button(Button::A, false, &v0);
-            current = Some(1); // the M8 is running: it shows as it grows
+            ui.button(Button::Down, false, &v0);
+            settle(&mut ui, &v0, 0.6);
+            if ui.button(Button::A, false, &v0).iter().any(|o| matches!(o, crate::shellui::Out::Focus(_))) {
+                current = Some(2);
+            }
         }
         "close" => {
+            // MENU over Claude, ▲▲ to the dashboard, A: home (Claude goes
+            // to the background, its frosted picture fades)
             ui.menu_key(&v0);
             settle(&mut ui, &v0, 0.8);
             ui.button(Button::Up, false, &v0);
             ui.button(Button::Up, false, &v0);
-            ui.button(Button::A, false, &v0);
-            // the MENU fades, the app shrinks into its tile
-            let mut t = 0.0;
-            while t < 0.8 {
-                let v = mk(current, 0.0);
-                let outs = ui.step(dt, &v);
-                if outs.contains(&crate::shellui::Out::Home) {
-                    current = None;
-                    break;
-                }
-                t += dt;
+            settle(&mut ui, &v0, 0.8);
+            if ui.button(Button::A, false, &v0).contains(&crate::shellui::Out::Home) {
+                current = None;
             }
         }
         "swap" => {
@@ -514,7 +521,7 @@ pub fn run(o: &Opts) -> Result<(), String> {
         }
         other => {
             return Err(format!(
-                "unknown preview screen '{other}' (boot, home (the dashboard, Claude needs you), home-default (the default widgets), home-attention, home-empty, home-charging, home-low, app, tip, running, running-attention, cross-apps, cross-attention, home-menu (the cross over home), menu-games, menu-music, games, games-system, game-panel, game-asleep, cross-settings, menu-adjust, menu-options, cross-games, cross-music, cross-switch (Apps to Games: use --frames), saver-apps, saver-games, saver-music, saver-settings, saver-exit, page-display, page-display-adjust, page-sound, page-mixer, page-wifi, page-bluetooth, page-timezone, page-timezone-cities, page-updates, page-about, page-controls, page-power, page-power-confirm, remote, setup-wifi, setup-bluetooth, launch, close, swap, osd, osd-mute, osd-bri, osd-home, toast, achievement, flash, osk, osk-chips, osk-chips-focus, power)"
+                "unknown preview screen '{other}' (boot, home (the stack on the dashboard, Claude needs you), home-tiles (A: in its tiles), home-down (the last app, the dashboard above), home-default (the default widgets), home-attention, home-empty or nothing-running, home-charging, home-low, app, tip, running, running-attention, running-dash (the dashboard over the app), menu-open (MENU from the app: use --frames), cross-apps, cross-attention, home-menu (the cross over home), menu-games, menu-music, games, games-system, game-panel, game-asleep, cross-settings, menu-adjust, menu-options, cross-games, cross-music, cross-switch (Apps to Games: use --frames), saver-apps, saver-games, saver-music, saver-settings, saver-exit, page-display, page-display-adjust, page-sound, page-mixer, page-wifi, page-bluetooth, page-timezone, page-timezone-cities, page-updates, page-about, page-controls, page-power, page-power-confirm, remote, setup-wifi, setup-bluetooth, launch, close, swap, osd, osd-mute, osd-bri, osd-home, toast, achievement, flash, osk, osk-chips, osk-chips-focus, power)"
             ))
         }
     }
@@ -527,16 +534,10 @@ pub fn run(o: &Opts) -> Result<(), String> {
     settle(&mut ui, &v, o.at_ms as f64 / 1000.0);
     let mut raster = Raster::default();
     let mut pm = Pixmap::new(W as u32, H as u32).ok_or("canvas")?;
-    // the MENU over home blurs the home screen (as the compositor does)
-    let home = ui.build_home(&typo, &v, W, H);
-    raster.render(&mut pm, &home, &typo, &demo);
-    if let Some(b) = crate::raster::blur_quarter(&pm) {
-        demo.pix.insert(Src::HomeBlur, b);
-    }
     // the veil adapts to the backdrop's brightness (the compositor measures
-    // its blur)
-    let back = match current { Some(u) => Src::Blur(u), None => Src::HomeBlur };
-    if let Some(p) = demo.pix.get(&back) {
+    // its blur; "close": the app sent home fades out behind the stack)
+    let back = current.or((s == "close").then_some(2)).map(Src::Blur);
+    if let Some(p) = back.and_then(|b| demo.pix.get(&b)) {
         ui.set_backdrop(Some(crate::raster::mean_rgb(p)));
         ui.snap_veil();
     }
