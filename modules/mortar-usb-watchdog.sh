@@ -36,13 +36,15 @@ log() {
   echo "$*"
   echo "mortar-usb-watchdog: $*" > /dev/kmsg 2>/dev/null || true
 }
-now() { cut -d. -f1 /proc/uptime; }
+# The 5 s loop reads with bash's own `read` (no cat/cut processes), so an
+# idle Brick is not woken by a handful of forks every 5 s.
+now() { local u; read -r u _ < /proc/uptime; echo "${u%%.*}"; }
 # MORTAR_USB_RX_FILE: test hook, read the RX counter from a file instead
 # (a frozen file simulates a wedged link and exercises the recovery path).
 RXF=${MORTAR_USB_RX_FILE:-/sys/class/net/$IF/statistics/rx_packets}
-rx() { cat "$RXF" 2>/dev/null || echo 0; }
-carrier() { [ "$(cat "/sys/class/net/$IF/carrier" 2>/dev/null)" = 1 ]; }
-bound_udc() { cat "$G/UDC" 2>/dev/null; }
+rx() { local v; read -r v < "$RXF" 2>/dev/null || v=0; echo "${v:-0}"; }
+carrier() { local c; read -r c < "/sys/class/net/$IF/carrier" 2>/dev/null && [ "$c" = 1 ]; }
+bound_udc() { local u; read -r u < "$G/UDC" 2>/dev/null; echo "$u"; }
 first_udc() { ls /sys/class/udc 2>/dev/null | head -n1; }
 musb_irqs() { awk '/musb/{s=0; for(i=2;i<=NF;i++) if($i ~ /^[0-9]+$/) s+=$i; else break; print s}' /proc/interrupts; }
 
@@ -125,25 +127,39 @@ step_long_rebind() {
   echo "$u" > "$G/UDC"
 }
 
+# The loop's own reads set variables directly (a $(...) is a fork too).
+read_state() {
+  read -r RX < "$RXF" 2>/dev/null || RX=0
+  read -r NOW _ < /proc/uptime; NOW=${NOW%%.*}
+  UDC=; read -r UDC < "$G/UDC" 2>/dev/null
+}
+# `sleep` without a process: wait on a pipe nothing ever writes to.
+exec {nap_fd}<> <(:)
+nap() { read -r -t "$1" -u "$nap_fd" _ || true; }
+
 armed=0
 last=$(rx)
 last_change=$(now)
 log "started (if=$IF idle=${IDLE}s)"
 
-while sleep "$INTERVAL"; do
-  if ! carrier || [ -z "$(bound_udc)" ]; then
-    last=$(rx); last_change=$(now)
+while nap "$INTERVAL"; do
+  read_state
+  if ! carrier || [ -z "$UDC" ]; then
+    last=$RX; last_change=$NOW
     continue
   fi
-  r=$(rx)
+  r=$RX
   if [ "$r" != "$last" ]; then
     [ "$armed" = 1 ] || log "armed: host traffic seen on $IF"
-    armed=1; last=$r; last_change=$(now)
-    snapshot_neigh
+    armed=1; last=$r; last_change=$NOW
+    # who answers probes later (ip | awk | sort: once a minute is plenty)
+    if [ $(( NOW - ${neigh_at:--60} )) -ge 60 ]; then
+      snapshot_neigh; neigh_at=$NOW
+    fi
     continue
   fi
   [ "$armed" = 1 ] || continue
-  idle=$(( $(now) - last_change ))
+  idle=$(( NOW - last_change ))
   [ "$idle" -ge "$IDLE" ] || continue
 
   alive=0
