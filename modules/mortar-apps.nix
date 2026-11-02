@@ -148,6 +148,20 @@ in
         description = "Little XM Tracker (Mortar build) with its launcher.";
       };
     };
+    openxcom = {
+      enable = lib.mkEnableOption "OpenXcom, shown once `mortar xcom --data PATH` has installed your copy of the game" // { default = true; };
+      package = lib.mkOption {
+        type = lib.types.package;
+        default = pkgs.callPackage ../pkgs/openxcom { };
+        defaultText = lib.literalExpression "pkgs.callPackage ../pkgs/openxcom { }";
+        description = "OpenXcom (Mortar build) with its launcher; no game data.";
+      };
+      data = lib.mkOption {
+        type = lib.types.str;
+        default = "/home/brick/.local/share/openxcom/UFO/GEODATA/WORLD.DAT";
+        description = "A file from the user's copy of the game: the entry waits for it (`requires`).";
+      };
+    };
     m8c = {
       enable = lib.mkEnableOption "m8c, the M8 tracker client" // { default = true; };
       package = lib.mkOption {
@@ -165,6 +179,7 @@ in
       ++ lib.optional cfg.m8c.enable cfg.m8c.package
       ++ lib.optional cfg.choochootracker.enable cfg.choochootracker.package
       ++ lib.optional cfg.littlexm.enable cfg.littlexm.package
+      ++ lib.optional cfg.openxcom.enable cfg.openxcom.package
       ++ [ pkgs.alsa-utils ];
 
     # `pico8` on PATH once installed (the profile is not in the closure)

@@ -74,6 +74,7 @@
             mortar.apps.acgc.enable = true;
             mortar.shell.categories.acgc = "games";
             mortar.shell.categories.littlexm = "music";
+            mortar.shell.categories.openxcom = "games";
             mortar.greeter.enable = true;
             mortar.greeter.sessions = {
               games = {
@@ -113,6 +114,14 @@
                 order = 25;
                 requires = config.mortar.apps.pico8.bin;
                 command = "exec ${config.mortar.gpu.sdlRun}/bin/mortar-sdl-run ${config.mortar.apps.pico8.bin} -splore";
+              };
+              openxcom = lib.mkIf config.mortar.apps.openxcom.enable {
+                name = "OpenXcom";
+                description = "UFO Defense · your own copy";
+                icon = "pad";
+                order = 27;
+                requires = config.mortar.apps.openxcom.data;
+                command = "exec ${config.mortar.gpu.sdlRun}/bin/mortar-sdl-run ${config.mortar.apps.openxcom.package}/bin/openxcom";
               };
               acgc = lib.mkIf config.mortar.apps.acgc.enable {
                 name = "Animal Crossing";
@@ -232,6 +241,8 @@
           # Not in the system either: `mortar acgc` installs it into
           # /nix/var/nix/profiles/acgc (no game data; pkgs/acgc).
           acgc = mainlineConfig.mortar.apps.acgc.package;
+          # The engine alone, for testing builds on the Brick.
+          openxcom = mainlineConfig.mortar.apps.openxcom.package;
 
           # Mainline boot chain + SD image (fully mainline SPL/TF-A/U-Boot)
           u-boot-mainline = mainlineConfig.system.build.mortarBootloader;

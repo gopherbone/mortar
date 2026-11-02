@@ -1,0 +1,2296 @@
+diff --git a/src/Basescape/BaseView.h b/src/Basescape/BaseView.h
+index 01d1c9f..f9e07d3 100644
+--- a/src/Basescape/BaseView.h
++++ b/src/Basescape/BaseView.h
+@@ -37,6 +37,7 @@ class Timer;
+  */
+ class BaseView : public InteractiveSurface
+ {
++	friend class PadNav;
+ private:
+ 	static const int BASE_SIZE = 6;
+ 	static const int GRID_SIZE = 32;
+diff --git a/src/Basescape/BasescapeState.h b/src/Basescape/BasescapeState.h
+index 658917d..b6bd2cd 100644
+--- a/src/Basescape/BasescapeState.h
++++ b/src/Basescape/BasescapeState.h
+@@ -36,6 +36,7 @@ class Globe;
+  */
+ class BasescapeState : public State
+ {
++	friend class PadNav;
+ private:
+ 	BaseView *_view;
+ 	MiniBaseView *_mini;
+diff --git a/src/Basescape/CraftSoldiersState.h b/src/Basescape/CraftSoldiersState.h
+index 079ced7..4721466 100644
+--- a/src/Basescape/CraftSoldiersState.h
++++ b/src/Basescape/CraftSoldiersState.h
+@@ -38,6 +38,7 @@ struct SortFunctor;
+  */
+ class CraftSoldiersState : public State
+ {
++	friend class PadNav;
+ private:
+ 	TextButton *_btnOk;
+ 	Window *_window;
+diff --git a/src/Basescape/PlaceFacilityState.h b/src/Basescape/PlaceFacilityState.h
+index f902965..0ee61b7 100644
+--- a/src/Basescape/PlaceFacilityState.h
++++ b/src/Basescape/PlaceFacilityState.h
+@@ -35,6 +35,7 @@ class Text;
+  */
+ class PlaceFacilityState : public State
+ {
++	friend class PadNav;
+ protected:
+ 	Base *_base;
+ 	RuleBaseFacility *_rule;
+diff --git a/src/Basescape/PlaceLiftState.h b/src/Basescape/PlaceLiftState.h
+index e320ac8..1fcd6e7 100644
+--- a/src/Basescape/PlaceLiftState.h
++++ b/src/Basescape/PlaceLiftState.h
+@@ -34,6 +34,7 @@ class RuleBaseFacility;
+  */
+ class PlaceLiftState : public State
+ {
++	friend class PadNav;
+ private:
+ 	Base *_base;
+ 	Globe *_globe;
+diff --git a/src/Battlescape/BattlescapeState.h b/src/Battlescape/BattlescapeState.h
+index 599b9c4..18e0d06 100644
+--- a/src/Battlescape/BattlescapeState.h
++++ b/src/Battlescape/BattlescapeState.h
+@@ -46,6 +46,7 @@ class BattlescapeGame;
+  */
+ class BattlescapeState : public State
+ {
++	friend class PadNav;
+ private:
+ 	Surface *_rank;
+ 	InteractiveSurface *_icons;
+diff --git a/src/Battlescape/Camera.h b/src/Battlescape/Camera.h
+index 2acae3b..d27a51e 100644
+--- a/src/Battlescape/Camera.h
++++ b/src/Battlescape/Camera.h
+@@ -32,6 +32,7 @@ class Map;
+  */
+ class Camera
+ {
++	friend class PadNav;
+ private:
+ 	Timer *_scrollMouseTimer, *_scrollKeyTimer;
+ 	int _spriteWidth, _spriteHeight;
+diff --git a/src/Battlescape/Inventory.h b/src/Battlescape/Inventory.h
+index b058507..e6d348e 100644
+--- a/src/Battlescape/Inventory.h
++++ b/src/Battlescape/Inventory.h
+@@ -38,6 +38,7 @@ class Timer;
+  */
+ class Inventory : public InteractiveSurface
+ {
++	friend class PadNav;
+ private:
+ 	Game *_game;
+ 	Surface *_grid, *_items, *_selection;
+diff --git a/src/Battlescape/InventoryState.cpp b/src/Battlescape/InventoryState.cpp
+index d9e54fb..c60aa76 100644
+--- a/src/Battlescape/InventoryState.cpp
++++ b/src/Battlescape/InventoryState.cpp
+@@ -764,6 +764,10 @@ void InventoryState::_refreshMouse()
+ 	// send a mouse motion event to refresh any hover actions
+ 	int x, y;
+ 	SDL_GetMouseState(&x, &y);
++	if (_game->padActive())
++	{
++		return; // the pad sends its own pointer position
++	}
+ 	SDL_WarpMouse(x+1, y);
+ 
+ 	// move the mouse back to avoid cursor creep
+diff --git a/src/Battlescape/InventoryState.h b/src/Battlescape/InventoryState.h
+index 2f08d42..ab60496 100644
+--- a/src/Battlescape/InventoryState.h
++++ b/src/Battlescape/InventoryState.h
+@@ -39,6 +39,7 @@ class BattlescapeButton;
+  */
+ class InventoryState : public State
+ {
++	friend class PadNav;
+ private:
+ 	Surface *_bg, *_soldier;
+ 	Text *_txtName, *_txtItem, *_txtAmmo, *_txtWeight, *_txtTus, *_txtFAcc, *_txtReact, *_txtPSkill, *_txtPStr;
+diff --git a/src/Battlescape/Map.h b/src/Battlescape/Map.h
+index f30bf0f..efcb475 100644
+--- a/src/Battlescape/Map.h
++++ b/src/Battlescape/Map.h
+@@ -43,6 +43,7 @@ enum CursorType { CT_NONE, CT_NORMAL, CT_AIM, CT_PSI, CT_WAYPOINT, CT_THROW };
+  */
+ class Map : public InteractiveSurface
+ {
++	friend class PadNav;
+ private:
+ 	static const int SCROLL_INTERVAL = 15;
+ 	static const int BULLET_SPRITES = 35;
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index 53791d2..478d59e 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -118,6 +118,7 @@ set ( engine_src
+   Engine/ModInfo.cpp
+   Engine/Music.cpp
+   Engine/OpenGL.cpp
++  Engine/PadNav.cpp
+   Engine/OptionInfo.cpp
+   Engine/Options.cpp
+   Engine/Palette.cpp
+diff --git a/src/Engine/FlcPlayer.cpp b/src/Engine/FlcPlayer.cpp
+index c55b9f5..a762d7e 100644
+--- a/src/Engine/FlcPlayer.cpp
++++ b/src/Engine/FlcPlayer.cpp
+@@ -246,6 +246,7 @@ void FlcPlayer::SDLPolling()
+ 		{
+ 		case SDL_MOUSEBUTTONDOWN:
+ 		case SDL_KEYDOWN:
++		case SDL_JOYBUTTONDOWN:
+ 			_playingState = SKIPPED;
+ 			break;
+ 		case SDL_VIDEORESIZE:
+diff --git a/src/Engine/Game.cpp b/src/Engine/Game.cpp
+index 96f4d9e..4e486ed 100644
+--- a/src/Engine/Game.cpp
++++ b/src/Engine/Game.cpp
+@@ -40,6 +40,7 @@
+ #include "FileMap.h"
+ #include "Unicode.h"
+ #include "../Menu/TestState.h"
++#include "PadNav.h"
+ 
+ namespace OpenXcom
+ {
+@@ -92,6 +93,7 @@ Game::Game(const std::string &title) : _screen(0), _cursor(0), _lang(0), _save(0
+ 	_screen = new Screen();
+ 
+ 	// Create cursor
++	_pad = new PadNav(this);
+ 	_cursor = new Cursor(9, 13);
+ 	
+ 	// Create invisible hardware cursor to workaround bug with absolute positioning pointing devices
+@@ -123,6 +125,7 @@ Game::~Game()
+ 
+ 	SDL_FreeCursor(SDL_GetCursor());
+ 
++	delete _pad;
+ 	delete _cursor;
+ 	delete _lang;
+ 	delete _save;
+@@ -169,6 +172,10 @@ void Game::run()
+ 			SDL_Event ev;
+ 			int x, y;
+ 			SDL_GetMouseState(&x, &y);
++			if (_pad->active())
++			{
++				_pad->pointer(&x, &y);
++			}
+ 			ev.type = SDL_MOUSEMOTION;
+ 			ev.motion.x = x;
+ 			ev.motion.y = y;
+@@ -181,6 +188,8 @@ void Game::run()
+ 		{
+ 			if (CrossPlatform::isQuitShortcut(_event))
+ 				_event.type = SDL_QUIT;
++			if (_pad->handle(_event))
++				continue;
+ 			switch (_event.type)
+ 			{
+ 				case SDL_QUIT:
+@@ -243,6 +252,8 @@ void Game::run()
+ 					}
+ 					break;
+ 				case SDL_MOUSEMOTION:
++					if (_event.motion.which != PadNav::SYNTHETIC && (_event.motion.xrel != 0 || _event.motion.yrel != 0))
++						_pad->mouseMoved();
+ 				case SDL_MOUSEBUTTONDOWN:
+ 				case SDL_MOUSEBUTTONUP:
+ 					// Skip mouse events if they're disabled
+@@ -288,6 +299,8 @@ void Game::run()
+ 			}
+ 		}
+ 		
++		_pad->think();
++
+ 		// Process rendering
+ 		if (runningState != PAUSED)
+ 		{
+@@ -323,8 +336,12 @@ void Game::run()
+ 				{
+ 					(*i)->blit();
+ 				}
++				_pad->blit(_screen->getSurface());
+ 				_fpsCounter->blit(_screen->getSurface());
+-				_cursor->blit(_screen->getSurface());
++				if (!_pad->active())
++				{
++					_cursor->blit(_screen->getSurface());
++				}
+ 				_screen->flip();
+ 			}
+ 		}
+@@ -354,6 +371,18 @@ void Game::quit()
+ 		std::string filename = CrossPlatform::sanitizeFilename(Unicode::convUtf8ToPath(_save->getName())) + ".sav";
+ 		_save->save(filename);
+ 	}
++	// Mortar: leaving keeps your game; it's under Load Game as the autosave.
++	else if (_save != 0 && !_save->isIronman() && _save->getMonthsPassed() != -1)
++	{
++		try
++		{
++			_save->save(_save->getSavedBattle() ? SavedGame::AUTOSAVE_BATTLESCAPE : SavedGame::AUTOSAVE_GEOSCAPE);
++		}
++		catch (std::exception &e)
++		{
++			Log(LOG_ERROR) << "Could not save on exit: " << e.what();
++		}
++	}
+ 	_quit = true;
+ }
+ 
+@@ -414,6 +443,11 @@ Screen *Game::getScreen() const
+  * Returns the mouse cursor used by the game.
+  * @return Pointer to the cursor.
+  */
++bool Game::padActive() const
++{
++	return _pad->active();
++}
++
+ Cursor *Game::getCursor() const
+ {
+ 	return _cursor;
+diff --git a/src/Engine/Game.h b/src/Engine/Game.h
+index 661f800..6297e2d 100644
+--- a/src/Engine/Game.h
++++ b/src/Engine/Game.h
+@@ -38,12 +38,16 @@ class FpsCounter;
+  * the game's resources and contains a stack state machine to handle all the
+  * initializations, events and blits of each state, as well as transitions.
+  */
++class PadNav;
++
+ class Game
+ {
++	friend class PadNav;
+ private:
+ 	SDL_Event _event;
+ 	Screen *_screen;
+ 	Cursor *_cursor;
++	PadNav *_pad;
+ 	Language *_lang;
+ 	std::list<State*> _states, _deleted;
+ 	SavedGame *_save;
+@@ -72,6 +76,8 @@ public:
+ 	Screen *getScreen() const;
+ 	/// Gets the game's cursor.
+ 	Cursor *getCursor() const;
++	/// Is the gamepad driving the pointer?
++	bool padActive() const;
+ 	/// Gets the FpsCounter.
+ 	FpsCounter *getFpsCounter() const;
+ 	/// Resets the state stack to a new state.
+diff --git a/src/Engine/InteractiveSurface.h b/src/Engine/InteractiveSurface.h
+index fbad036..0f3e542 100644
+--- a/src/Engine/InteractiveSurface.h
++++ b/src/Engine/InteractiveSurface.h
+@@ -36,6 +36,7 @@ typedef void (State::* ActionHandler)(Action*);
+  */
+ class InteractiveSurface : public Surface
+ {
++	friend class PadNav;
+ private:
+ 	static const int NUM_BUTTONS = 7;
+ 	static const SDLKey SDLK_ANY;
+diff --git a/src/Engine/PadNav.cpp b/src/Engine/PadNav.cpp
+new file mode 100644
+index 0000000..bf41a8c
+--- /dev/null
++++ b/src/Engine/PadNav.cpp
+@@ -0,0 +1,1601 @@
++/*
++ * Mortar: gamepad navigation for the original UI. See PadNav.h.
++ * Part of OpenXcom; GNU GPL version 3 or later.
++ */
++#include "PadNav.h"
++#include <algorithm>
++#include <climits>
++#include <cstdio>
++#include <cstdlib>
++#include <typeinfo>
++#include <unistd.h>
++#include "Game.h"
++#include "State.h"
++#include "Screen.h"
++#include "Action.h"
++#include "Options.h"
++#include "InteractiveSurface.h"
++#include "Surface.h"
++#include "Language.h"
++#include "../Interface/TextList.h"
++#include "../Interface/TextEdit.h"
++#include "../Interface/TextButton.h"
++#include "../Interface/ComboBox.h"
++#include "../Interface/ArrowButton.h"
++#include "../Interface/ImageButton.h"
++#include "../Interface/ToggleTextButton.h"
++#include "../Interface/Slider.h"
++#include "../Interface/Text.h"
++#include "Font.h"
++#include "../Battlescape/BattlescapeState.h"
++#include "../Battlescape/BattlescapeGame.h"
++#include "../Battlescape/InventoryState.h"
++#include "../Battlescape/NextTurnState.h"
++#include "../Battlescape/Inventory.h"
++#include "../Battlescape/Map.h"
++#include "../Battlescape/Camera.h"
++#include "../Geoscape/GeoscapeState.h"
++#include "../Geoscape/Globe.h"
++#include "../Geoscape/SelectDestinationState.h"
++#include "../Geoscape/BuildNewBaseState.h"
++#include "../Geoscape/BaseNameState.h"
++#include "../Basescape/BasescapeState.h"
++#include "../Basescape/BaseView.h"
++#include "../Basescape/MiniBaseView.h"
++#include "../Basescape/PlaceFacilityState.h"
++#include "../Basescape/PlaceLiftState.h"
++#include "../Basescape/CraftSoldiersState.h"
++#include "../Menu/ModListState.h"
++#include "../Mod/Mod.h"
++#include "../Mod/RuleInventory.h"
++#include "../Savegame/SavedGame.h"
++#include "../Savegame/SavedBattleGame.h"
++#include "../Savegame/BattleUnit.h"
++#include "../Savegame/BattleItem.h"
++#include "../Savegame/Base.h"
++#include "../Savegame/Craft.h"
++#include "../Savegame/Ufo.h"
++#include "../Savegame/MissionSite.h"
++#include "../Savegame/AlienBase.h"
++
++namespace OpenXcom
++{
++
++namespace
++{
++// The shell's virtual gamepad, in the order SDL numbers its buttons.
++const int BUTTON_MAP[] = {
++	/* 0 BTN_SOUTH  */ PadNav::B,
++	/* 1 BTN_EAST   */ PadNav::A,
++	/* 2 BTN_NORTH  */ PadNav::X,
++	/* 3 BTN_WEST   */ PadNav::Y,
++	/* 4 BTN_TL     */ PadNav::L1,
++	/* 5 BTN_TR     */ PadNav::R1,
++	/* 6 BTN_TL2    */ PadNav::L2,
++	/* 7 BTN_TR2    */ PadNav::R2,
++	/* 8 BTN_SELECT */ PadNav::SELECT,
++	/* 9 BTN_START  */ PadNav::START,
++	/* 10 BTN_MODE: the shell's */ -1,
++	/* 11 */ PadNav::UP,
++	/* 12 */ PadNav::DOWN,
++	/* 13 */ PadNav::LEFT,
++	/* 14 */ PadNav::RIGHT,
++	/* 15 */ PadNav::F1,
++	/* 16 */ PadNav::F2,
++};
++const Uint32 REPEAT_FIRST = 260, REPEAT_NEXT = 90;
++const Uint32 HOLD_END_TURN = 1000, HOLD_LOAD = 800;
++const int GRID = 32;
++
++bool debugInput() { static bool d = getenv("OXC_PAD_DEBUG") != 0 || access("/tmp/oxc-pad-debug", R_OK) == 0; return d; }
++
++void buzz()
++{
++	// Best effort; the launcher puts the Brick's rumble tool on PATH.
++	int r = system("mortar-rumble 180 2 >/dev/null 2>&1 &");
++	(void)r;
++}
++}
++
++PadNav::PadNav(Game *game) : _game(game), _active(true), _px(0), _py(0), _ctrlUntil(0), _state(0), _mode(GENERIC), _panel(false), _focus(0), _row(0),
++	_pressedArrow(0), _pressedArrowButton(SDL_BUTTON_LEFT), _lastUnit(0), _lastTargeting(false), _enemy(0), _cell(0), _gx(0), _gy(0), _contact(0), _finishEdit(0), _finishState(0), _liftKey(0)
++{
++	for (int i = 0; i < BTN_COUNT; ++i)
++	{
++		_down[i] = _chord[i] = _held[i] = false;
++		_downAt[i] = _nextRepeat[i] = 0;
++	}
++	for (int i = 0; i < 4; ++i) _rotating[i] = false;
++	if (SDL_InitSubSystem(SDL_INIT_JOYSTICK) == 0)
++	{
++		for (int i = 0; i < SDL_NumJoysticks(); ++i)
++		{
++			SDL_JoystickOpen(i);
++		}
++		SDL_JoystickEventState(SDL_ENABLE);
++	}
++	// The pad spells names with up/down/left/right: the engine's own mode.
++	Options::keyboardMode = KEYBOARD_OFF;
++}
++
++void PadNav::pointer(int *x, int *y) const
++{
++	Screen *s = _game->getScreen();
++	*x = (int)(_px * s->getXScale()) + s->getCursorLeftBlackBand();
++	*y = (int)(_py * s->getYScale()) + s->getCursorTopBlackBand();
++}
++
++void PadNav::mouseMoved()
++{
++	_active = false;
++}
++
++/* ---------- input ---------- */
++
++bool PadNav::handle(const SDL_Event &ev)
++{
++	int b = -1, pressed = 0;
++	switch (ev.type)
++	{
++	case SDL_JOYBUTTONDOWN:
++	case SDL_JOYBUTTONUP:
++		if (debugInput()) fprintf(stderr, "pad: button %d %s\n", ev.jbutton.button, ev.type == SDL_JOYBUTTONDOWN ? "down" : "up");
++		if (ev.jbutton.button < sizeof(BUTTON_MAP) / sizeof(BUTTON_MAP[0]))
++		{
++			b = BUTTON_MAP[ev.jbutton.button];
++		}
++		pressed = ev.type == SDL_JOYBUTTONDOWN;
++		break;
++	case SDL_JOYHATMOTION:
++	{
++		if (debugInput()) fprintf(stderr, "pad: hat %d\n", ev.jhat.value);
++		static const Uint8 bits[4] = { SDL_HAT_UP, SDL_HAT_DOWN, SDL_HAT_LEFT, SDL_HAT_RIGHT };
++		for (int i = 0; i < 4; ++i)
++		{
++			bool now = (ev.jhat.value & bits[i]) != 0;
++			if (now != _down[i])
++			{
++				SDL_Event e;
++				e.type = now ? SDL_JOYBUTTONDOWN : SDL_JOYBUTTONUP;
++				e.jbutton.button = 11 + i;
++				handle(e);
++			}
++		}
++		return true;
++	}
++	case SDL_JOYAXISMOTION:
++	case SDL_JOYBALLMOTION:
++		return true;
++	default:
++		return false;
++	}
++	if (b < 0)
++	{
++		return true;
++	}
++	Uint32 now = SDL_GetTicks();
++	if (pressed && !_down[b])
++	{
++		_down[b] = true;
++		_downAt[b] = now;
++		_chord[b] = false;
++		_held[b] = false;
++		_nextRepeat[b] = now + REPEAT_FIRST;
++		if (_state == 0)
++		{
++			return true;
++		}
++		_active = true;
++		press((Btn)b);
++	}
++	else if (!pressed && _down[b])
++	{
++		_down[b] = false;
++		if (_state != 0)
++		{
++			release((Btn)b, now - _downAt[b]);
++		}
++	}
++	return true;
++}
++
++void PadNav::press(Btn b)
++{
++	think(); // a screen that just changed gets its focus first
++	if (debugInput()) fprintf(stderr, "pad: press %d mode %d panel %d state %s focus %p\n", (int)b, (int)_mode, (int)_panel, typeid(*_state).name(), (void*)_focus);
++	if (_mode == TEXT)
++	{
++		textPress(b);
++		return;
++	}
++	if (_panel)
++	{
++		if (b == SELECT) return; // on release
++		if (b == B) { _panel = false; if (_mode == BATTLE) battlePointAtTile(false); else if (_mode == GLOBE) { Globe *g = globe(); if (g) movePointer(g->_cenX, g->_cenY); } else if (_mode == INVENTORY) inventoryPoint(); else if (_mode == BASE) basePoint(); return; }
++		genericPress(b);
++		return;
++	}
++	switch (_mode)
++	{
++	case BATTLE: battlePress(b); break;
++	case GLOBE: globePress(b); break;
++	case INVENTORY: inventoryPress(b); break;
++	case BASE: basePress(b); break;
++	default: genericPress(b); break;
++	}
++}
++
++void PadNav::release(Btn b, Uint32 heldFor)
++{
++	(void)heldFor;
++	if (_pressedArrow != 0 && (b == LEFT || b == RIGHT))
++	{
++		mouse(_pressedArrowButton, false);
++		_pressedArrow = 0;
++		pointAtFocus();
++		return;
++	}
++	if (_mode == BATTLE && !_panel && b <= RIGHT && !_held[b] && !_down[SELECT])
++	{
++		// A tap too short to reach the diagonal window still takes its step.
++		_down[b] = true;
++		battleStep();
++		_down[b] = false;
++		_held[b] = true;
++		return;
++	}
++	if (_mode == GLOBE) globeRelease(b);
++	if (b == SELECT && !_chord[SELECT] && _mode != GENERIC && _mode != TEXT)
++	{
++		_panel = !_panel;
++		if (_panel)
++		{
++			chooseFocus();
++		}
++		else if (_mode == BATTLE) battlePointAtTile(false);
++		else if (_mode == GLOBE) { Globe *g = globe(); if (g) movePointer(g->_cenX, g->_cenY); }
++		else if (_mode == INVENTORY) inventoryPoint();
++		else if (_mode == BASE) basePoint();
++		return;
++	}
++	if (b == SELECT && !_chord[SELECT] && _mode == GENERIC)
++	{
++		std::vector<InteractiveSurface*> v;
++		collect(v, true);
++		if (v.size() > 1)
++		{
++			// Between a list and the buttons, else simply the next control.
++			size_t at = std::find(v.begin(), v.end(), _focus) - v.begin();
++			InteractiveSurface *next = v[(at + 1) % v.size()];
++			if (dynamic_cast<TextList*>(_focus))
++			{
++				for (size_t i = 0; i < v.size(); ++i)
++				{
++					if (!dynamic_cast<TextList*>(v[i]) && v[i]->_keyPress.count(Options::keyOk)) { next = v[i]; break; }
++				}
++			}
++			setFocus(next);
++		}
++		return;
++	}
++	if (b == START && !_chord[START] && _mode == BATTLE && !_panel)
++	{
++		key(Options::keyBattleInventory);
++	}
++	if (b == F2 && !_chord[F2])
++	{
++		return; // a short press does nothing: loading has to be meant
++	}
++}
++
++void PadNav::think()
++{
++	if (_game->_states.empty())
++	{
++		return;
++	}
++	State *s = _game->_states.back();
++	if (s != _state)
++	{
++		enterState(s);
++	}
++	if (_finishEdit != 0)
++	{
++		if (_finishState == s && _finishEdit->isFocused()) _finishEdit->setFocus(false);
++		_finishEdit = 0;
++	}
++	Mode m = modeOf(s);
++	if (m != _mode)
++	{
++		_mode = m;
++		_panel = false;
++		if (m == TEXT && dynamic_cast<BaseNameState*>(s))
++		{
++			// A name that's fine to accept; change it if you like.
++			TextEdit *t = editing(s);
++			if (t && t->_value.empty())
++			{
++				char name[32];
++				snprintf(name, sizeof name, "X-COM Base %d", (int)_game->getSavedGame()->getBases()->size());
++				t->setText(name);
++			}
++		}
++		if (_active) chooseFocus();
++	}
++	Uint32 now = SDL_GetTicks();
++	if (_ctrlUntil != 0 && now >= _ctrlUntil)
++	{
++		SDL_SetModState(KMOD_NONE);
++		_ctrlUntil = 0;
++	}
++	if (!_active)
++	{
++		return;
++	}
++	if (_mode == GENERIC || _panel)
++	{
++		// Open dropdown: its list is the focus.
++		ComboBox *combo = dynamic_cast<ComboBox*>(s->_modal);
++		if (combo)
++		{
++			if (_focus != combo->_list)
++			{
++				_remembered[s] = _focus;
++				_focus = combo->_list;
++				_row = (int)combo->_sel;
++				pointAtFocus();
++			}
++		}
++		else if (_focus != 0 && dynamic_cast<TextList*>(_focus) && dynamic_cast<ComboBox*>(_remembered[s]) && static_cast<ComboBox*>(_remembered[s])->_list == _focus)
++		{
++			_focus = _remembered[s];
++			pointAtFocus();
++		}
++		else
++		{
++			std::vector<InteractiveSurface*> v;
++			collect(v, true);
++			if (_focus == 0 || std::find(v.begin(), v.end(), _focus) == v.end())
++			{
++				chooseFocus();
++			}
++		}
++	}
++	// Held directions and shoulder paging repeat.
++	if (_mode == BATTLE && !_panel)
++	{
++		bool any = _down[UP] || _down[DOWN] || _down[LEFT] || _down[RIGHT];
++		if (any && !_down[SELECT])
++		{
++			bool due = false;
++			for (int i = UP; i <= RIGHT; ++i) if (_down[i] && now >= _nextRepeat[i]) due = true;
++			if (due)
++			{
++				battleStep();
++				for (int i = UP; i <= RIGHT; ++i) if (_down[i]) _nextRepeat[i] = now + (_held[i] ? REPEAT_NEXT : REPEAT_FIRST), _held[i] = true;
++			}
++		}
++		if (_down[START] && !_chord[START] && now - _downAt[START] >= HOLD_END_TURN)
++		{
++			_chord[START] = true;
++			buzz();
++			key(Options::keyBattleEndTurn);
++		}
++		battleThink();
++	}
++	else if (_mode != GLOBE || _panel)
++	{
++		for (int i = 0; i < BTN_COUNT; ++i)
++		{
++			if (_down[i] && (i <= RIGHT || i == L2 || i == R2) && now >= _nextRepeat[i])
++			{
++				_nextRepeat[i] = now + REPEAT_NEXT;
++				if (_pressedArrow == 0) repeat((Btn)i);
++			}
++		}
++	}
++	else
++	{
++		// Don't let the view roll over a pole: the world would turn upside down.
++		Globe *g = globe();
++		if (g && (_rotating[UP] || _rotating[DOWN]))
++		{
++			const double limit = 1.45;
++			if (g->_cenLat > limit) g->_cenLat = limit;
++			else if (g->_cenLat < -limit) g->_cenLat = -limit;
++		}
++	}
++	if (_mode == GLOBE && !_panel && _down[L2] && now >= _nextRepeat[L2]) { _nextRepeat[L2] = now + REPEAT_FIRST; key(Options::keyGeoZoomOut); }
++	else if (_mode == GLOBE && !_panel && _down[R2] && now >= _nextRepeat[R2]) { _nextRepeat[R2] = now + REPEAT_FIRST; key(Options::keyGeoZoomIn); }
++
++	if (_down[F2] && !_chord[F2] && now - _downAt[F2] >= HOLD_LOAD)
++	{
++		_chord[F2] = true;
++		if (_mode == BATTLE || _mode == GLOBE) key(Options::keyQuickLoad);
++	}
++}
++
++void PadNav::repeat(Btn b)
++{
++	if (_mode == TEXT) { textPress(b); return; }
++	if (_mode == INVENTORY && !_panel)
++	{
++		if (b <= RIGHT) inventoryMove(b == LEFT ? -1 : b == RIGHT ? 1 : 0, b == UP ? -1 : b == DOWN ? 1 : 0);
++		return;
++	}
++	if (_mode == BASE && !_panel)
++	{
++		if (b <= RIGHT) basePress(b);
++		return;
++	}
++	genericRepeat(b);
++}
++
++/* ---------- sending events ---------- */
++
++void PadNav::movePointer(int x, int y)
++{
++	_px = x;
++	_py = y;
++	int dx, dy;
++	pointer(&dx, &dy);
++	SDL_Event e;
++	e.type = SDL_MOUSEMOTION;
++	e.motion.which = SYNTHETIC;
++	e.motion.state = 0;
++	e.motion.x = dx;
++	e.motion.y = dy;
++	e.motion.xrel = 0;
++	e.motion.yrel = 0;
++	SDL_PushEvent(&e);
++}
++
++void PadNav::mouse(Uint8 button, bool down)
++{
++	int dx, dy;
++	pointer(&dx, &dy);
++	SDL_Event e;
++	e.type = down ? SDL_MOUSEBUTTONDOWN : SDL_MOUSEBUTTONUP;
++	e.button.which = SYNTHETIC;
++	e.button.button = button;
++	e.button.state = down ? SDL_PRESSED : SDL_RELEASED;
++	e.button.x = dx;
++	e.button.y = dy;
++	SDL_PushEvent(&e);
++}
++
++void PadNav::click(Uint8 button)
++{
++	mouse(button, true);
++	mouse(button, false);
++}
++
++void PadNav::keyEdge(SDLKey sym, bool down)
++{
++	SDL_Event e;
++	e.type = down ? SDL_KEYDOWN : SDL_KEYUP;
++	e.key.which = 0;
++	e.key.state = down ? SDL_PRESSED : SDL_RELEASED;
++	e.key.keysym.scancode = 0;
++	e.key.keysym.sym = sym;
++	e.key.keysym.mod = KMOD_NONE;
++	e.key.keysym.unicode = 0;
++	SDL_PushEvent(&e);
++}
++
++void PadNav::key(SDLKey sym)
++{
++	keyEdge(sym, true);
++	keyEdge(sym, false);
++}
++
++/* ---------- which screen ---------- */
++
++TextEdit *PadNav::editing(State *s) const
++{
++	if (TextEdit *t = dynamic_cast<TextEdit*>(s->_modal))
++	{
++		return t;
++	}
++	for (std::vector<Surface*>::const_iterator i = s->_surfaces.begin(); i != s->_surfaces.end(); ++i)
++	{
++		TextEdit *t = dynamic_cast<TextEdit*>(*i);
++		if (t && t->getVisible() && t->isFocused())
++		{
++			return t;
++		}
++	}
++	return 0;
++}
++
++PadNav::Mode PadNav::modeOf(State *s) const
++{
++	if (editing(s)) return TEXT;
++	if (dynamic_cast<BattlescapeState*>(s)) return BATTLE;
++	if (dynamic_cast<InventoryState*>(s)) return INVENTORY;
++	if (dynamic_cast<GeoscapeState*>(s) || dynamic_cast<SelectDestinationState*>(s) || dynamic_cast<BuildNewBaseState*>(s)) return GLOBE;
++	if (dynamic_cast<BasescapeState*>(s) || dynamic_cast<PlaceFacilityState*>(s) || dynamic_cast<PlaceLiftState*>(s)) return BASE;
++	return GENERIC;
++}
++
++void PadNav::enterState(State *s)
++{
++	_lastFocus.w = 0;
++	if (_state != 0 && _focus != 0 && _mode != BATTLE && _mode != GLOBE && !dynamic_cast<TextList*>(_focus))
++	{
++		_lastFocus.x = _focus->getX();
++		_lastFocus.y = _focus->getY();
++		_lastFocus.w = _focus->getWidth();
++		_lastFocus.h = _focus->getHeight();
++	}
++	if (_state != 0 && _focus != 0 && _mode != BATTLE && _mode != GLOBE)
++	{
++		_remembered[_state] = _focus;
++	}
++	stopRotating();
++	_state = s;
++	_mode = modeOf(s);
++	_panel = false;
++	_focus = 0;
++	_row = 0;
++	_pressedArrow = 0;
++	std::map<State*, InteractiveSurface*>::iterator r = _remembered.find(s);
++	if (r != _remembered.end())
++	{
++		std::vector<InteractiveSurface*> v;
++		collect(v, true);
++		if (std::find(v.begin(), v.end(), r->second) != v.end()) _focus = r->second;
++		_remembered.erase(r);
++	}
++	if (_focus == 0 && _lastFocus.w != 0 && _mode == GENERIC)
++	{
++		// A screen that replaces the last one in place, like Options tabs:
++		// stay on the same control.
++		std::vector<InteractiveSurface*> v;
++		collect(v, true);
++		for (size_t i = 0; i < v.size(); ++i)
++		{
++			if (v[i]->getX() == _lastFocus.x && v[i]->getY() == _lastFocus.y && v[i]->getWidth() == _lastFocus.w && v[i]->getHeight() == _lastFocus.h) _focus = v[i];
++		}
++	}
++	if (_mode == INVENTORY)
++	{
++		inventoryBuild();
++	}
++	if (_mode == TEXT && dynamic_cast<BaseNameState*>(s))
++	{
++		TextEdit *t = editing(s);
++		if (t && t->_value.empty())
++		{
++			char name[32];
++			snprintf(name, sizeof name, "X-COM Base %d", (int)_game->getSavedGame()->getBases()->size());
++			t->setText(name);
++		}
++	}
++	if (_active)
++	{
++		chooseFocus();
++	}
++}
++
++/* ---------- generic focus ---------- */
++
++bool PadNav::isBackground(InteractiveSurface *s) const
++{
++	return s->getWidth() * s->getHeight() >= 30000 && !dynamic_cast<TextList*>(s);
++}
++
++bool PadNav::usable(InteractiveSurface *s) const
++{
++	if (!s->getVisible() || s->_hidden)
++	{
++		return false;
++	}
++	if (dynamic_cast<Map*>(s) || dynamic_cast<Globe*>(s) || dynamic_cast<Inventory*>(s) || dynamic_cast<MiniBaseView*>(s))
++	{
++		return false;
++	}
++	if (dynamic_cast<BaseView*>(s) && _mode == BASE)
++	{
++		return false;
++	}
++	if (TextList *l = dynamic_cast<TextList*>(s))
++	{
++		return l->getRows() > 0 && (l->_selectable || l->_arrowPos != -1 || l->getRows() > l->getVisibleRows());
++	}
++	if (dynamic_cast<ComboBox*>(s) || dynamic_cast<Slider*>(s) || dynamic_cast<TextEdit*>(s) || dynamic_cast<ToggleTextButton*>(s))
++	{
++		return true;
++	}
++	// Radio-style buttons handle their own clicks.
++	if (TextButton *t = dynamic_cast<TextButton*>(s)) { if (t->_group) return true; }
++	if (ImageButton *t = dynamic_cast<ImageButton*>(s)) { if (t->_group) return true; }
++	if (_mode == GLOBE && s->getWidth() <= 23 && s->getHeight() <= 23)
++	{
++		return false; // the D-pad and shoulders turn and zoom the globe
++	}
++	return !s->_click.empty() || !s->_press.empty();
++}
++
++void PadNav::collect(std::vector<InteractiveSurface*> &out, bool noBackground) const
++{
++	for (std::vector<Surface*>::const_iterator i = _state->_surfaces.begin(); i != _state->_surfaces.end(); ++i)
++	{
++		InteractiveSurface *s = dynamic_cast<InteractiveSurface*>(*i);
++		if (s && usable(s) && !(noBackground && isBackground(s)))
++		{
++			out.push_back(s);
++		}
++	}
++}
++
++InteractiveSurface *PadNav::background() const
++{
++	std::vector<InteractiveSurface*> v;
++	collect(v, false);
++	for (size_t i = 0; i < v.size(); ++i)
++	{
++		if (isBackground(v[i])) return v[i];
++	}
++	return 0;
++}
++
++bool PadNav::handlesKey(SDLKey k) const
++{
++	for (std::vector<Surface*>::const_iterator i = _state->_surfaces.begin(); i != _state->_surfaces.end(); ++i)
++	{
++		InteractiveSurface *s = dynamic_cast<InteractiveSurface*>(*i);
++		if (s && s->getVisible() && !s->_hidden && s->_keyPress.count(k))
++		{
++			return true;
++		}
++	}
++	return false;
++}
++
++bool PadNav::handlesRightClick() const
++{
++	for (std::vector<Surface*>::const_iterator i = _state->_surfaces.begin(); i != _state->_surfaces.end(); ++i)
++	{
++		InteractiveSurface *s = dynamic_cast<InteractiveSurface*>(*i);
++		if (s && s->getVisible() && !s->_hidden && s->_click.count(SDL_BUTTON_RIGHT))
++		{
++			return true;
++		}
++	}
++	return false;
++}
++
++void PadNav::chooseFocus()
++{
++	if (_mode == BATTLE && !_panel) { battlePointAtTile(false); return; }
++	if (_mode == GLOBE && !_panel) { Globe *g = globe(); if (g) movePointer(g->_cenX, g->_cenY); return; }
++	if (_mode == INVENTORY && !_panel) { inventoryPoint(); return; }
++	if (_mode == BASE && !_panel) { basePoint(); return; }
++	if (_mode == TEXT) return;
++
++	std::vector<InteractiveSurface*> v;
++	collect(v, true);
++	if (_focus != 0 && std::find(v.begin(), v.end(), _focus) != v.end())
++	{
++		pointAtFocus();
++		return;
++	}
++	InteractiveSurface *best = 0;
++	// A list first, since that is what most list screens are for; then the
++	// button Enter would press; then whatever comes first on screen.
++	for (size_t i = 0; i < v.size() && !best; ++i) if (dynamic_cast<TextList*>(v[i])) best = v[i];
++	if (v.size() <= 3)
++	{
++		for (size_t i = 0; i < v.size() && !best; ++i) if (v[i]->_keyPress.count(Options::keyOk)) best = v[i];
++	}
++	int top = INT_MAX;
++	if (!best && !v.empty())
++	{
++		for (size_t i = 0; i < v.size(); ++i)
++		{
++			int score = v[i]->getY() * 1000 + v[i]->getX();
++			if (score < top) { top = score; best = v[i]; }
++		}
++	}
++	_row = 0;
++	setFocus(best);
++}
++
++void PadNav::setFocus(InteractiveSurface *s)
++{
++	_focus = s;
++	if (debugInput() && s) fprintf(stderr, "pad: focus %d,%d %dx%d\n", s->getX(), s->getY(), s->getWidth(), s->getHeight());
++	if (TextList *l = dynamic_cast<TextList*>(s))
++	{
++		_row = std::min((int)l->_scroll, (int)l->getRows() - 1);
++		if (_row < 0) _row = 0;
++	}
++	pointAtFocus();
++}
++
++void PadNav::pointAtFocus()
++{
++	if (_focus == 0)
++	{
++		// Nothing to focus: full-screen reports continue on A.
++		InteractiveSurface *bg = background();
++		if (bg) movePointer(bg->getX() + bg->getWidth() / 2, bg->getY() + bg->getHeight() / 2);
++		return;
++	}
++	if (TextList *l = dynamic_cast<TextList*>(_focus))
++	{
++		int rows = (int)l->getRows();
++		if (_row >= rows) _row = rows - 1;
++		if (_row < 0) _row = 0;
++		int visible = (int)l->getVisibleRows();
++		if (_row < (int)l->_scroll) l->scrollTo(_row);
++		else if (_row >= (int)l->_scroll + visible) l->scrollTo(_row - visible + 1);
++		int h = l->_font->getHeight() + l->_font->getSpacing();
++		movePointer(l->getX() + l->getWidth() / 2, l->getY() + (_row - (int)l->_scroll) * h + h / 2);
++		return;
++	}
++	movePointer(_focus->getX() + _focus->getWidth() / 2, _focus->getY() + _focus->getHeight() / 2);
++}
++
++bool PadNav::moveFocus(int dx, int dy)
++{
++	std::vector<InteractiveSurface*> v;
++	collect(v, true);
++	if (_focus == 0) { chooseFocus(); return _focus != 0; }
++	int cx = _px, cy = _py;
++	InteractiveSurface *best = 0;
++	long bestScore = LONG_MAX;
++	for (size_t i = 0; i < v.size(); ++i)
++	{
++		InteractiveSurface *s = v[i];
++		if (s == _focus) continue;
++		// Distance to the widget's nearest edge counts, so tall lists and
++		// wide buttons are reached as you'd expect.
++		int nx = std::max(s->getX(), std::min(cx, s->getX() + s->getWidth() - 1));
++		int ny = std::max(s->getY(), std::min(cy, s->getY() + s->getHeight() - 1));
++		int mainAxis = dx ? (nx - cx) * dx : (ny - cy) * dy;
++		int cross = dx ? abs(ny - cy) : abs(nx - cx);
++		if (mainAxis <= 0) continue;
++		long score = mainAxis + 3L * cross;
++		if (score < bestScore) { bestScore = score; best = s; }
++	}
++	if (!best) return false;
++	_row = 0;
++	if (TextList *l = dynamic_cast<TextList*>(best))
++	{
++		_focus = best;
++		_row = dy < 0 ? std::min((int)l->_scroll + (int)l->getVisibleRows(), (int)l->getRows()) - 1 : (int)l->_scroll;
++		pointAtFocus();
++		return true;
++	}
++	setFocus(best);
++	return true;
++}
++
++bool PadNav::nudgeRow(int delta)
++{
++	TextList *l = dynamic_cast<TextList*>(_focus);
++	if (!l) return false;
++	if (!l->_selectable && l->_arrowPos == -1)
++	{
++		int scroll = (int)l->_scroll + delta;
++		if (scroll < 0 || scroll + l->getVisibleRows() > l->getRows()) return false;
++		l->scrollTo(scroll);
++		return true;
++	}
++	int rows = (int)l->getRows(), r = _row;
++	size_t cur = l->_rows[std::min(r, rows - 1)];
++	// Wrapped entries span lines: a step is one entry.
++	do { r += delta; } while (r >= 0 && r < rows && l->_rows[r] == cur);
++	if (r < 0 || r >= rows) return false;
++	if (delta < 0)
++	{
++		size_t entry = l->_rows[r];
++		while (r > 0 && l->_rows[r - 1] == entry) --r;
++	}
++	_row = r;
++	pointAtFocus();
++	return true;
++}
++
++void PadNav::pageRow(int delta)
++{
++	TextList *l = dynamic_cast<TextList*>(_focus);
++	if (!l) return;
++	int visible = (int)l->getVisibleRows();
++	_row = std::max(0, std::min((int)l->getRows() - 1, _row + delta * visible));
++	if (!l->_selectable && l->_arrowPos == -1)
++	{
++		l->scrollTo(std::min(_row, std::max(0, (int)l->getRows() - visible)));
++		return;
++	}
++	pointAtFocus();
++}
++
++InteractiveSurface *PadNav::arrowOf(TextList *l, bool more) const
++{
++	if (l->_arrowPos == -1 || _row >= (int)l->_rows.size()) return 0;
++	size_t idx = l->_rows[_row];
++	if (idx >= l->_arrowLeft.size()) return 0;
++	// In up/down arrows, up adds. In left/right arrows, right adds.
++	bool useLeft = l->_arrowType == ARROW_VERTICAL ? more : !more;
++	return useLeft ? static_cast<InteractiveSurface*>(l->_arrowLeft[idx]) : static_cast<InteractiveSurface*>(l->_arrowRight[idx]);
++}
++
++void PadNav::genericBack()
++{
++	if (ComboBox *c = dynamic_cast<ComboBox*>(_state->_modal))
++	{
++		c->toggle();
++		return;
++	}
++	if (handlesKey(Options::keyCancel)) key(Options::keyCancel);
++	else if (handlesRightClick()) click(SDL_BUTTON_RIGHT);
++	else if (background()) { pointAtFocus(); click(); }
++	else click(SDL_BUTTON_RIGHT); // small popups that watch for it themselves
++}
++
++void PadNav::genericStart()
++{
++	if (handlesKey(Options::keyOk)) key(Options::keyOk);
++	else if (handlesKey(Options::keyCancel)) key(Options::keyCancel);
++	else { pointAtFocus(); click(); }
++}
++
++void PadNav::genericPress(Btn b)
++{
++	// Between turns: any button carries on, as any key and click do.
++	if (dynamic_cast<NextTurnState*>(_state))
++	{
++		click();
++		return;
++	}
++	TextList *l = dynamic_cast<TextList*>(_focus);
++	bool reorder = l && (dynamic_cast<CraftSoldiersState*>(_state) || dynamic_cast<ModListState*>(_state));
++	switch (b)
++	{
++	case UP:
++	case DOWN:
++		if (reorder && _down[X])
++		{
++			_chord[X] = true;
++			InteractiveSurface *a = b == UP ? static_cast<InteractiveSurface*>(l->_arrowLeft[l->_rows[_row]]) : static_cast<InteractiveSurface*>(l->_arrowRight[l->_rows[_row]]);
++			movePointer(a->getX() + a->getWidth() / 2, a->getY() + a->getHeight() / 2);
++			click();
++			_row += b == UP ? -1 : 1;
++			pointAtFocus();
++			break;
++		}
++		if (!nudgeRow(b == UP ? -1 : 1)) moveFocus(0, b == UP ? -1 : 1);
++		break;
++	case LEFT:
++	case RIGHT:
++		if (l && l->_arrowPos != -1 && !reorder)
++		{
++			InteractiveSurface *a = arrowOf(l, b == RIGHT);
++			if (a)
++			{
++				movePointer(a->getX() + a->getWidth() / 2, a->getY() + a->getHeight() / 2);
++				mouse(SDL_BUTTON_LEFT, true);
++				_pressedArrow = a;
++				_pressedArrowButton = SDL_BUTTON_LEFT;
++			}
++			break;
++		}
++		if (Slider *s = dynamic_cast<Slider*>(_focus))
++		{
++			int step = std::max(1, (s->_max - s->_min) / 16);
++			s->setValue(s->getValue() + (b == RIGHT ? step : -step));
++			if (s->_change)
++			{
++				SDL_Event ev;
++				ev.type = SDL_MOUSEMOTION;
++				Action a(&ev, 1.0, 1.0, 0, 0);
++				(_state->*(s->_change))(&a);
++			}
++			break;
++		}
++		moveFocus(b == LEFT ? -1 : 1, 0);
++		break;
++	case A:
++		if (_focus == 0) { pointAtFocus(); click(); break; }
++		pointAtFocus();
++		click();
++		break;
++	case B:
++		genericBack();
++		break;
++	case X:
++		if (l && l->_arrowPos != -1 && !reorder)
++		{
++			// All or none: the original's right-click on the arrows.
++			static int lastRow = -1;
++			static bool toMax = true;
++			if (lastRow != _row) { toMax = true; lastRow = _row; }
++			InteractiveSurface *a = arrowOf(l, toMax);
++			toMax = !toMax;
++			if (a)
++			{
++				movePointer(a->getX() + a->getWidth() / 2, a->getY() + a->getHeight() / 2);
++				click(SDL_BUTTON_RIGHT);
++				pointAtFocus();
++			}
++		}
++		else if (!reorder && handlesRightClick())
++		{
++			click(SDL_BUTTON_RIGHT);
++		}
++		break;
++	case L1:
++	case R1:
++		if (handlesKey(b == L1 ? Options::keyGeoLeft : Options::keyGeoRight)) key(b == L1 ? Options::keyGeoLeft : Options::keyGeoRight);
++		else if (handlesKey(b == L1 ? Options::keyBattlePrevUnit : Options::keyBattleNextUnit)) key(b == L1 ? Options::keyBattlePrevUnit : Options::keyBattleNextUnit);
++		break;
++	case L2:
++		pageRow(-1);
++		break;
++	case R2:
++		pageRow(1);
++		break;
++	case START:
++		genericStart();
++		break;
++	default:
++		break;
++	}
++}
++
++void PadNav::genericRepeat(Btn b)
++{
++	if (b == UP || b == DOWN)
++	{
++		if (!nudgeRow(b == UP ? -1 : 1) && !dynamic_cast<TextList*>(_focus)) moveFocus(0, b == UP ? -1 : 1);
++	}
++	else if (b == LEFT || b == RIGHT)
++	{
++		if (dynamic_cast<Slider*>(_focus)) genericPress(b);
++		else if (!dynamic_cast<TextList*>(_focus)) moveFocus(b == LEFT ? -1 : 1, 0);
++	}
++	else if (b == L2) pageRow(-1);
++	else if (b == R2) pageRow(1);
++}
++
++/* ---------- Battlescape ---------- */
++
++BattlescapeState *PadNav::battle() const
++{
++	return dynamic_cast<BattlescapeState*>(_state);
++}
++
++void PadNav::battlePointAtTile(bool scroll)
++{
++	BattlescapeState *s = battle();
++	if (!s) return;
++	Camera *cam = s->_map->getCamera();
++	Position off = cam->getMapOffset(), scr;
++	_tile.z = cam->getViewLevel();
++	cam->convertMapToScreen(_tile, &scr);
++	int px = scr.x + off.x + 16, py = scr.y + off.y + 24;
++	int w = s->_map->getWidth(), h = s->_map->_visibleMapHeight;
++	if (scroll)
++	{
++		int dx = 0, dy = 0;
++		if (px < 48) dx = 48 - px; else if (px > w - 48) dx = w - 48 - px;
++		if (py < 32) dy = 32 - py; else if (py > h - 32) dy = h - 32 - py;
++		if (dx || dy)
++		{
++			cam->scrollXY(dx, dy, true);
++			off = cam->getMapOffset();
++			px = scr.x + off.x + 16;
++			py = scr.y + off.y + 24;
++		}
++	}
++	_lastOffset = off;
++	// The screen spot that the map itself reads back as this tile.
++	int first = INT_MAX, last = INT_MIN;
++	for (int y = py - 28; y < py + 40; ++y)
++	{
++		int mx, my;
++		cam->convertScreenToMap(px, y + s->_map->_spriteHeight / 4, &mx, &my);
++		if (mx == _tile.x && my == _tile.y)
++		{
++			first = std::min(first, y);
++			last = std::max(last, y);
++		}
++	}
++	if (first != INT_MAX) py = (first + last) / 2;
++	if (debugInput()) { Position sel; s->_map->getSelectorPosition(&sel); fprintf(stderr, "pad: tile %d,%d,%d -> %d,%d (seen %d..%d) selector %d,%d offset %d,%d\n", _tile.x, _tile.y, _tile.z, px, py, first, last, sel.x, sel.y, off.x, off.y); }
++	if (py < 0 || py >= h || px < 0 || px >= w) return; // out of view; the cursor returns with the camera
++	movePointer(px, py);
++}
++
++void PadNav::battleCursorTo(const Position &p)
++{
++	BattlescapeState *s = battle();
++	if (!s) return;
++	_tile = p;
++	s->_map->getCamera()->setViewLevel(p.z);
++	battlePointAtTile(true);
++}
++
++void PadNav::battleStep()
++{
++	BattlescapeState *s = battle();
++	if (!s) return;
++	// Up moves straight up the screen; two directions step along the grid.
++	int dx = 0, dy = 0;
++	if (_down[UP]) { dx -= 1; dy -= 1; }
++	if (_down[DOWN]) { dx += 1; dy += 1; }
++	if (_down[LEFT]) { dx -= 1; dy += 1; }
++	if (_down[RIGHT]) { dx += 1; dy -= 1; }
++	dx = std::max(-1, std::min(1, dx));
++	dy = std::max(-1, std::min(1, dy));
++	_tile.x = std::max(0, std::min(s->_save->getMapSizeX() - 1, _tile.x + dx));
++	_tile.y = std::max(0, std::min(s->_save->getMapSizeY() - 1, _tile.y + dy));
++	battlePointAtTile(true);
++}
++
++void PadNav::battleJumpEnemy(int delta)
++{
++	BattlescapeState *s = battle();
++	if (!s) return;
++	BattleUnit *u = s->_save->getSelectedUnit();
++	if (!u) return;
++	std::vector<BattleUnit*> *v = u->getVisibleUnits();
++	if (v->empty()) return;
++	if (delta == 0)
++	{
++		// Nearest first.
++		int best = INT_MAX;
++		_enemy = 0;
++		for (size_t i = 0; i < v->size(); ++i)
++		{
++			Position d = (*v)[i]->getPosition() - u->getPosition();
++			int dist = d.x * d.x + d.y * d.y + d.z * d.z;
++			if (dist < best) { best = dist; _enemy = (int)i; }
++		}
++	}
++	else
++	{
++		_enemy = (_enemy + delta + (int)v->size()) % (int)v->size();
++	}
++	battleCursorTo((*v)[std::min(_enemy, (int)v->size() - 1)]->getPosition());
++}
++
++void PadNav::battleThink()
++{
++	BattlescapeState *s = battle();
++	if (!s) return;
++	BattleUnit *u = s->_save->getSelectedUnit();
++	if ((void*)u != _lastUnit)
++	{
++		_lastUnit = u;
++		if (u && s->_save->getSide() == FACTION_PLAYER)
++		{
++			battleCursorTo(u->getPosition());
++		}
++	}
++	bool targeting = s->_battleGame->getCurrentAction()->targeting;
++	if (targeting && !_lastTargeting)
++	{
++		battleJumpEnemy(0);
++	}
++	_lastTargeting = targeting;
++	Position off = s->_map->getCamera()->getMapOffset();
++	if (off.x != _lastOffset.x || off.y != _lastOffset.y || off.z != _lastOffset.z)
++	{
++		battlePointAtTile(false);
++		_lastOffset = off;
++	}
++}
++
++void PadNav::battlePress(Btn b)
++{
++	BattlescapeState *s = battle();
++	if (!s) return;
++	bool layer = _down[SELECT];
++	if (layer && b != SELECT) _chord[SELECT] = true;
++	switch (b)
++	{
++	case UP:
++	case DOWN:
++		if (layer)
++		{
++			key(b == UP ? Options::keyBattleLevelUp : Options::keyBattleLevelDown);
++			break;
++		}
++		_nextRepeat[b] = SDL_GetTicks() + 35; // room to land a diagonal
++		_held[b] = false;
++		break;
++	case LEFT:
++	case RIGHT:
++		if (layer)
++		{
++			battleJumpEnemy(b == LEFT ? -1 : 1);
++			break;
++		}
++		_nextRepeat[b] = SDL_GetTicks() + 35;
++		_held[b] = false;
++		break;
++	case A:
++		battlePointAtTile(false);
++		if (layer)
++		{
++			SDL_SetModState(KMOD_LCTRL);
++			_ctrlUntil = SDL_GetTicks() + 100;
++		}
++		click();
++		break;
++	case B:
++		if (!s->_battleGame->cancelCurrentAction(true))
++		{
++			BattleUnit *u = s->_save->getSelectedUnit();
++			if (u) battleCursorTo(u->getPosition());
++			key(Options::keyBattleCenterUnit);
++		}
++		break;
++	case X:
++		key(layer ? Options::keyBattleReload : Options::keyBattleKneel);
++		break;
++	case Y:
++		battlePointAtTile(false);
++		click(SDL_BUTTON_RIGHT);
++		break;
++	case L1:
++		key(Options::keyBattleUseLeftHand);
++		break;
++	case R1:
++		key(Options::keyBattleUseRightHand);
++		break;
++	case L2:
++	case R2:
++		if (s->_battleGame->getCurrentAction()->targeting) battleJumpEnemy(b == L2 ? -1 : 1);
++		else key(b == L2 ? Options::keyBattlePrevUnit : Options::keyBattleNextUnit);
++		break;
++	case F1:
++		key(Options::keyQuickSave);
++		break;
++	default:
++		break;
++	}
++}
++
++/* ---------- Geoscape ---------- */
++
++Globe *PadNav::globe() const
++{
++	if (GeoscapeState *g = dynamic_cast<GeoscapeState*>(_state)) return g->getGlobe();
++	if (SelectDestinationState *g = dynamic_cast<SelectDestinationState*>(_state)) return g->_globe;
++	if (BuildNewBaseState *g = dynamic_cast<BuildNewBaseState*>(_state)) return g->_globe;
++	return 0;
++}
++
++void PadNav::stopRotating()
++{
++	static const int n = 4;
++	SDLKey keys[n] = { Options::keyGeoUp, Options::keyGeoDown, Options::keyGeoLeft, Options::keyGeoRight };
++	for (int i = 0; i < n; ++i)
++	{
++		if (_rotating[i])
++		{
++			keyEdge(keys[i], false);
++			_rotating[i] = false;
++		}
++	}
++}
++
++void PadNav::globeRelease(Btn b)
++{
++	if (b > RIGHT || !_rotating[b]) return;
++	SDLKey keys[4] = { Options::keyGeoUp, Options::keyGeoDown, Options::keyGeoLeft, Options::keyGeoRight };
++	keyEdge(keys[b], false);
++	_rotating[b] = false;
++}
++
++void PadNav::globeContact(int delta)
++{
++	Globe *g = globe();
++	SavedGame *save = _game->getSavedGame();
++	if (!g || !save) return;
++	std::vector<Target*> list;
++	for (std::vector<Ufo*>::iterator i = save->getUfos()->begin(); i != save->getUfos()->end(); ++i)
++		if ((*i)->getDetected()) list.push_back(*i);
++	for (std::vector<MissionSite*>::iterator i = save->getMissionSites()->begin(); i != save->getMissionSites()->end(); ++i)
++		list.push_back(*i);
++	for (std::vector<AlienBase*>::iterator i = save->getAlienBases()->begin(); i != save->getAlienBases()->end(); ++i)
++		if ((*i)->isDiscovered()) list.push_back(*i);
++	for (std::vector<Base*>::iterator i = save->getBases()->begin(); i != save->getBases()->end(); ++i)
++		for (std::vector<Craft*>::iterator c = (*i)->getCrafts()->begin(); c != (*i)->getCrafts()->end(); ++c)
++			if ((*c)->getStatus() == "STR_OUT") list.push_back(*c);
++	for (std::vector<Base*>::iterator i = save->getBases()->begin(); i != save->getBases()->end(); ++i)
++		list.push_back(*i);
++	if (list.empty()) return;
++	_contact = (_contact + delta + (int)list.size() * 2) % (int)list.size();
++	g->center(list[_contact]->getLongitude(), list[_contact]->getLatitude());
++}
++
++void PadNav::globePress(Btn b)
++{
++	GeoscapeState *geo = dynamic_cast<GeoscapeState*>(_state);
++	Globe *g = globe();
++	if (!g) return;
++	movePointer(g->_cenX, g->_cenY);
++	switch (b)
++	{
++	case UP:
++	case DOWN:
++	case LEFT:
++	case RIGHT:
++	{
++		SDLKey keys[4] = { Options::keyGeoUp, Options::keyGeoDown, Options::keyGeoLeft, Options::keyGeoRight };
++		keyEdge(keys[b], true);
++		_rotating[b] = true;
++		break;
++	}
++	case L2:
++		key(Options::keyGeoZoomOut);
++		break;
++	case R2:
++		key(Options::keyGeoZoomIn);
++		break;
++	case L1:
++		globeContact(-1);
++		break;
++	case R1:
++		globeContact(1);
++		break;
++	case A:
++		click();
++		break;
++	case B:
++		if (!geo && handlesKey(Options::keyCancel)) key(Options::keyCancel);
++		break;
++	case X:
++	case Y:
++		if (geo)
++		{
++			TextButton *speeds[6] = { geo->_btn5Secs, geo->_btn1Min, geo->_btn5Mins, geo->_btn30Mins, geo->_btn1Hour, geo->_btn1Day };
++			SDLKey keys[6] = { Options::keyGeoSpeed1, Options::keyGeoSpeed2, Options::keyGeoSpeed3, Options::keyGeoSpeed4, Options::keyGeoSpeed5, Options::keyGeoSpeed6 };
++			int at = 0;
++			for (int i = 0; i < 6; ++i) if (geo->_timeSpeed == speeds[i]) at = i;
++			key(keys[b == X ? std::min(5, at + 1) : 0]);
++		}
++		break;
++	case START:
++		if (geo) key(Options::keyGeoIntercept);
++		break;
++	case F1:
++		if (geo) key(Options::keyQuickSave);
++		break;
++	default:
++		break;
++	}
++}
++
++/* ---------- Inventory ---------- */
++
++InventoryState *PadNav::inventory() const
++{
++	return dynamic_cast<InventoryState*>(_state);
++}
++
++void PadNav::inventoryBuild()
++{
++	_cells.clear();
++	_cell = 0;
++	std::map<std::string, RuleInventory*> *rules = _game->getMod()->getInventories();
++	for (std::map<std::string, RuleInventory*>::iterator r = rules->begin(); r != rules->end(); ++r)
++	{
++		// The rule itself says which cell a screen position belongs to.
++		std::map<std::pair<int, int>, SDL_Rect> found;
++		for (int y = 0; y < 200; ++y)
++		{
++			for (int x = 0; x < 320; ++x)
++			{
++				int sx = x, sy = y;
++				if (!r->second->checkSlotInPosition(&sx, &sy)) continue;
++				std::pair<int, int> at(sx, sy);
++				std::map<std::pair<int, int>, SDL_Rect>::iterator f = found.find(at);
++				if (f == found.end())
++				{
++					SDL_Rect q; q.x = x; q.y = y; q.w = 1; q.h = 1;
++					found[at] = q;
++				}
++				else
++				{
++					f->second.w = std::max((int)f->second.w, x - f->second.x + 1);
++					f->second.h = std::max((int)f->second.h, y - f->second.y + 1);
++				}
++			}
++		}
++		for (std::map<std::pair<int, int>, SDL_Rect>::iterator f = found.begin(); f != found.end(); ++f)
++		{
++			Cell c;
++			c.rule = r->second;
++			c.sx = f->first.first;
++			c.sy = f->first.second;
++			c.cx = f->second.x;
++			c.cy = f->second.y;
++			c.w = f->second.w;
++			c.h = f->second.h;
++			_cells.push_back(c);
++		}
++	}
++	// Start on the right hand: where a soldier's weapon usually is.
++	for (size_t i = 0; i < _cells.size(); ++i)
++	{
++		if (_cells[i].rule->getId() == "STR_RIGHT_HAND") { _cell = (int)i; break; }
++	}
++}
++
++void *PadNav::itemAt(const Cell &c) const
++{
++	InventoryState *s = inventory();
++	if (!s || !s->_inv->_selUnit) return 0;
++	int x = c.sx;
++	if (c.rule->getType() == INV_GROUND) x += s->_inv->_groundOffset;
++	return s->_inv->_selUnit->getItem(c.rule, x, c.sy);
++}
++
++void PadNav::inventoryPoint()
++{
++	InventoryState *s = inventory();
++	if (!s || _cells.empty()) return;
++	const Cell &c = _cells[_cell];
++	movePointer(s->_inv->getX() + c.cx + c.w / 2, s->_inv->getY() + c.cy + c.h / 2);
++}
++
++void PadNav::inventoryMove(int dx, int dy)
++{
++	InventoryState *s = inventory();
++	if (!s || _cells.empty()) return;
++	const Cell &cur = _cells[_cell];
++	void *curItem = s->_inv->getSelectedItem() ? 0 : itemAt(cur);
++	int cx = cur.cx + cur.w / 2, cy = cur.cy + cur.h / 2;
++	int best = -1;
++	long bestScore = LONG_MAX;
++	for (size_t i = 0; i < _cells.size(); ++i)
++	{
++		const Cell &c = _cells[i];
++		if ((int)i == _cell) continue;
++		if (curItem && itemAt(c) == curItem) continue; // an item is one stop
++		int x = c.cx + c.w / 2, y = c.cy + c.h / 2;
++		int mainAxis = dx ? (x - cx) * dx : (y - cy) * dy;
++		int cross = dx ? abs(y - cy) : abs(x - cx);
++		if (mainAxis <= 0) continue;
++		long score = mainAxis + 3L * cross;
++		if (score < bestScore) { bestScore = score; best = (int)i; }
++	}
++	if (best >= 0)
++	{
++		_cell = best;
++		inventoryPoint();
++	}
++}
++
++void PadNav::inventoryPress(Btn b)
++{
++	InventoryState *s = inventory();
++	if (!s) return;
++	switch (b)
++	{
++	case UP: inventoryMove(0, -1); break;
++	case DOWN: inventoryMove(0, 1); break;
++	case LEFT: inventoryMove(-1, 0); break;
++	case RIGHT: inventoryMove(1, 0); break;
++	case A:
++		inventoryPoint();
++		click();
++		inventoryPoint();
++		break;
++	case B:
++		if (s->_inv->getSelectedItem())
++		{
++			inventoryPoint();
++			click(SDL_BUTTON_RIGHT);
++			inventoryPoint();
++		}
++		else key(Options::keyCancel);
++		break;
++	case X:
++		s->btnUnloadClick(0);
++		inventoryPoint();
++		break;
++	case Y:
++		// The original's Ctrl-click: the item goes where it fits best.
++		inventoryPoint();
++		SDL_SetModState(KMOD_LCTRL);
++		_ctrlUntil = SDL_GetTicks() + 100;
++		click();
++		inventoryPoint();
++		break;
++	case L1: key(Options::keyBattlePrevUnit); break;
++	case R1: key(Options::keyBattleNextUnit); break;
++	case L2:
++	case R2:
++		s->btnGroundClick(0);
++		break;
++	case START: key(Options::keyCancel); break;
++	default: break;
++	}
++}
++
++/* ---------- Base ---------- */
++
++BaseView *PadNav::baseView() const
++{
++	if (BasescapeState *s = dynamic_cast<BasescapeState*>(_state)) return s->_view;
++	if (PlaceFacilityState *s = dynamic_cast<PlaceFacilityState*>(_state)) return s->_view;
++	if (PlaceLiftState *s = dynamic_cast<PlaceLiftState*>(_state)) return s->_view;
++	return 0;
++}
++
++void PadNav::basePoint()
++{
++	BaseView *v = baseView();
++	if (!v) return;
++	movePointer(v->getX() + _gx * GRID + GRID / 2, v->getY() + _gy * GRID + GRID / 2);
++}
++
++void PadNav::basePress(Btn b)
++{
++	BasescapeState *s = dynamic_cast<BasescapeState*>(_state);
++	switch (b)
++	{
++	case UP: _gy = std::max(0, _gy - 1); basePoint(); break;
++	case DOWN: _gy = std::min(5, _gy + 1); basePoint(); break;
++	case LEFT: _gx = std::max(0, _gx - 1); basePoint(); break;
++	case RIGHT:
++		if (_gx < 5) { _gx++; basePoint(); }
++		else if (s) { _panel = true; _focus = 0; chooseFocus(); }
++		break;
++	case A: basePoint(); click(); break;
++	case X: basePoint(); click(SDL_BUTTON_RIGHT); break;
++	case B: genericBack(); break;
++	case START: genericBack(); break;
++	case L1:
++	case R1:
++		if (s)
++		{
++			std::vector<Base*> *bases = _game->getSavedGame()->getBases();
++			size_t at = std::find(bases->begin(), bases->end(), s->_base) - bases->begin();
++			if (at < bases->size())
++			{
++				s->setBase((*bases)[(at + (b == R1 ? 1 : bases->size() - 1)) % bases->size()]);
++				s->init();
++			}
++		}
++		break;
++	case F1:
++		key(Options::keyQuickSave);
++		break;
++	default: break;
++	}
++}
++
++/* ---------- naming things ---------- */
++
++void PadNav::textPress(Btn b)
++{
++	TextEdit *t = editing(_state);
++	if (!t) return;
++	switch (b)
++	{
++	case UP: key(SDLK_UP); break;
++	case DOWN: key(SDLK_DOWN); break;
++	case LEFT: key(SDLK_LEFT); break;
++	case RIGHT: key(SDLK_RIGHT); break;
++	case A:
++	case START:
++		if (t->_value.empty()) t->_value += t->_char;
++		key(Options::keyOk);
++		// Most screens listen for Enter; the rest just stop editing, once
++		// that key has been seen.
++		_finishEdit = t;
++		_finishState = _state;
++		break;
++	case B:
++		t->setFocus(false);
++		break;
++	default: break;
++	}
++}
++
++/* ---------- drawing ---------- */
++
++int PadNav::nearestColour(Surface *s, int r, int g, int b) const
++{
++	SDL_Color *pal = s->getPalette();
++	int best = 1;
++	long bestD = LONG_MAX;
++	for (int i = 1; i < 256; ++i)
++	{
++		long d = (pal[i].r - r) * (pal[i].r - r) + (pal[i].g - g) * (pal[i].g - g) + (pal[i].b - b) * (pal[i].b - b);
++		if (d < bestD) { bestD = d; best = i; }
++	}
++	return best;
++}
++
++void PadNav::shade(Surface *screen, int x, int y, int w, int h)
++{
++	// The same colours, lighter: the palette's closest match to each one.
++	// Rebuilt only when the palette changes.
++	SDL_Color *pal = screen->getPalette();
++	Uint32 key = 1;
++	for (int i = 0; i < 256; ++i) key = key * 31 + pal[i].r + (pal[i].g << 8) + (pal[i].b << 16);
++	if (key != _liftKey)
++	{
++		_liftKey = key;
++		for (int i = 0; i < 256; ++i)
++		{
++			_lift[i] = (Uint8)nearestColour(screen, std::min(255, pal[i].r * 5 / 4 + 40), std::min(255, pal[i].g * 5 / 4 + 40), std::min(255, pal[i].b * 5 / 4 + 40));
++		}
++	}
++	screen->lock();
++	for (int j = std::max(0, y); j < std::min(screen->getHeight(), y + h); ++j)
++	{
++		for (int i = std::max(0, x); i < std::min(screen->getWidth(), x + w); ++i)
++		{
++			Uint8 p = screen->getPixel(i, j);
++			if (p != 0)
++			{
++				screen->setPixel(i, j, _lift[p]);
++			}
++		}
++	}
++	screen->unlock();
++}
++
++void PadNav::blit(Surface *screen)
++{
++	if (!_active || _state == 0 || _game->_states.back() != _state)
++	{
++		return;
++	}
++	if (_mode == TEXT) return;
++	if (_mode == GLOBE && !_panel)
++	{
++		Globe *g = globe();
++		if (!g) return;
++		Uint8 c = (Uint8)nearestColour(screen, 255, 194, 61);
++		int x = g->_cenX, y = g->_cenY;
++		SDL_Rect r[4] = { {(Sint16)(x - 10), (Sint16)(y - 1), 7, 2}, {(Sint16)(x + 3), (Sint16)(y - 1), 7, 2}, {(Sint16)(x - 1), (Sint16)(y - 10), 2, 7}, {(Sint16)(x - 1), (Sint16)(y + 3), 2, 7} };
++		for (int i = 0; i < 4; ++i) screen->drawRect(&r[i], c);
++		return;
++	}
++	if (_mode == BATTLE && !_panel) return; // the map draws its own tile cursor
++	if (_mode == INVENTORY && !_panel)
++	{
++		InventoryState *s = inventory();
++		if (s && !_cells.empty() && !s->_inv->getSelectedItem())
++		{
++			const Cell &c = _cells[_cell];
++			shade(screen, s->_inv->getX() + c.cx, s->_inv->getY() + c.cy, c.w, c.h);
++		}
++		return;
++	}
++	if (_mode == BASE && !_panel)
++	{
++		BaseView *v = baseView();
++		if (v && dynamic_cast<BasescapeState*>(_state))
++		{
++			shade(screen, v->getX() + _gx * GRID, v->getY() + _gy * GRID, GRID, GRID);
++		}
++		return;
++	}
++	if (_focus == 0) return;
++	if (TextList *l = dynamic_cast<TextList*>(_focus))
++	{
++		// Selectable lists highlight their own row under the pointer.
++		if (!l->_selectable && l->_arrowPos != -1)
++		{
++			int h = l->_font->getHeight() + l->_font->getSpacing();
++			shade(screen, l->getX(), l->getY() + (_row - (int)l->_scroll) * h, l->getWidth(), h);
++		}
++		return;
++	}
++	shade(screen, _focus->getX(), _focus->getY(), _focus->getWidth(), _focus->getHeight());
++}
++
++}
+diff --git a/src/Engine/PadNav.h b/src/Engine/PadNav.h
+new file mode 100644
+index 0000000..5cdd515
+--- /dev/null
++++ b/src/Engine/PadNav.h
+@@ -0,0 +1,165 @@
++#pragma once
++/*
++ * Mortar: gamepad navigation for the original UI.
++ *
++ * Every screen is a State holding widgets, and every widget turns mouse events
++ * into clicks. PadNav finds the widgets of the current screen, keeps one in
++ * focus, and sends the same hover and click events a mouse would, so rules,
++ * sounds and tooltips run unchanged. Four screens get their own cursor:
++ * Battlescape (tiles), Geoscape (the globe under a reticle), Inventory (slot
++ * cells) and the Base view (facility grid). A real mouse keeps working.
++ */
++#include <SDL.h>
++#include <map>
++#include <vector>
++#include "../Battlescape/Position.h"
++
++namespace OpenXcom
++{
++
++class Game;
++class State;
++class Surface;
++class InteractiveSurface;
++class TextList;
++class TextEdit;
++class Globe;
++class BattlescapeState;
++class InventoryState;
++class BaseView;
++class RuleInventory;
++
++class PadNav
++{
++public:
++	enum Btn { UP, DOWN, LEFT, RIGHT, A, B, X, Y, L1, R1, L2, R2, SELECT, START, F1, F2, BTN_COUNT };
++
++	PadNav(Game *game);
++	/// Takes joystick events; true when the event was consumed.
++	bool handle(const SDL_Event &ev);
++	/// Once per main-loop pass: repeats, holds, following the screen.
++	void think();
++	/// Draws the focus on top of the finished frame.
++	void blit(Surface *screen);
++	/// Where the pad's pointer is, in display coordinates.
++	void pointer(int *x, int *y) const;
++	/// The pad has been used since the last real mouse movement.
++	bool active() const { return _active; }
++	/// A real mouse moved: its pointer comes back until the pad is used again.
++	void mouseMoved();
++	/// Marks events PadNav made itself.
++	static const Uint8 SYNTHETIC = 0x7f;
++
++private:
++	enum Mode { GENERIC, BATTLE, GLOBE, INVENTORY, BASE, TEXT };
++	struct Cell { RuleInventory *rule; int sx, sy, cx, cy, w, h; };
++
++	Game *_game;
++	bool _down[BTN_COUNT];
++	Uint32 _downAt[BTN_COUNT], _nextRepeat[BTN_COUNT];
++	bool _chord[BTN_COUNT];
++	bool _held[BTN_COUNT];
++	bool _active;
++	int _px, _py;
++	Uint32 _ctrlUntil;
++
++	State *_state;
++	Mode _mode;
++	bool _panel; // focus is in the original buttons, not the custom cursor
++	InteractiveSurface *_focus;
++	int _row;
++	std::map<State*, InteractiveSurface*> _remembered;
++	InteractiveSurface *_pressedArrow;
++	SDL_Rect _lastFocus;
++	Uint8 _pressedArrowButton;
++
++	// Battlescape
++	Position _tile;
++	void *_lastUnit;
++	bool _lastTargeting;
++	Position _lastOffset;
++	int _enemy;
++	// Inventory
++	std::vector<Cell> _cells;
++	int _cell;
++	// Base
++	int _gx, _gy;
++	// Globe
++	int _contact;
++	// Naming
++	TextEdit *_finishEdit;
++	State *_finishState;
++	bool _rotating[4];
++
++	// input
++	void press(Btn b);
++	void release(Btn b, Uint32 heldFor);
++	void repeat(Btn b);
++	bool isDirection(Btn b) const { return b <= RIGHT; }
++
++	// sending events
++	void movePointer(int x, int y);
++	void mouse(Uint8 button, bool down);
++	void click(Uint8 button = SDL_BUTTON_LEFT);
++	void key(SDLKey sym);
++	void keyEdge(SDLKey sym, bool down);
++
++	// which screen
++	void enterState(State *s);
++	Mode modeOf(State *s) const;
++	TextEdit *editing(State *s) const;
++
++	// generic focus
++	void collect(std::vector<InteractiveSurface*> &out, bool noBackground) const;
++	bool usable(InteractiveSurface *s) const;
++	bool isBackground(InteractiveSurface *s) const;
++	bool handlesKey(SDLKey k) const;
++	bool handlesRightClick() const;
++	InteractiveSurface *background() const;
++	void chooseFocus();
++	void setFocus(InteractiveSurface *s);
++	void pointAtFocus();
++	bool moveFocus(int dx, int dy);
++	void genericPress(Btn b);
++	void genericRepeat(Btn b);
++	void genericBack();
++	void genericStart();
++	bool nudgeRow(int delta);
++	void pageRow(int delta);
++	InteractiveSurface *arrowOf(TextList *list, bool more) const;
++
++	// custom screens
++	void battlePress(Btn b);
++	void battleStep();
++	void battleThink();
++	void battleCursorTo(const Position &p);
++	void battlePointAtTile(bool scroll);
++	void battleJumpEnemy(int delta);
++	BattlescapeState *battle() const;
++
++	Globe *globe() const;
++	void globePress(Btn b);
++	void globeRelease(Btn b);
++	void globeContact(int delta);
++	void stopRotating();
++
++	InventoryState *inventory() const;
++	void inventoryBuild();
++	void inventoryPress(Btn b);
++	void inventoryMove(int dx, int dy);
++	void inventoryPoint();
++	void *itemAt(const Cell &c) const;
++
++	BaseView *baseView() const;
++	void basePress(Btn b);
++	void basePoint();
++
++	void textPress(Btn b);
++
++	Uint8 _lift[256];
++	Uint32 _liftKey;
++	int nearestColour(Surface *s, int r, int g, int b) const;
++	void shade(Surface *screen, int x, int y, int w, int h);
++};
++
++}
+diff --git a/src/Engine/State.h b/src/Engine/State.h
+index 82e7de6..0e6609d 100644
+--- a/src/Engine/State.h
++++ b/src/Engine/State.h
+@@ -43,6 +43,7 @@ class RuleInterface;
+  */
+ class State
+ {
++	friend class PadNav;
+ 	friend class Timer;
+ 
+ protected:
+diff --git a/src/Engine/Surface.h b/src/Engine/Surface.h
+index 95dd39c..ed64668 100644
+--- a/src/Engine/Surface.h
++++ b/src/Engine/Surface.h
+@@ -37,6 +37,7 @@ class Language;
+  */
+ class Surface
+ {
++	friend class PadNav;
+ protected:
+ 	SDL_Surface *_surface;
+ 	int _x, _y;
+diff --git a/src/Geoscape/BuildNewBaseState.h b/src/Geoscape/BuildNewBaseState.h
+index 7f06179..c117f55 100644
+--- a/src/Geoscape/BuildNewBaseState.h
++++ b/src/Geoscape/BuildNewBaseState.h
+@@ -36,6 +36,7 @@ class TextButton;
+  */
+ class BuildNewBaseState : public State
+ {
++	friend class PadNav;
+ private:
+ 	Base *_base;
+ 	Globe *_globe;
+diff --git a/src/Geoscape/GeoscapeState.h b/src/Geoscape/GeoscapeState.h
+index 84e8ac5..bdde42c 100644
+--- a/src/Geoscape/GeoscapeState.h
++++ b/src/Geoscape/GeoscapeState.h
+@@ -41,6 +41,7 @@ class RuleMissionScript;
+  */
+ class GeoscapeState : public State
+ {
++	friend class PadNav;
+ private:
+ 	Surface *_bg, *_sideLine, *_sidebar;
+ 	Globe *_globe;
+diff --git a/src/Geoscape/Globe.h b/src/Geoscape/Globe.h
+index 8b6c858..e36c527 100644
+--- a/src/Geoscape/Globe.h
++++ b/src/Geoscape/Globe.h
+@@ -42,6 +42,7 @@ class RuleGlobe;
+  */
+ class Globe : public InteractiveSurface
+ {
++	friend class PadNav;
+ private:
+ 	static const int NUM_LANDSHADES = 48;
+ 	static const int NUM_SEASHADES = 72;
+diff --git a/src/Geoscape/SelectDestinationState.h b/src/Geoscape/SelectDestinationState.h
+index 76cc874..46e08ff 100644
+--- a/src/Geoscape/SelectDestinationState.h
++++ b/src/Geoscape/SelectDestinationState.h
+@@ -36,6 +36,7 @@ class TextButton;
+  */
+ class SelectDestinationState : public State
+ {
++	friend class PadNav;
+ private:
+ 	Craft *_craft;
+ 	Globe *_globe;
+diff --git a/src/Interface/ComboBox.h b/src/Interface/ComboBox.h
+index 7a5721c..17a36a1 100644
+--- a/src/Interface/ComboBox.h
++++ b/src/Interface/ComboBox.h
+@@ -35,6 +35,7 @@ class Language;
+  */
+ class ComboBox : public InteractiveSurface
+ {
++	friend class PadNav;
+ private:
+ 	static const int HORIZONTAL_MARGIN;
+ 	static const int VERTICAL_MARGIN;
+diff --git a/src/Interface/ImageButton.h b/src/Interface/ImageButton.h
+index a08e0c7..e260665 100644
+--- a/src/Interface/ImageButton.h
++++ b/src/Interface/ImageButton.h
+@@ -31,6 +31,7 @@ namespace OpenXcom
+  */
+ class ImageButton : public InteractiveSurface
+ {
++	friend class PadNav;
+ protected:
+ 	Uint8 _color;
+ 	ImageButton **_group;
+diff --git a/src/Interface/Slider.h b/src/Interface/Slider.h
+index d2300d3..3f1949b 100644
+--- a/src/Interface/Slider.h
++++ b/src/Interface/Slider.h
+@@ -33,6 +33,7 @@ class Text;
+  */
+ class Slider : public InteractiveSurface
+ {
++	friend class PadNav;
+ private:
+ 	Frame *_frame;
+ 	Text *_txtMinus, *_txtPlus;
+diff --git a/src/Interface/TextButton.h b/src/Interface/TextButton.h
+index 1257ea5..8b2c3d6 100644
+--- a/src/Interface/TextButton.h
++++ b/src/Interface/TextButton.h
+@@ -37,6 +37,7 @@ class ComboBox;
+  */
+ class TextButton : public InteractiveSurface
+ {
++	friend class PadNav;
+ private:
+ 	Uint8 _color;
+ 	Text *_text;
+diff --git a/src/Interface/TextEdit.h b/src/Interface/TextEdit.h
+index 95924f8..ae8dd8d 100644
+--- a/src/Interface/TextEdit.h
++++ b/src/Interface/TextEdit.h
+@@ -34,6 +34,7 @@ enum TextEditConstraint { TEC_NONE, TEC_NUMERIC_POSITIVE, TEC_NUMERIC };
+  */
+ class TextEdit : public InteractiveSurface
+ {
++	friend class PadNav;
+ private:
+ 	Text *_text, *_caret;
+ 	UString _value;
+diff --git a/src/Interface/TextList.h b/src/Interface/TextList.h
+index 10df32c..ac85de4 100644
+--- a/src/Interface/TextList.h
++++ b/src/Interface/TextList.h
+@@ -39,6 +39,7 @@ class ScrollBar;
+  */
+ class TextList : public InteractiveSurface
+ {
++	friend class PadNav;
+ private:
+ 	std::vector< std::vector<Text*> > _texts;
+ 	std::vector<size_t> _columns, _rows;
+diff --git a/src/Menu/ModListState.h b/src/Menu/ModListState.h
+index 84045d6..9e453ed 100644
+--- a/src/Menu/ModListState.h
++++ b/src/Menu/ModListState.h
+@@ -37,6 +37,7 @@ class ComboBox;
+  */
+ class ModListState : public State
+ {
++	friend class PadNav;
+ private:
+ 	Window *_window;
+ 	Text *_txtMaster;
+diff --git a/src/Menu/OptionsControlsState.cpp b/src/Menu/OptionsControlsState.cpp
+index 0bb4131..6a28a11 100644
+--- a/src/Menu/OptionsControlsState.cpp
++++ b/src/Menu/OptionsControlsState.cpp
+@@ -17,6 +17,7 @@
+  * along with OpenXcom.  If not, see <http://www.gnu.org/licenses/>.
+  */
+ #include "OptionsControlsState.h"
++#include "../Engine/Game.h"
+ #include <SDL.h>
+ #include "../Engine/Options.h"
+ #include "../Engine/LocalizedText.h"
+@@ -101,6 +102,26 @@ void OptionsControlsState::init()
+ {
+ 	OptionsBaseState::init();
+ 	_lstControls->clearList();
++	if (_game->padActive())
++	{
++		// Mortar: on the Brick this page lists the buttons.
++		static const char *const rows[][2] = {
++			{"EVERYWHERE", ""}, {"A", "Press"}, {"B", "Back or cancel"}, {"START", "OK"}, {"SELECT", "Next group of controls"}, {"L1 R1", "Previous, next"}, {"L2 R2", "Page"}, {"F1", "Quicksave"}, {"F2 hold", "Quickload"}, {"", ""},
++			{"BATTLESCAPE", ""}, {"D-pad", "Tile cursor; two directions step along the grid"}, {"A", "Select, walk (A again confirms), fire"}, {"B", "Cancel, or back to the soldier"}, {"X", "Kneel"}, {"Y", "Turn to the cursor, open doors"}, {"L1 R1", "Left hand, right hand"}, {"L2 R2", "Soldiers; aiming: aliens"}, {"START", "Inventory"}, {"START hold", "End turn"}, {"SELECT", "Bottom panel"}, {"SEL+Up Dn", "Level"}, {"SEL+Lt Rt", "Next alien"}, {"SEL+X", "Reload"}, {"SEL+A", "Run or strafe"}, {"", ""},
++			{"GEOSCAPE", ""}, {"D-pad", "Turn the globe"}, {"A", "Open what's under the reticle"}, {"L1 R1", "Previous, next contact"}, {"L2 R2", "Zoom"}, {"X", "Time faster"}, {"Y", "Back to 5 seconds"}, {"START", "Intercept"}, {"SELECT", "Buttons"}, {"", ""},
++			{"INVENTORY", ""}, {"A", "Pick up, place"}, {"B", "Put back, or leave"}, {"X", "Unload"}, {"Y", "Auto-place"}, {"L1 R1", "Soldiers"}, {"L2 R2", "Scroll ground"}, {"START", "Done"}, {"", ""},
++			{"BASE", ""}, {"D-pad", "Facility grid"}, {"SELECT", "Buttons"}, {"X", "Facility's other action"}, {"L1 R1", "Bases"}, {"", ""},
++			{"LISTS", ""}, {"Left Right", "Less, more"}, {"X", "All or none"}, {"X+Up Dn", "Reorder, where a list can"},
++		};
++		_lstControls->setColumns(2, 62, 138);
++		_lstControls->setSelectable(false);
++		for (size_t i = 0; i < sizeof(rows) / sizeof(rows[0]); ++i)
++		{
++			_lstControls->addRow(2, rows[i][0], rows[i][1]);
++			if (rows[i][1][0] == 0 && rows[i][0][0] != 0) _lstControls->setCellColor(i, 0, _colorGroup);
++		}
++		return;
++	}
+ 	_lstControls->addRow(2, tr("STR_GENERAL").c_str(), "");
+ 	_lstControls->setCellColor(0, 0, _colorGroup);
+ 	addControls(_controlsGeneral);
+@@ -186,6 +207,10 @@ OptionInfo *OptionsControlsState::getControl(size_t sel)
+  */
+ void OptionsControlsState::lstControlsClick(Action *action)
+ {
++	if (_game->padActive())
++	{
++		return;
++	}
+ 	if (action->getDetails()->button.button != SDL_BUTTON_LEFT && action->getDetails()->button.button != SDL_BUTTON_RIGHT)
+ 	{
+ 		return;

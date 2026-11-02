@@ -7,6 +7,7 @@
 //! over-the-air update bucket (docs/updates.md).
 
 mod acgc;
+mod xcom;
 mod pair;
 mod publish;
 
@@ -35,6 +36,10 @@ mortar acgc [--host HOST] [--iso PATH] [--remove]
     profile (/nix/var/nix/profiles/acgc), and copy the image to the Brick
     (~brick/.local/share/acgc/rom/GAFE01.iso). Neither is ever part of the
     system. --remove takes the port away and leaves the image and saves.
+mortar xcom --data PATH [--host HOST]
+    OpenXcom (pkgs/openxcom): check your own copy of UFO: Enemy Unknown and
+    copy the folders the game reads to the Brick
+    (~brick/.local/share/openxcom/UFO). It is never part of the system.
 mortar publish [--config NAME] [--path STORE_PATH] [--channel C] [--key FILE]
                [--credentials FILE] [--force] [--dry-run]
                [--endpoint URL --bucket NAME [--region R]]
@@ -66,6 +71,7 @@ struct Opts {
     remove: bool,
     key_id: Option<String>,
     iso: Option<String>,
+    data: Option<String>,
     rest: Vec<String>,
 }
 
@@ -88,6 +94,7 @@ fn parse(args: &[String]) -> Opts {
         remove: false,
         key_id: None,
         iso: None,
+        data: None,
         rest: Vec::new(),
     };
     let mut it = args.iter();
@@ -98,6 +105,7 @@ fn parse(args: &[String]) -> Opts {
             "--boot" => o.boot_only = true,
             "--remove" => o.remove = true,
             "--iso" => o.iso = Some(it.next().cloned().unwrap_or_else(|| die("--iso needs a value"))),
+            "--data" => o.data = Some(it.next().cloned().unwrap_or_else(|| die("--data needs a value"))),
             "--key-id" => o.key_id = Some(it.next().cloned().unwrap_or_else(|| die("--key-id needs a value"))),
             "--reboot" => {
                 o.reboot = true;
@@ -352,6 +360,7 @@ fn main() {
         "reboot" => reboot(&o.host),
         "pico8" => pico8(&o),
         "acgc" => acgc::acgc(&o, o.iso.as_deref()),
+        "xcom" => xcom::xcom(&o, o.data.as_deref()),
         "update" => publish::update_now(&o.host),
         "update-creds" => publish::update_creds(&o.host, o.key_id.clone()),
         "attention" => {
