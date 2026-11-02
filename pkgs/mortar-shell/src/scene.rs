@@ -13,6 +13,10 @@
 //! for the few concave shapes); text and images keep a transform.
 
 use mortar_ui::gfx::{Color, Face, Fonts, TextStyle};
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
+use std::rc::Rc;
 use std::sync::Arc;
 
 pub type P = (f32, f32);
@@ -210,38 +214,72 @@ impl Scene {
 /// Fonts plus the text metrics both renderers and the layout agree on.
 pub struct Typo {
     pub fonts: Fonts,
+    /// Lines laid out before (most text is the same from frame to frame,
+    /// and is measured as it is built and laid out again to draw it).
+    lines: RefCell<HashMap<u64, Line>>,
+}
+
+/// Glyph indices and pen positions of one line.
+pub type Glyphs = Rc<[(u16, f32)]>;
+
+struct Line {
+    s: String,
+    face: Face,
+    size: f32,
+    tracking: f32,
+    glyphs: Glyphs,
+    width: f32,
 }
 
 impl Typo {
     pub fn new(fonts: Fonts) -> Typo {
-        Typo { fonts }
+        Typo { fonts, lines: RefCell::new(HashMap::new()) }
     }
     pub fn font(&self, f: Face) -> &fontdue::Font {
         self.fonts.face(f)
     }
-    /// Glyph indices and pen positions of one line.
-    pub fn layout(&self, s: &str, face: Face, size: f32, tracking: f32) -> Vec<(u16, f32)> {
+    /// Glyph indices and pen positions of one line, and its advance width.
+    fn line(&self, s: &str, face: Face, size: f32, tracking: f32) -> (Glyphs, f32) {
+        let mut h = std::hash::DefaultHasher::new();
+        (s, face, size.to_bits(), tracking.to_bits()).hash(&mut h);
+        let key = h.finish();
+        if let Some(l) = self.lines.borrow().get(&key)
+            && l.s == s
+            && l.face == face
+            && l.size == size
+            && l.tracking == tracking
+        {
+            return (l.glyphs.clone(), l.width);
+        }
         let font = self.font(face);
         let mut out = Vec::with_capacity(s.len());
         let mut pen = 0.0;
         let mut prev: Option<u16> = None;
+        let mut width = 0.0;
         for ch in s.chars() {
             let idx = font.lookup_glyph_index(ch);
             if let Some(p) = prev {
                 pen += font.horizontal_kern_indexed(p, idx, size).unwrap_or(0.0) + tracking * size;
             }
             out.push((idx, pen));
-            pen += font.metrics_indexed(idx, size).advance_width;
+            width = pen + font.metrics_indexed(idx, size).advance_width;
+            pen = width;
             prev = Some(idx);
         }
-        out
+        let glyphs: Glyphs = out.into();
+        let mut lines = self.lines.borrow_mut();
+        if lines.len() >= 2048 {
+            lines.clear();
+        }
+        lines.insert(key, Line { s: s.to_string(), face, size, tracking, glyphs: glyphs.clone(), width });
+        (glyphs, width)
+    }
+    /// Glyph indices and pen positions of one line.
+    pub fn layout(&self, s: &str, face: Face, size: f32, tracking: f32) -> Glyphs {
+        self.line(s, face, size, tracking).0
     }
     pub fn measure(&self, s: &str, face: Face, size: f32, tracking: f32) -> f32 {
-        let font = self.font(face);
-        match self.layout(s, face, size, tracking).last() {
-            Some((idx, pen)) => pen + font.metrics_indexed(*idx, size).advance_width,
-            None => 0.0,
-        }
+        self.line(s, face, size, tracking).1
     }
     /// Baseline below the top of a CSS line box of `lh` x size.
     pub fn base_in_line(&self, face: Face, size: f32, lh: f32) -> f32 {

@@ -784,7 +784,21 @@ draw it:
   is blurred once a frame however many panes there are; the backdrop's
   mean colour is read back from the blur (eight rows) for the adaptive
   veil. The cross's patterns are ordinary fills and strokes (a few
-  hundred small quads a frame, no shaders of their own). When no UI
+  hundred small quads a frame, no shaders of their own; tiles off the
+  visible part are not emitted at all). Frames are redrawn only where
+  they changed (`damage.rs`): the buffer drawn into still holds the frame
+  before last, so each item's fingerprint (its geometry, colour, text and
+  the clip over it) and covered box are compared with what that buffer
+  got; the differing boxes mark 32 px cells, merged into at most 12
+  rectangles, and each rectangle is cleared and drawn again, scissored,
+  with only the items that touch it (exactly the clips of a full frame).
+  On the cross that is the pattern tiles that moved, a few percent of the
+  screen; more than 60 % changed, an image changed (an app commit, a
+  blur, a layer or picture) or a buffer that never had a frame: the
+  whole frame. Text layouts are cached by run. `ctl gpucheck` compares
+  the next partial frame with the same frame drawn in full into a spare
+  buffer (the result comes with the following `gpucheck`, and in the
+  log); `MORTAR_SHELL_FULL_REDRAW=1` always draws everything. When no UI
   layer shows, the DrmCompositor takes over again (`reset_state`, full
   frame): direct scanout of a GPU app, the opaque copy of an shm app.
   Any EGL/GL error, a failed import of a render target or three failed
@@ -802,7 +816,8 @@ draw it:
 `MORTAR_SHELL_RENDERER=cpu|gpu` and `MORTAR_SHELL_GL_MSAA=0|4` override
 the config for one run; `ctl state` reports `ui.renderer`, `frames`,
 `gpu_frames`, `scanout_frames` and `gpu_ms` (last and smoothed UI frame
-time, the last blur's time and the number of blurs).
+time, the last blur's time, the number of blurs and `damage`, the
+smoothed share of the screen redrawn).
 
 ### Apps
 
@@ -1093,7 +1108,9 @@ the shell, see pkgs/mortar-play/DESIGN.md.)
   settings checked.
 - `mortar-shell preview --screen ... [--at MS --frames N --every MS]`
   renders screens and transition frames on any OS for UI work (demo
-  apps).
+  apps). With `MORTAR_SHELL_BENCH=N` it times N frames of the screen
+  instead (step, build, per-item work, the damage diff) and prints how
+  much of the screen the GPU path would redraw.
 
 ## Open questions
 

@@ -540,6 +540,13 @@ pub fn run(o: &Opts) -> Result<(), String> {
         ui.set_backdrop(Some(crate::raster::mean_rgb(p)));
         ui.snap_veil();
     }
+    // MORTAR_SHELL_BENCH=N: time N frames of this screen's per-frame CPU
+    // work (UI step, scene build, and what the GL renderer does on the CPU
+    // per item: text layout, triangulation), then exit
+    if let Some(frames) = std::env::var("MORTAR_SHELL_BENCH").ok().and_then(|n| n.parse::<u32>().ok()) {
+        bench(&mut ui, &typo, &v, frames);
+        return Ok(());
+    }
     let n = o.frames.max(1);
     let mut page_ui = Ui::new(W as u32, H as u32, Fonts::load(&dir)?);
     for f in 0..n {
@@ -564,4 +571,104 @@ pub fn run(o: &Opts) -> Result<(), String> {
 /// The low-battery home preview.
 fn s_low(screen: &str) -> bool {
     screen == "home-low"
+}
+
+/// Per-frame CPU cost of the current screen (see MORTAR_SHELL_BENCH): the
+/// UI step, the scene build, and what the GL renderer does on the CPU per
+/// item (text layout, triangulating concave fills).
+fn bench(ui: &mut ShellUi, typo: &Typo, v: &View, frames: u32) {
+    use crate::scene::Item;
+    use std::time::Instant;
+    let (mut t_step, mut t_build, mut t_items) = (0f64, 0f64, 0f64);
+    let mut n_items = 0usize;
+    let mut kinds = [0usize; 7];
+    // the GPU path's damage: two buffers in turn, each diffed against
+    // what it showed (text boxes estimated from the pens)
+    let mut bufs: [Option<Vec<crate::damage::Info>>; 2] = [None, None];
+    let (mut t_dmg, mut share, mut drawn, mut passes) = (0f64, 0f64, 0usize, 0usize);
+    for f in 0..frames {
+        let t0 = Instant::now();
+        ui.step(1.0 / 30.0, v);
+        let t1 = Instant::now();
+        let scene = ui.build(typo, v, W, H);
+        let t2 = Instant::now();
+        let mut work = 0usize;
+        for it in &scene.items {
+            match it {
+                Item::Fill { pts, convex, .. } => {
+                    kinds[0] += 1;
+                    if !convex {
+                        kinds[1] += 1;
+                        work += crate::scene::triangulate(pts).len();
+                    }
+                }
+                Item::Stroke { .. } => kinds[2] += 1,
+                Item::Shape { .. } => kinds[3] += 1,
+                Item::Text(r) => {
+                    kinds[4] += 1;
+                    work += typo.layout(&r.s, r.face, r.size, r.tracking).len();
+                }
+                Item::Image { .. } => kinds[5] += 1,
+                Item::Clip(_) => kinds[6] += 1,
+            }
+        }
+        std::hint::black_box(work);
+        let t3 = Instant::now();
+        let mut infos = Vec::new();
+        let mut ink = |r: &crate::scene::TextRun| {
+            let l = typo.layout(&r.s, r.face, r.size, r.tracking);
+            let end = l.last().map_or(0.0, |g| g.1) + r.size;
+            Some([r.x - 2.0, r.base - r.size * 1.2, r.x + end, r.base + r.size * 0.4])
+        };
+        crate::damage::infos(&scene, &mut ink, &mut infos);
+        let slot = &mut bufs[f as usize % 2];
+        let rects = slot.as_ref().and_then(|old| {
+            let mut g = crate::damage::Grid::new(scene.w, scene.h);
+            g.diff(old, &infos);
+            g.rects()
+        });
+        match &rects {
+            Some(rs) => {
+                share += rs.iter().map(|r| (r[2] * r[3]) as f64).sum::<f64>() / (scene.w * scene.h) as f64;
+                passes += rs.len();
+                for r in rs {
+                    drawn += infos.iter().filter(|i| crate::damage::touches(&i.bbox, r)).count();
+                }
+            }
+            None => {
+                share += 1.0;
+                passes += 1;
+                drawn += scene.items.len();
+            }
+        }
+        *slot = Some(infos);
+        t_dmg += t3.elapsed().as_secs_f64();
+        n_items += scene.items.len();
+        t_step += (t1 - t0).as_secs_f64();
+        t_build += (t2 - t1).as_secs_f64();
+        t_items += (t3 - t2).as_secs_f64();
+    }
+    let f = frames.max(1) as f64;
+    let per = |k: usize| k / frames.max(1) as usize;
+    println!(
+        "step {:.3} ms, build {:.3} ms, per-item {:.3} ms; {} items (fills {}, concave {}, strokes {}, shapes {}, texts {}, images {}, clips {})",
+        t_step / f * 1e3,
+        t_build / f * 1e3,
+        t_items / f * 1e3,
+        per(n_items),
+        per(kinds[0]),
+        per(kinds[1]),
+        per(kinds[2]),
+        per(kinds[3]),
+        per(kinds[4]),
+        per(kinds[5]),
+        per(kinds[6]),
+    );
+    println!(
+        "  damage {:.3} ms: {:.1}% of the screen redrawn, {} items drawn in {:.1} passes a frame",
+        t_dmg / f * 1e3,
+        share / f * 100.0,
+        per(drawn),
+        passes as f64 / f
+    );
 }

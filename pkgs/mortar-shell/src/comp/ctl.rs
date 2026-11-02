@@ -177,6 +177,13 @@ pub fn command(shell: &mut Shell, line: &str) -> Result<String, String> {
             super::ui::save_rgb_png(&pm, Path::new(arg))?;
             "ok".into()
         }
+        "gpucheck" => {
+            // the next partly redrawn frame is compared with the same frame
+            // drawn in full; says how the last comparison went
+            let super::backend::Backend::Drm(d) = &mut shell.backend else { return Err("no GPU UI".into()) };
+            let g = d.gpu.as_mut().ok_or("no GPU UI")?;
+            g.check_next()
+        }
         "power" => {
             // the power key: `power` taps, `power hold` holds it for the menu
             shell.on_key(super::input::Kind::Keys, mortar_ui::input::codes::KEY_POWER, 1);
@@ -303,7 +310,7 @@ fn state(shell: &Shell) -> String {
         "apps": apps,
         "frames": shell.backend.frames(),
         "gpu_frames": shell.backend.gpu_frames(),
-        "gpu_ms": shell.backend.gpu_stats().map(|(last, avg, blur, n)| json!({"last": last, "avg": avg, "blur": blur, "blurs": n})),
+        "gpu_ms": shell.backend.gpu_stats().map(|(last, avg, blur, n, damage)| json!({"last": last, "avg": avg, "blur": blur, "blurs": n, "damage": damage})),
         "scanout_frames": shell.backend.scanout_frames(),
         "rss_kib": rss_kib(),
         "inputs": shell.inputs.summary(),

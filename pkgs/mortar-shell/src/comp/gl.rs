@@ -18,7 +18,8 @@
 //! renderer) after an orderly teardown. Nothing here creates EGL window
 //! surfaces (the DC path that latched the GPU in early tests).
 
-use crate::scene::{triangulate, Item, Scene, Src, Typo, P};
+use crate::damage::Info;
+use crate::scene::{triangulate, Item, Scene, Src, TextRun, Typo, P};
 use mortar_ui::gfx::{Color, Face};
 use std::collections::HashMap;
 use std::ffi::{c_char, c_int, c_uint, c_void, CStr, CString};
@@ -908,20 +909,60 @@ impl Gl {
         Some(e)
     }
 
-    /// Draw `scene` into `t`. `tex` resolves image sources.
-    pub fn render(&mut self, t: &Target, scene: &Scene, typo: &Typo, tex: &dyn Fn(Src) -> Option<(GLuint, bool, bool, i32, i32)>) -> Result<(), String> {
-        self.render_fb(t.fbo, t.w, t.h, t.w as f32, t.h as f32, scene, typo, tex)
+    /// Draw `scene` into `t`. `tex` resolves image sources. `only`: the
+    /// items' `infos` and the rectangles to redraw (the rest of the target
+    /// already shows this scene); None draws everything.
+    pub fn render(&mut self, t: &Target, scene: &Scene, typo: &Typo, tex: &dyn Fn(Src) -> Option<(GLuint, bool, bool, i32, i32)>, only: Option<(&[Info], &[[f32; 4]])>) -> Result<(), String> {
+        self.render_fb(t.fbo, t.w, t.h, t.w as f32, t.h as f32, scene, typo, tex, only)
     }
 
     /// Draw `scene` (laid out in `cw` x `ch` units) into an offscreen
     /// target of any size (the home screen into the blur's quarter-size
     /// FBO: it is blurred anyway, so drawing it small costs nothing).
     pub fn render_into(&mut self, f: &Fbo, cw: f32, ch: f32, scene: &Scene, typo: &Typo) -> Result<(), String> {
-        self.render_fb(f.fbo, f.w, f.h, cw, ch, scene, typo, &|_| None)
+        self.render_fb(f.fbo, f.w, f.h, cw, ch, scene, typo, &|_| None, None)
+    }
+
+    /// Fingerprints and covered areas of `scene`'s items (damage.rs), text
+    /// measured with the glyphs it will be drawn with.
+    pub fn infos(&mut self, scene: &Scene, typo: &Typo, out: &mut Vec<Info>) {
+        let mut ink = |run: &TextRun| -> Option<[f32; 4]> {
+            let skey = (run.size * 64.0).round() as u32;
+            let mut b = [f32::MAX, f32::MAX, f32::MIN, f32::MIN];
+            for &(idx, pen) in typo.layout(&run.s, run.face, run.size, run.tracking).iter() {
+                let Some([_, _, gw, gh, xmin, ymin]) = self.glyph(typo, (run.face, idx, skey)) else { continue };
+                if gw == 0 {
+                    continue;
+                }
+                let x0 = run.x + pen + xmin as f32;
+                let y0 = run.base - gh as f32 - ymin as f32;
+                b = [b[0].min(x0), b[1].min(y0), b[2].max(x0 + gw as f32), b[3].max(y0 + gh as f32)];
+            }
+            (b[2] > b[0]).then_some(b)
+        };
+        crate::damage::infos(scene, &mut ink, out);
+    }
+
+    /// The scissor box (GL units) for a rect in scene units.
+    fn scissor_box(r: &[f32; 4], sx: f32, sy: f32) -> [GLint; 4] {
+        [(r[0] * sx).round() as GLint, (r[1] * sy).round() as GLint, (r[2] * sx).round().max(0.0) as GLsizei, (r[3] * sy).round().max(0.0) as GLsizei]
+    }
+
+    fn set_scissor(&self, b: Option<[GLint; 4]>) {
+        // SAFETY: scissor state
+        unsafe {
+            match b {
+                Some(b) => {
+                    (self.gl.glEnable)(GL_SCISSOR_TEST);
+                    (self.gl.glScissor)(b[0], b[1], b[2].max(0), b[3].max(0));
+                }
+                None => (self.gl.glDisable)(GL_SCISSOR_TEST),
+            }
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn render_fb(&mut self, fbo: GLuint, vw: i32, vh: i32, cw: f32, ch: f32, scene: &Scene, typo: &Typo, tex: &dyn Fn(Src) -> Option<(GLuint, bool, bool, i32, i32)>) -> Result<(), String> {
+    fn render_fb(&mut self, fbo: GLuint, vw: i32, vh: i32, cw: f32, ch: f32, scene: &Scene, typo: &Typo, tex: &dyn Fn(Src) -> Option<(GLuint, bool, bool, i32, i32)>, only: Option<(&[Info], &[[f32; 4]])>) -> Result<(), String> {
         let (sx, sy) = (vw as f32 / cw, vh as f32 / ch);
         let g = &self.gl;
         // SAFETY: GL state setup on the current context
@@ -933,7 +974,6 @@ impl Gl {
             (g.glDisable)(GL_SCISSOR_TEST);
             let c = pm(scene.clear);
             (g.glClearColor)(c[0], c[1], c[2], 1.0);
-            (g.glClear)(GL_COLOR_BUFFER_BIT);
             (g.glEnable)(GL_BLEND);
             (g.glBlendFunc)(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
             for p in &self.progs {
@@ -942,110 +982,52 @@ impl Gl {
             }
         }
         self.kind = Kind::Solid;
-        let (aw, ah) = (self.atlas.w as f32, self.atlas.h as f32);
-        for it in &scene.items {
-            match it {
-                Item::Clip(r) => {
-                    self.flush();
-                    // SAFETY: scissor state
-                    unsafe {
-                        match r {
-                            Some(r) => {
-                                (self.gl.glEnable)(GL_SCISSOR_TEST);
-                                (self.gl.glScissor)((r[0] * sx).round() as GLint, (r[1] * sy).round() as GLint, (r[2] * sx).round().max(0.0) as GLsizei, (r[3] * sy).round().max(0.0) as GLsizei);
+        match only {
+            None => {
+                // SAFETY: plain clear
+                unsafe { (self.gl.glClear)(GL_COLOR_BUFFER_BIT) };
+                for it in &scene.items {
+                    match it {
+                        Item::Clip(r) => {
+                            self.flush();
+                            self.set_scissor(r.map(|r| Self::scissor_box(&r, sx, sy)));
+                        }
+                        _ => self.emit(it, typo, tex),
+                    }
+                }
+                self.flush();
+            }
+            // each rectangle: cleared and drawn again with what touches it,
+            // scissored to it (and to the clips, exactly as a full frame
+            // has them)
+            Some((infos, rects)) => {
+                for r in rects {
+                    let rb = Self::scissor_box(r, sx, sy);
+                    let meet = |b: [GLint; 4]| {
+                        let (x0, y0) = (b[0].max(rb[0]), b[1].max(rb[1]));
+                        let (x1, y1) = ((b[0] + b[2]).min(rb[0] + rb[2]), (b[1] + b[3]).min(rb[1] + rb[3]));
+                        [x0, y0, x1 - x0, y1 - y0]
+                    };
+                    self.set_scissor(Some(rb));
+                    // SAFETY: a scissored clear
+                    unsafe { (self.gl.glClear)(GL_COLOR_BUFFER_BIT) };
+                    let mut shut = false;
+                    for (it, inf) in scene.items.iter().zip(infos) {
+                        match it {
+                            Item::Clip(c) => {
+                                self.flush();
+                                let b = c.map(|c| meet(Self::scissor_box(&c, sx, sy))).unwrap_or(rb);
+                                shut = b[2] <= 0 || b[3] <= 0;
+                                self.set_scissor(Some(b));
                             }
-                            None => (self.gl.glDisable)(GL_SCISSOR_TEST),
+                            _ if !shut && crate::damage::touches(&inf.bbox, r) => self.emit(it, typo, tex),
+                            _ => {}
                         }
                     }
-                }
-                Item::Fill { pts, color, convex } => {
-                    self.kind(Kind::Solid);
-                    let c = pm(*color);
-                    if *convex {
-                        for i in 1..pts.len().saturating_sub(1) {
-                            self.tri(pts[0], pts[i], pts[i + 1], c);
-                        }
-                    } else {
-                        let tris = triangulate(pts);
-                        for t in tris.chunks_exact(3) {
-                            self.tri(t[0], t[1], t[2], c);
-                        }
-                    }
-                }
-                Item::Stroke { pts, closed, width, color } => {
-                    self.kind(Kind::Solid);
-                    let c = pm(*color);
-                    let n = pts.len();
-                    let segs = if *closed { n } else { n - 1 };
-                    let hw = width / 2.0;
-                    for i in 0..segs {
-                        let (a, b) = (pts[i], pts[(i + 1) % n]);
-                        let (dx, dy) = (b.0 - a.0, b.1 - a.1);
-                        let l = (dx * dx + dy * dy).sqrt();
-                        if l < 1e-4 {
-                            continue;
-                        }
-                        let (ux, uy) = (dx / l * hw, dy / l * hw);
-                        let (nx, ny) = (-uy, ux);
-                        // extended by half the width: square joins
-                        let a0 = (a.0 - ux + nx, a.1 - uy + ny);
-                        let a1 = (a.0 - ux - nx, a.1 - uy - ny);
-                        let b0 = (b.0 + ux + nx, b.1 + uy + ny);
-                        let b1 = (b.0 + ux - nx, b.1 + uy - ny);
-                        self.tri(a0, b0, b1, c);
-                        self.tri(a0, b1, a1, c);
-                    }
-                }
-                Item::Shape { shape, xf, color } => {
-                    self.kind(Kind::Solid);
-                    let c = pm(*color);
-                    for t in shape.tris.chunks_exact(3) {
-                        self.tri(xf.apply(t[0]), xf.apply(t[1]), xf.apply(t[2]), c);
-                    }
-                }
-                Item::Text(run) => {
-                    self.kind(Kind::Mask);
-                    let c = pm(run.color);
-                    let skey = (run.size * 64.0).round() as u32;
-                    let fast = run.xf.is_translate();
-                    for (idx, pen) in typo.layout(&run.s, run.face, run.size, run.tracking) {
-                        let Some([gx, gy, gw, gh, xmin, ymin]) = self.glyph(typo, (run.face, idx, skey)) else { continue };
-                        if gw == 0 {
-                            continue;
-                        }
-                        self.kind(Kind::Mask);
-                        let mut x0 = run.x + pen + xmin as f32;
-                        let mut y0 = run.base - gh as f32 - ymin as f32;
-                        if fast {
-                            x0 = (x0 + run.xf.e).round() - run.xf.e;
-                            y0 = (y0 + run.xf.f).round() - run.xf.f;
-                        }
-                        let (x1, y1) = (x0 + gw as f32, y0 + gh as f32);
-                        let q = [run.xf.apply((x0, y0)), run.xf.apply((x1, y0)), run.xf.apply((x1, y1)), run.xf.apply((x0, y1))];
-                        let (u0, v0, u1, v1) = (gx as f32 / aw, gy as f32 / ah, (gx + gw) as f32 / aw, (gy + gh) as f32 / ah);
-                        self.vert(q[0], (u0, v0), c);
-                        self.vert(q[1], (u1, v0), c);
-                        self.vert(q[2], (u1, v1), c);
-                        self.vert(q[0], (u0, v0), c);
-                        self.vert(q[2], (u1, v1), c);
-                        self.vert(q[3], (u0, v1), c);
-                    }
-                }
-                Item::Image { src, quad, uv, alpha } => {
-                    let Some((id, swz, opq, _, _)) = tex(*src) else { continue };
-                    self.kind(Kind::Image(id, swz, opq));
-                    let c = [*alpha, *alpha, *alpha, *alpha];
-                    let (u0, v0, u1, v1) = (uv[0], uv[1], uv[2], uv[3]);
-                    self.vert(quad[0], (u0, v0), c);
-                    self.vert(quad[1], (u1, v0), c);
-                    self.vert(quad[2], (u1, v1), c);
-                    self.vert(quad[0], (u0, v0), c);
-                    self.vert(quad[2], (u1, v1), c);
-                    self.vert(quad[3], (u0, v1), c);
+                    self.flush();
                 }
             }
         }
-        self.flush();
         // SAFETY: state reset
         unsafe {
             (self.gl.glDisable)(GL_SCISSOR_TEST);
@@ -1057,7 +1039,100 @@ impl Gl {
         self.check("render")
     }
 
-    #[allow(dead_code)]
+    /// Batch one (non-clip) item's triangles.
+    fn emit(&mut self, it: &Item, typo: &Typo, tex: &dyn Fn(Src) -> Option<(GLuint, bool, bool, i32, i32)>) {
+        let (aw, ah) = (self.atlas.w as f32, self.atlas.h as f32);
+        match it {
+            Item::Clip(_) => {}
+            Item::Fill { pts, color, convex } => {
+                self.kind(Kind::Solid);
+                let c = pm(*color);
+                if *convex {
+                    for i in 1..pts.len().saturating_sub(1) {
+                        self.tri(pts[0], pts[i], pts[i + 1], c);
+                    }
+                } else {
+                    let tris = triangulate(pts);
+                    for t in tris.chunks_exact(3) {
+                        self.tri(t[0], t[1], t[2], c);
+                    }
+                }
+            }
+            Item::Stroke { pts, closed, width, color } => {
+                self.kind(Kind::Solid);
+                let c = pm(*color);
+                let n = pts.len();
+                let segs = if *closed { n } else { n - 1 };
+                let hw = width / 2.0;
+                for i in 0..segs {
+                    let (a, b) = (pts[i], pts[(i + 1) % n]);
+                    let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+                    let l = (dx * dx + dy * dy).sqrt();
+                    if l < 1e-4 {
+                        continue;
+                    }
+                    let (ux, uy) = (dx / l * hw, dy / l * hw);
+                    let (nx, ny) = (-uy, ux);
+                    // extended by half the width: square joins
+                    let a0 = (a.0 - ux + nx, a.1 - uy + ny);
+                    let a1 = (a.0 - ux - nx, a.1 - uy - ny);
+                    let b0 = (b.0 + ux + nx, b.1 + uy + ny);
+                    let b1 = (b.0 + ux - nx, b.1 + uy - ny);
+                    self.tri(a0, b0, b1, c);
+                    self.tri(a0, b1, a1, c);
+                }
+            }
+            Item::Shape { shape, xf, color } => {
+                self.kind(Kind::Solid);
+                let c = pm(*color);
+                for t in shape.tris.chunks_exact(3) {
+                    self.tri(xf.apply(t[0]), xf.apply(t[1]), xf.apply(t[2]), c);
+                }
+            }
+            Item::Text(run) => {
+                self.kind(Kind::Mask);
+                let c = pm(run.color);
+                let skey = (run.size * 64.0).round() as u32;
+                let fast = run.xf.is_translate();
+                let layout = typo.layout(&run.s, run.face, run.size, run.tracking);
+                for &(idx, pen) in layout.iter() {
+                    let Some([gx, gy, gw, gh, xmin, ymin]) = self.glyph(typo, (run.face, idx, skey)) else { continue };
+                    if gw == 0 {
+                        continue;
+                    }
+                    self.kind(Kind::Mask);
+                    let mut x0 = run.x + pen + xmin as f32;
+                    let mut y0 = run.base - gh as f32 - ymin as f32;
+                    if fast {
+                        x0 = (x0 + run.xf.e).round() - run.xf.e;
+                        y0 = (y0 + run.xf.f).round() - run.xf.f;
+                    }
+                    let (x1, y1) = (x0 + gw as f32, y0 + gh as f32);
+                    let q = [run.xf.apply((x0, y0)), run.xf.apply((x1, y0)), run.xf.apply((x1, y1)), run.xf.apply((x0, y1))];
+                    let (u0, v0, u1, v1) = (gx as f32 / aw, gy as f32 / ah, (gx + gw) as f32 / aw, (gy + gh) as f32 / ah);
+                    self.vert(q[0], (u0, v0), c);
+                    self.vert(q[1], (u1, v0), c);
+                    self.vert(q[2], (u1, v1), c);
+                    self.vert(q[0], (u0, v0), c);
+                    self.vert(q[2], (u1, v1), c);
+                    self.vert(q[3], (u0, v1), c);
+                }
+            }
+            Item::Image { src, quad, uv, alpha } => {
+                let Some((id, swz, opq, _, _)) = tex(*src) else { return };
+                self.kind(Kind::Image(id, swz, opq));
+                let c = [*alpha, *alpha, *alpha, *alpha];
+                let (u0, v0, u1, v1) = (uv[0], uv[1], uv[2], uv[3]);
+                self.vert(quad[0], (u0, v0), c);
+                self.vert(quad[1], (u1, v0), c);
+                self.vert(quad[2], (u1, v1), c);
+                self.vert(quad[0], (u0, v0), c);
+                self.vert(quad[2], (u1, v1), c);
+                self.vert(quad[3], (u0, v1), c);
+            }
+        }
+    }
+
     fn unload(&mut self) {
         // SAFETY: handles from dlopen, closed once; no GL objects remain
         unsafe {

@@ -9,6 +9,7 @@ mod attention;
 #[cfg(target_os = "linux")]
 mod comp;
 mod config;
+mod damage;
 mod games;
 mod haptics;
 mod patterns;

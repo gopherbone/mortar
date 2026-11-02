@@ -127,7 +127,7 @@ impl Raster {
         let skey = (run.size * 64.0).round() as u32;
         let layout = typo.layout(&run.s, run.face, run.size, run.tracking);
         let fast = run.xf.is_translate();
-        for (idx, pen) in layout {
+        for &(idx, pen) in layout.iter() {
             let key = (run.face, idx, skey);
             let m = self.glyph(typo, key).0;
             if m.width == 0 || m.height == 0 {

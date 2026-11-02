@@ -88,14 +88,18 @@ fn ease(x: f32) -> f32 {
     x * x * (3.0 - 2.0 * x)
 }
 
+/// The pattern's x range on screen (in its own units): what lies outside
+/// is not drawn at all.
+type Vis = (f32, f32);
+
 /// One mosaic tile in grid cell (col, row), scaled by `s` (0..1) about its
-/// centre; `dx` moves it sideways (px).
-fn tile(b: &mut B, col: f32, row: f32, s: f32, dx: f32, c: Color) {
+/// centre, if it shows in `vis`.
+fn tile(b: &mut B, vis: Vis, col: f32, row: f32, s: f32, c: Color) {
     let size = (GRID - GROUT) * s;
-    if size < 1.0 {
+    if size < 1.0 || (col + 1.0) * GRID < vis.0 || col * GRID > vis.1 {
         return;
     }
-    let (cx, cy) = (col * GRID + GRID / 2.0 + dx, Y0 + row * GRID + GRID / 2.0);
+    let (cx, cy) = (col * GRID + GRID / 2.0, Y0 + row * GRID + GRID / 2.0);
     b.rect(cx - size / 2.0, cy - size / 2.0, size, size, c);
 }
 
@@ -215,6 +219,11 @@ impl Life {
         for i in 0..self.cells.len() {
             let t = if self.cells[i] { 1.0 } else { 0.0 };
             self.shown[i] += (t - self.shown[i]) * k;
+            // within a twentieth of a pixel: there (still tiles are not
+            // drawn again)
+            if (t - self.shown[i]).abs() < 0.002 {
+                self.shown[i] = t;
+            }
         }
     }
 }
@@ -298,11 +307,12 @@ impl Patterns {
         }
         b.clip(Some([lo, 0.0, hi - lo, STRIP_H]));
         b.push(Xf::translate(OX + dx, 0.0));
+        let vis = (lo - OX - dx, hi - OX - dx);
         match kind {
-            Kind::Zigzag => self.zigzag(b, pal),
-            Kind::Life => self.life_tiles(b, pal),
-            Kind::Scope => self.scope(b, pal, e),
-            Kind::Truchet => self.truchet(b, pal),
+            Kind::Zigzag => self.zigzag(b, pal, vis),
+            Kind::Life => self.life_tiles(b, pal, vis),
+            Kind::Scope => self.scope(b, pal, e, vis),
+            Kind::Truchet => self.truchet(b, pal, vis),
         }
         b.pop();
         b.clip(None);
@@ -312,7 +322,7 @@ impl Patterns {
     /// evenly spaced) of which only a window of WIN columns shows; the
     /// window snakes along, drawing at its head and erasing at its tail, a
     /// tile at a time.
-    fn zigzag(&self, b: &mut B, pal: &Pal) {
+    fn zigzag(&self, b: &mut B, pal: &Pal, vis: Vis) {
         let cols = [pal.yellow, pal.lavender, pal.dark];
         for band in 0..BANDS {
             let base = band as f32 * BAND_GAP - 1.0;
@@ -333,13 +343,13 @@ impl Patterns {
                 // alternate bands run the other way along the screen
                 let c = if band % 2 == 0 { i } else { NCOL - 1 - i };
                 let row = base + ZIG[c.rem_euclid(4) as usize];
-                tile(b, c as f32, row, s, 0.0, col);
-                tile(b, c as f32, row + 1.0, s, 0.0, col);
+                tile(b, vis, c as f32, row, s, col);
+                tile(b, vis, c as f32, row + 1.0, s, col);
             }
         }
     }
 
-    fn life_tiles(&self, b: &mut B, pal: &Pal) {
+    fn life_tiles(&self, b: &mut B, pal: &Pal, vis: Vis) {
         for y in 0..LH {
             for x in 0..LW {
                 let i = y * LW + x;
@@ -348,7 +358,7 @@ impl Patterns {
                     continue;
                 }
                 let c = if self.life.cells[i] && self.life.age[i] <= 1 { pal.yellow } else { pal.lime };
-                tile(b, x as f32, y as f32, s, 0.0, c);
+                tile(b, vis, x as f32, y as f32, s, c);
             }
         }
     }
@@ -357,7 +367,7 @@ impl Patterns {
     /// grid; the newest stretch orange, the older lavender, the head ink.
     /// It is centred in the strip, and spreads across the screen as the
     /// screensaver grows (`e`).
-    fn scope(&self, b: &mut B, pal: &Pal, e: f32) {
+    fn scope(&self, b: &mut B, pal: &Pal, e: f32, vis: Vis) {
         const CW: usize = NCOL as usize;
         const CH: usize = 27;
         let r = self.ratio + 0.5 * (self.t * 0.06).sin();
@@ -390,14 +400,14 @@ impl Patterns {
             } else {
                 pal.lavender
             };
-            tile(b, (idx % CW) as f32, (idx / CW) as f32, 1.0, 0.0, c);
+            tile(b, vis, (idx % CW) as f32, (idx / CW) as f32, 1.0, c);
         }
     }
 
     /// Truchet tiles, the classic two-colour mosaic: a pink 56 px square
     /// with lavender quarter discs at two opposite corners; the wave turns
     /// each tile a quarter turn, eased, as it passes.
-    fn truchet(&self, b: &mut B, pal: &Pal) {
+    fn truchet(&self, b: &mut B, pal: &Pal, vis: Vis) {
         let cell = GRID * 2.0;
         let side = cell - GROUT;
         let span = (SCREEN_W - OX) + STRIP_H + 160.0;
@@ -411,9 +421,19 @@ impl Patterns {
             h ^ (h >> 12)
         };
         let (fill, disc) = (pal.pink, pal.lavender);
+        // the quarter disc's arc, once (the bottom-right one is the same
+        // turned half way round)
+        let arc: [P; 9] = std::array::from_fn(|k| {
+            let a = (k as f32 * 90.0 / 8.0).to_radians();
+            (a.cos(), a.sin())
+        });
         for j in 0..((STRIP_H - Y0) / cell) as i32 + 1 {
             for i in 0..((SCREEN_W - OX) / cell) as i32 + 1 {
                 let (x, y) = (i as f32 * cell, Y0 + j as f32 * cell);
+                // a turning square reaches a little out of its cell
+                if x + cell + 10.0 < vis.0 || x - 10.0 > vis.1 {
+                    continue;
+                }
                 let r = ease((front - (x + y)) / 60.0);
                 let base = (hash(i, j) & 1) as i32 + pass;
                 let ang = (base as f32 + r) * std::f32::consts::FRAC_PI_2;
@@ -427,12 +447,12 @@ impl Patterns {
                 let sq = [(cx - h, cy - h), (cx + h, cy - h), (cx + h, cy + h), (cx - h, cy + h)];
                 b.poly(&sq.map(rot), fill);
                 // quarter discs at the top-left and bottom-right corners
-                for (ox, oy, a0) in [(cx - h, cy - h, 0.0f32), (cx + h, cy + h, 180.0)] {
-                    let mut pts: Vec<P> = vec![rot((ox, oy))];
-                    pts.extend((0..=8).map(|k| {
-                        let a = (a0 + k as f32 * 90.0 / 8.0).to_radians();
-                        rot((ox + h * a.cos(), oy + h * a.sin()))
-                    }));
+                for (ox, oy, s) in [(cx - h, cy - h, 1.0f32), (cx + h, cy + h, -1.0)] {
+                    let mut pts = [(0.0, 0.0); 10];
+                    pts[0] = rot((ox, oy));
+                    for (p, (c, sn)) in pts[1..].iter_mut().zip(arc) {
+                        *p = rot((ox + s * h * c, oy + s * h * sn));
+                    }
                     b.poly(&pts, disc);
                 }
             }

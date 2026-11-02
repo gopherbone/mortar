@@ -20,7 +20,9 @@ use super::gl::{Fbo, Gl, Tex, Target};
 use super::ui::BLUR_EVERY;
 use super::state::Shell;
 use super::ui::surface_buffer;
+use crate::damage::{Grid, Info};
 use crate::scene::{Layer, Scene, Src};
+use mortar_ui::gfx::Color;
 use smithay::backend::allocator::{Buffer, Fourcc};
 use smithay::backend::drm::DrmDeviceFd;
 use smithay::reexports::drm::buffer::Buffer as DrmBuffer;
@@ -39,6 +41,9 @@ struct Buf {
     fb: framebuffer::Handle,
     _fd: OwnedFd,
     target: Option<Target>,
+    /// What it shows (to redraw only what changed): the image contents'
+    /// epoch, the clear colour and the items' fingerprints.
+    drawn: Option<(u64, Color, Vec<Info>)>,
 }
 
 struct Entry {
@@ -84,6 +89,35 @@ pub struct GpuUi {
     mean: Option<[f32; 3]>,
     /// The blurred home screen: (Shell::home_gen it shows, result, scratch).
     home: Option<(u64, Fbo, Fbo)>,
+    /// Bumped whenever an image a frame may sample changed (a buffer
+    /// that holds an older epoch is drawn in full).
+    epoch: u64,
+    /// The apps' buffers and commits last seen.
+    seen: Vec<(u32, ObjectId, smithay::backend::renderer::utils::CommitCounter)>,
+    /// Redraw only what changed (MORTAR_SHELL_FULL_REDRAW=1: always all).
+    partial: bool,
+    /// Share of the screen redrawn, smoothed (0..1).
+    pub damage_avg: f32,
+    /// `ctl gpucheck`: compare the next partial frame with a full one.
+    check_next: bool,
+    check: Option<String>,
+}
+
+/// A buffer's pixels as RGBA (slow: write-combined memory).
+fn read_buf(drm: &DrmDeviceFd, b: &mut Buf) -> Option<(u32, u32, Vec<u8>)> {
+    let db = b.db.as_mut()?;
+    let (w, h) = db.size();
+    let pitch = db.pitch() as usize;
+    let m = drm.map_dumb_buffer(db).ok()?;
+    let src = m.as_ref();
+    let mut out = Vec::with_capacity((w * h * 4) as usize);
+    for y in 0..h as usize {
+        let row = &src[y * pitch..y * pitch + w as usize * 4];
+        for p in row.chunks_exact(4) {
+            out.extend_from_slice(&[p[2], p[1], p[0], 255]);
+        }
+    }
+    Some((w, h, out))
 }
 
 impl GpuUi {
@@ -108,6 +142,12 @@ impl GpuUi {
             blur_count: 0,
             mean: None,
             home: None,
+            epoch: 0,
+            seen: Vec::new(),
+            partial: std::env::var("MORTAR_SHELL_FULL_REDRAW").map_or(true, |v| v.is_empty() || v == "0"),
+            damage_avg: 1.0,
+            check_next: false,
+            check: None,
         };
         for _ in 0..2 {
             match me.alloc(size) {
@@ -153,26 +193,31 @@ impl GpuUi {
                 return Err(e);
             }
         };
-        Ok(Buf { db: Some(db), fb, _fd: fd, target: Some(target) })
+        Ok(Buf { db: Some(db), fb, _fd: fd, target: Some(target), drawn: None })
     }
 
     /// The buffer on screen, as RGBA (debugging: `ctl gpushot`). Reads
     /// write-combined memory, so it is slow (~50 ms).
     pub fn read_front(&mut self) -> Option<(u32, u32, Vec<u8>)> {
         let i = self.front.or(self.queued)?;
-        let db = self.bufs.get_mut(i)?.db.as_mut()?;
-        let (w, h) = db.size();
-        let pitch = db.pitch() as usize;
-        let m = self.drm.map_dumb_buffer(db).ok()?;
-        let src = m.as_ref();
-        let mut out = Vec::with_capacity((w * h * 4) as usize);
-        for y in 0..h as usize {
-            let row = &src[y * pitch..y * pitch + w as usize * 4];
-            for p in row.chunks_exact(4) {
-                out.extend_from_slice(&[p[2], p[1], p[0], 255]);
-            }
+        read_buf(&self.drm, self.bufs.get_mut(i)?)
+    }
+
+    /// Check the next partly redrawn frame against the same frame drawn in
+    /// full (debugging: `ctl gpucheck`); returns the last check's result.
+    pub fn check_next(&mut self) -> String {
+        self.check_next = true;
+        self.check.clone().unwrap_or_else(|| "no check yet".into())
+    }
+
+    fn free_buf(&self, mut b: Buf) {
+        if let Some(t) = b.target.take() {
+            self.gl.drop_target(t);
         }
-        Some((w, h, out))
+        let _ = self.drm.destroy_framebuffer(b.fb);
+        if let Some(db) = b.db.take() {
+            let _ = self.drm.destroy_dumb_buffer(db);
+        }
     }
 
     /// A page flip of ours completed.
@@ -194,6 +239,33 @@ impl GpuUi {
         self.frame += 1;
         let idx = (0..self.bufs.len()).find(|i| Some(*i) != self.front && Some(*i) != self.queued).ok_or("no free buffer")?;
         self.prepare(shell, scene);
+        // what changed since this buffer was drawn
+        let mut infos = Vec::new();
+        let rects = match (self.partial, shell.typo.as_ref(), self.bufs[idx].drawn.take()) {
+            (true, Some(t), Some((epoch, clear, old))) if epoch == self.epoch && clear == scene.clear => {
+                self.gl.infos(scene, t, &mut infos);
+                let mut g = Grid::new(scene.w, scene.h);
+                g.diff(&old, &infos);
+                g.rects()
+            }
+            (true, Some(t), _) => {
+                self.gl.infos(scene, t, &mut infos);
+                None
+            }
+            _ => None,
+        };
+        let share = rects.as_ref().map_or(1.0, |r| r.iter().map(|r| r[2] * r[3]).sum::<f32>() / (scene.w * scene.h));
+        // `ctl gpucheck`: the same frame in full, into a spare buffer
+        let mut spare = None;
+        if self.check_next && rects.is_some() {
+            self.check_next = false;
+            match self.bufs[idx].target.as_ref().map(|t| (t.w, t.h)).map(|s| self.alloc(s)) {
+                Some(Ok(b)) => spare = Some(b),
+                Some(Err(e)) => self.check = Some(format!("no spare buffer: {e}")),
+                None => {}
+            }
+        }
+        self.damage_avg = self.damage_avg * 0.9 + share * 0.1;
         if let Some(m) = self.mean.take() {
             shell.backdrop_rgb = Some(m);
         }
@@ -234,16 +306,42 @@ impl GpuUi {
         };
         let target = self.bufs[idx].target.as_ref().ok_or("no target")?;
         let typo = shell.typo.take();
+        let only = rects.as_deref().map(|r| (&infos[..], r));
         let r = match &typo {
-            Some(t) => gl.render(target, scene, t, &lookup),
+            Some(t) => gl.render(target, scene, t, &lookup, only).and_then(|_| match spare.as_ref().and_then(|b| b.target.as_ref()) {
+                Some(st) => gl.render(st, scene, t, &lookup, None),
+                None => Ok(()),
+            }),
             None => Err("no fonts".into()),
         };
         shell.typo = typo;
-        r?;
+        if let Err(e) = r {
+            if let Some(b) = spare {
+                self.free_buf(b);
+            }
+            return Err(e);
+        }
         // no implicit fencing in this DDK: the frame must be done before the flip
         gl.finish();
         gl.check("finish")?;
+        if let Some(mut b) = spare {
+            let n = rects.as_ref().map_or(0, |r| r.len());
+            let (a, f) = (read_buf(&self.drm, &mut self.bufs[idx]), read_buf(&self.drm, &mut b));
+            self.check = Some(match (a, f) {
+                (Some((_, _, a)), Some((_, _, f))) if a.len() == f.len() => {
+                    let d: Vec<u8> = a.iter().zip(&f).map(|(x, y)| x.abs_diff(*y)).collect();
+                    let off = d.chunks_exact(4).filter(|p| p.iter().any(|c| *c > 2)).count();
+                    format!("{off} px differ (most by {}) after redrawing {:.1}% in {n} rects", d.iter().max().unwrap_or(&0), share * 100.0)
+                }
+                _ => "could not read the buffers".into(),
+            });
+            tracing::info!("gpucheck: {}", self.check.as_deref().unwrap_or(""));
+            self.free_buf(b);
+        }
         self.prune();
+        if self.partial && !infos.is_empty() {
+            self.bufs[idx].drawn = Some((self.epoch, scene.clear, infos));
+        }
         self.queued = Some(idx);
         self.render_ms = t0.elapsed().as_secs_f32() * 1000.0;
         self.render_avg_ms = if self.render_avg_ms == 0.0 { self.render_ms } else { self.render_avg_ms * 0.9 + self.render_ms * 0.1 };
@@ -257,6 +355,22 @@ impl GpuUi {
 
     /// Import/upload the images this scene samples.
     fn prepare(&mut self, shell: &Shell, scene: &Scene) {
+        // a new buffer or commit of an app on screen: everything is drawn
+        // again (an app's buffers are reused with new contents)
+        let seen: Vec<_> = scene
+            .apps()
+            .into_iter()
+            .filter_map(|u| {
+                let s = shell.app_surface(u)?;
+                let (b, c) = surface_buffer(&s)?;
+                Some((u, b.id(), c))
+            })
+            .collect();
+        if seen != self.seen {
+            self.seen = seen;
+            self.epoch += 1;
+        }
+        let before = self.images_stamp();
         for uid in scene.apps() {
             let Some(s) = shell.app_surface(uid) else { continue };
             let Some((buf, commit)) = surface_buffer(&s) else { continue };
@@ -348,6 +462,15 @@ impl GpuUi {
                 Err(e) => tracing::debug!("layer upload: {e}"),
             }
         }
+        // a blur done, a picture or a layer come, gone or redrawn
+        if self.images_stamp() != before {
+            self.epoch += 1;
+        }
+    }
+
+    /// Changes when the blurs, pictures or layers do.
+    fn images_stamp(&self) -> (u64, usize, u64, usize) {
+        (self.blur_count, self.pics.len(), self.layers.values().map(|(g, _)| *g).sum(), self.layers.len())
     }
 
     /// Blur the backdrop app again if its buffer changed (at most every
