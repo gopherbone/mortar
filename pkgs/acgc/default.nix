@@ -98,7 +98,7 @@ stdenv.mkDerivation {
     # Without them the game compiles its shaders before the window appears
     # (~20 s): say so inside mortar-shell (\$MORTAR_APP: started by the shell).
     if [ ! -e shader_binaries.bin ] && [ -n "\''${MORTAR_APP:-}" ] && command -v mortar-shell >/dev/null; then
-      mortar-shell toast --sound none --secs 20 "Animal Crossing" "Preparing graphics, about 20 s (first start only)" >/dev/null 2>&1 || true
+      mortar-shell toast --sound none --secs 20 "Animal Crossing" "Preparing graphics (about 20 s)" >/dev/null 2>&1 || true
     fi
     exec $out/libexec/acgc/AnimalCrossing "\$@"
     EOF
