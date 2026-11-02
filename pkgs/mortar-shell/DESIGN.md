@@ -833,10 +833,11 @@ copies nothing and the CPU is idle.
   own size (e.g. 320x240) with a 1024x768 destination and the shell copies
   nothing. Under the GPU UI renderer the same buffer is sampled scaled
   (the app image uses the viewport's destination size).
-- Output: DRM/KMS through Smithay's `DrmCompositor`, swapchain buffers from
-  GBM (Mesa's kms_swrast on sun4i, i.e. dumb buffers that pixman maps). If
-  libgbm cannot open the card (or `MORTAR_SHELL_ALLOCATOR=dumb`), plain KMS
-  dumb buffers are used instead.
+- Output: DRM/KMS through Smithay's `DrmCompositor`, swapchain buffers are
+  plain KMS dumb buffers that pixman maps. GBM (Mesa's kms_swrast on
+  sun4i) gives the same dumb buffers but loads libgallium, LLVM and the
+  Vulkan drivers first: 2.4 s at boot and ~40 MB resident. It is used with
+  `MORTAR_SHELL_ALLOCATOR=gbm`, or if the dumb compositor does not start.
 - Direct scanout: when the only element is a client dmabuf that covers the
   screen, `DrmCompositor` puts it on the primary plane with no copy.
   Smithay's own exporters do not do that here (the GBM one only imports

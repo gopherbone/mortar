@@ -127,8 +127,8 @@ impl MixerWorker {
             let mut ticks = 0u32;
             let dump = |sh: &Shared<Vec<Stream>>| {
                 let Some((cmd, args)) = pw_dump.split_first() else { return };
-                match std::process::Command::new(cmd).args(args).stderr(std::process::Stdio::null()).output() {
-                    Ok(o) => sh.put(parse_streams(&String::from_utf8_lossy(&o.stdout))),
+                match run_to_memory(cmd, args) {
+                    Ok(out) => sh.put(parse_streams(&out)),
                     Err(e) => {
                         tracing::debug!("{cmd}: {e}");
                         sh.put(Vec::new());
@@ -187,5 +187,46 @@ impl MixerWorker {
         }
         self.seen = g;
         self.shared.val.lock().ok().map(|v| v.clone())
+    }
+}
+
+/// Run a command and return its stdout, collected in a memfd rather than
+/// a pipe: pw-dump writes its ~100 KB of JSON in ~3,500 small writes, and
+/// through a pipe each one woke this thread (measured: ~500 wakeups/s
+/// with a dump every 4 s).
+fn run_to_memory(cmd: &str, args: &[String]) -> std::io::Result<String> {
+    use std::io::{Read, Seek};
+    use std::os::fd::FromRawFd;
+    // SAFETY: memfd_create with a NUL-terminated name; the File owns the
+    // new descriptor from here on.
+    let fd = unsafe { libc::memfd_create(c"mortar-shell-out".as_ptr(), libc::MFD_CLOEXEC) };
+    if fd < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: fd is a fresh descriptor nothing else owns
+    let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
+    let status = std::process::Command::new(cmd)
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .stdout(file.try_clone()?)
+        .stderr(std::process::Stdio::null())
+        .status()?;
+    if !status.success() {
+        return Err(std::io::Error::other(format!("exit status {status}")));
+    }
+    file.rewind()?;
+    let mut out = String::new();
+    file.take(16 * 1024 * 1024).read_to_string(&mut out)?;
+    Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn collects_stdout_in_memory() {
+        let script = "for i in 1 2 3; do printf 'line %s\\n' $i; done";
+        let out = super::run_to_memory("sh", &["-c".into(), script.into()]).unwrap();
+        assert_eq!(out, "line 1\nline 2\nline 3\n");
+        assert!(super::run_to_memory("sh", &["-c".into(), "exit 3".into()]).is_err());
     }
 }

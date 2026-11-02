@@ -6,8 +6,9 @@
 //!   released; on resume they come back and the screen is redrawn.
 //! - Card: $MORTAR_DRM_DEVICE or the first /dev/dri/card* with a connected
 //!   connector (sun4i-drm's card0 on the Brick; the PowerVR has no KMS).
-//! - Buffers: GBM (Mesa kms_swrast = dumb buffers) or plain dumb buffers for
-//!   the swapchain. Client dmabufs (GPU apps through mortar-wlegl) are
+//! - Buffers: plain KMS dumb buffers for the swapchain (GBM, i.e. Mesa's
+//!   kms_swrast handing out the same dumb buffers, when asked or as a
+//!   fallback). Client dmabufs (GPU apps through mortar-wlegl) are
 //!   PRIME-imported for direct scanout by `scanout::ClientScanout` with
 //!   either allocator.
 //! - The shell's UI layers: on the GPU (`gpu::GpuUi`, page-flipped on the
@@ -43,9 +44,9 @@ use std::path::{Path, PathBuf};
 type GbmComp = DrmCompositor<GbmAllocator<DrmDeviceFd>, ClientScanout<GbmFramebufferExporter<DrmDeviceFd>>, (), DrmDeviceFd>;
 type DumbComp = DrmCompositor<DumbAllocator, ClientScanout<DrmDeviceFd>, (), DrmDeviceFd>;
 
-/// GBM buffers (default) or plain KMS dumb buffers (fallback when
-/// libgbm/Mesa is unusable, or MORTAR_SHELL_ALLOCATOR=dumb). Both scan out
-/// client dmabufs directly.
+/// Plain KMS dumb buffers (default) or GBM ones (MORTAR_SHELL_ALLOCATOR=gbm,
+/// or when the dumb compositor does not start). Both scan out client
+/// dmabufs directly.
 enum Comp {
     Gbm(Box<GbmComp>),
     Dumb(Box<DumbComp>),
@@ -169,36 +170,45 @@ pub fn init(handle: &LoopHandle<'static, Shell>, ui: &crate::config::UiConfig) -
 
     let renderer = PixmanRenderer::new().map_err(|e| format!("pixman: {e:?}"))?;
     let formats = [Fourcc::Xrgb8888, Fourcc::Argb8888];
-    let want_dumb = std::env::var("MORTAR_SHELL_ALLOCATOR").is_ok_and(|v| v == "dumb");
+    // Plain KMS dumb buffers by default. GBM here is Mesa's kms_swrast,
+    // which hands out the same dumb buffers but first loads libgallium,
+    // LLVM and the Vulkan drivers (2.4 s at boot from the card, ~40 MB
+    // resident). GBM when asked (MORTAR_SHELL_ALLOCATOR=gbm) or when the
+    // dumb compositor does not start.
+    let want_gbm = std::env::var("MORTAR_SHELL_ALLOCATOR").is_ok_and(|v| v == "gbm");
     let scanout = std::env::var_os("MORTAR_SHELL_NO_SCANOUT").is_none();
-    let gbm = if want_dumb {
-        None
-    } else {
-        GbmDevice::new(fd.clone()).map_err(|e| tracing::warn!("gbm: {e}; using dumb buffers")).ok()
-    };
-    let comp = match gbm {
-        Some(gbm) => {
+    let mut surface = Some(surface);
+    let mut dumb = None;
+    if !want_gbm && let Some(s) = surface.take() {
+        let allocator = DumbAllocator::new(fd.clone());
+        match DrmCompositor::new(
+            &output,
+            s,
+            None,
+            allocator,
+            ClientScanout { inner: fd.clone(), enabled: scanout },
+            formats,
+            renderer.dmabuf_formats(),
+            drm.cursor_size(),
+            None::<GbmDevice<DrmDeviceFd>>,
+        ) {
+            Ok(c) => dumb = Some(Comp::Dumb(Box::new(c))),
+            Err(e) => tracing::warn!("drm compositor (dumb): {e:?}; trying GBM"),
+        }
+    }
+    let comp = match dumb {
+        Some(c) => c,
+        None => {
+            let s = match surface.take() {
+                Some(s) => s,
+                None => drm.create_surface(crtc, mode, &[conn.handle()]).map_err(|e| format!("drm surface: {e:?}"))?,
+            };
+            let gbm = GbmDevice::new(fd.clone()).map_err(|e| format!("gbm: {e}"))?;
             let allocator = GbmAllocator::new(gbm.clone(), GbmBufferFlags::RENDERING | GbmBufferFlags::SCANOUT);
             let exporter = ClientScanout { inner: GbmFramebufferExporter::new(gbm.clone(), None), enabled: scanout };
-            DrmCompositor::new(&output, surface, None, allocator, exporter, formats, renderer.dmabuf_formats(), drm.cursor_size(), Some(gbm))
+            DrmCompositor::new(&output, s, None, allocator, exporter, formats, renderer.dmabuf_formats(), drm.cursor_size(), Some(gbm))
                 .map(|c| Comp::Gbm(Box::new(c)))
                 .map_err(|e| format!("drm compositor (gbm): {e:?}"))?
-        }
-        None => {
-            let allocator = DumbAllocator::new(fd.clone());
-            DrmCompositor::new(
-                &output,
-                surface,
-                None,
-                allocator,
-                ClientScanout { inner: fd.clone(), enabled: scanout },
-                formats,
-                renderer.dmabuf_formats(),
-                drm.cursor_size(),
-                None::<GbmDevice<DrmDeviceFd>>,
-            )
-            .map(|c| Comp::Dumb(Box::new(c)))
-            .map_err(|e| format!("drm compositor (dumb): {e:?}"))?
         }
     };
     tracing::info!(allocator = if matches!(comp, Comp::Gbm(_)) { "gbm" } else { "dumb" }, "scanout buffers");

@@ -578,7 +578,9 @@ impl Shell {
             self.widget_out = o;
             self.ui_dirty = true;
         }
-        let now_playing = home && self.cfg.home.widgets.iter().any(|w| w.kind == crate::widgets::Kind::NowPlaying);
+        // (only with an app running: a stream counts only as an app's, and
+        // each look is a pw-dump, ~50 ms of CPU)
+        let now_playing = home && !self.apps.list.is_empty() && self.cfg.home.widgets.iter().any(|w| w.kind == crate::widgets::Kind::NowPlaying);
         self.mixer_worker.set_active(self.sui.wants_mixer());
         self.mixer_worker.set_slow(now_playing);
         if let Some(s) = self.mixer_worker.take() {

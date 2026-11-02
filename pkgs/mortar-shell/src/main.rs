@@ -106,7 +106,7 @@ environment:
   MORTAR_SHELL_LOG          log filter (tracing EnvFilter), default info
   MORTAR_DRM_DEVICE         DRM card to use
   MORTAR_SHELL_NO_SCANOUT   never scan out client buffers directly
-  MORTAR_SHELL_ALLOCATOR    gbm (default; falls back to dumb) | dumb
+  MORTAR_SHELL_ALLOCATOR    dumb (default; falls back to gbm) | gbm
   MORTAR_SHELL_RENDERER     gpu | cpu: override the config's ui.renderer
   MORTAR_SHELL_GL_MSAA      0 | 4: override ui.msaa
   MORTAR_SHELL_RUMBLE       rumble device (default: the gpio-vibrator event node)
