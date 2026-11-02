@@ -19,8 +19,15 @@
  *  - The context is made current surfaceless (EGL_KHR_surfaceless_context)
  *    and "framebuffer 0" is redirected to an FBO: glBindFramebuffer(0),
  *    glGetIntegerv(FRAMEBUFFER_BINDING) and friends are wrapped.
- *  - eglSwapBuffers: glFinish (this DDK has no implicit dma-buf fencing),
- *    attach + damage + commit, then pick a released buffer.
+ *  - eglSwapBuffers: an EGL_KHR_fence_sync fence and glFlush; a presenter
+ *    thread per surface waits for the fence, then attaches + damages +
+ *    commits (this DDK has no implicit dma-buf fencing, so the compositor
+ *    must only get finished buffers). The app builds the next frame in the
+ *    meantime; a swap waits only until the previous frame was committed
+ *    (one frame queued at most), then for its frame callback, then picks a
+ *    released buffer. MORTAR_WLEGL_SYNC=finish: the old way, glFinish and
+ *    commit in the swap. MORTAR_WLEGL_STATS=1 logs where a frame's time
+ *    goes (every 120 frames).
  *
  * Orientation. GL's window origin is bottom-left; an FBO texture keeps GL
  * row 0 in memory row 0, so a plain FBO render is upside down for the
@@ -61,6 +68,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <time.h>
 #include <unistd.h>
 #include <linux/dma-heap.h>
 
@@ -127,9 +135,12 @@ static struct {
 	PFNGLINVALIDATEFRAMEBUFFERPROC glInvalidateFramebuffer;
 	PFNGLDISCARDFRAMEBUFFEREXTPROC glDiscardFramebufferEXT;
 	PFNGLBLITFRAMEBUFFERPROC glBlitFramebuffer;
+	PFNEGLCREATESYNCKHRPROC CreateSyncKHR;
+	PFNEGLCLIENTWAITSYNCKHRPROC ClientWaitSyncKHR;
+	PFNEGLDESTROYSYNCKHRPROC DestroySyncKHR;
 } R;
 
-static bool debug;
+static bool debug, stats;
 static pthread_once_t once = PTHREAD_ONCE_INIT;
 
 static void dbg(const char *fmt, ...)
@@ -167,6 +178,7 @@ static void *open_lib(const char *name)
 static void load_real(void)
 {
 	debug = getenv("MORTAR_WLEGL_DEBUG") && *getenv("MORTAR_WLEGL_DEBUG") && strcmp(getenv("MORTAR_WLEGL_DEBUG"), "0");
+	stats = getenv("MORTAR_WLEGL_STATS") && *getenv("MORTAR_WLEGL_STATS") && strcmp(getenv("MORTAR_WLEGL_STATS"), "0");
 	R.egl = open_lib("libEGL.so.1");
 	R.gles = open_lib("libGLESv2.so.2");
 	if (!R.egl || !R.gles)
@@ -188,6 +200,9 @@ static void load_real(void)
 	R.SwapBuffersWithDamageEXT = (void *)R.GetProcAddress("eglSwapBuffersWithDamageEXT");
 	R.ImageTargetTexture2DOES = (void *)R.GetProcAddress("glEGLImageTargetTexture2DOES");
 	R.glDiscardFramebufferEXT = (void *)R.GetProcAddress("glDiscardFramebufferEXT");
+	R.CreateSyncKHR = (void *)R.GetProcAddress("eglCreateSyncKHR");
+	R.ClientWaitSyncKHR = (void *)R.GetProcAddress("eglClientWaitSyncKHR");
+	R.DestroySyncKHR = (void *)R.GetProcAddress("eglDestroySyncKHR");
 	if (!R.MakeCurrent || !R.glBindFramebuffer || !R.CreateImageKHR || !R.ImageTargetTexture2DOES) {
 		warn("stock EGL/GLES lacks a required entry point");
 		abort();
@@ -237,6 +252,20 @@ struct wsurf {
 	bool color_valid, checked;
 	enum mode mode;
 	int transform; /* last buffer_transform sent */
+	/* Presenter thread (see swap()): commits a frame once its fence has
+	   signalled. pm guards q_*, frame, transform, gone and quit, and the
+	   presenter sends its Wayland requests with it held. */
+	pthread_t pth;
+	bool pth_on, quit, gone;
+	pthread_mutex_t pm;
+	pthread_cond_t pcv;
+	struct wbuf *q_buf;
+	EGLSyncKHR q_sync;
+	int q_dx, q_dy, q_transform;
+	bool q_frame_cb;
+	/* MORTAR_WLEGL_STATS: where a frame's time goes (ms sums over st_n frames) */
+	double st_last, st_app, st_gpu, st_frame, st_back;
+	int st_n;
 };
 
 static struct {
@@ -492,8 +521,10 @@ static void frame_done(void *data, struct wl_callback *cb, uint32_t t)
 	(void)t;
 	struct wsurf *s = data;
 	wl_callback_destroy(cb);
+	pthread_mutex_lock(&s->pm);
 	if (s->frame == cb)
 		s->frame = NULL;
+	pthread_mutex_unlock(&s->pm);
 }
 
 static const struct wl_callback_listener frame_listener = { frame_done };
@@ -906,6 +937,8 @@ EGLContext eglCreateContext(EGLDisplay dpy, EGLConfig cfg, EGLContext share, con
 
 /* -------------------------------------------------------- EGL: surfaces */
 
+static void presenter_stop(struct wsurf *s);
+
 static void win_resize(struct wl_egl_window *w, void *data)
 {
 	(void)w, (void)data; /* sizes are read at the next swap */
@@ -916,8 +949,13 @@ static void win_destroy(void *data)
 	lock();
 	struct wsurf *s = data;
 	for (struct wsurf *x = D.surfaces; x; x = x->next)
-		if (x == s)
+		if (x == s) {
 			s->win = NULL;
+			/* the app may destroy the wl_surface next: no more requests on it */
+			pthread_mutex_lock(&s->pm);
+			s->gone = true;
+			pthread_mutex_unlock(&s->pm);
+		}
 	unlock();
 }
 
@@ -955,6 +993,8 @@ static EGLSurface create_window(EGLDisplay dpy, EGLConfig cfg, void *native)
 	s->w = w->width > 0 ? w->width : 1;
 	s->h = w->height > 0 ? w->height : 1;
 	s->interval = 1;
+	pthread_mutex_init(&s->pm, NULL);
+	pthread_cond_init(&s->pcv, NULL);
 	for (int i = 0; i < NBUF_MAX; i++)
 		s->buf[i].fd = -1;
 	R.GetConfigAttrib(dpy, cfg, EGL_DEPTH_SIZE, &s->depth);
@@ -1008,6 +1048,7 @@ EGLBoolean eglDestroySurface(EGLDisplay dpy, EGLSurface surface)
 			*p = s->next;
 			break;
 		}
+	presenter_stop(s);
 	bool gl = gl_ok(s);
 	for (int i = 0; i < NBUF_MAX; i++)
 		buf_free(s, &s->buf[i]);
@@ -1030,6 +1071,8 @@ EGLBoolean eglDestroySurface(EGLDisplay dpy, EGLSurface surface)
 	if (cur == s)
 		cur = NULL;
 	s->magic = 0;
+	pthread_cond_destroy(&s->pcv);
+	pthread_mutex_destroy(&s->pm);
 	free(s);
 	unlock();
 	return ok();
@@ -1127,6 +1170,125 @@ EGLBoolean eglSwapInterval(EGLDisplay dpy, EGLint interval)
 	return R.SwapInterval(dpy, interval);
 }
 
+static double now_ms(void)
+{
+	struct timespec t;
+	clock_gettime(CLOCK_MONOTONIC, &t);
+	return t.tv_sec * 1e3 + t.tv_nsec * 1e-6;
+}
+
+static void stats_frame(struct wsurf *s, double t0, double t1, double t2, double t3)
+{
+	if (s->st_last > 0) {
+		s->st_app += t0 - s->st_last;
+		s->st_gpu += t1 - t0;
+		s->st_frame += t2 - t1;
+		s->st_back += t3 - t2;
+		if (++s->st_n == 120) {
+			double n = s->st_n;
+			fprintf(stderr, "mortar-wlegl: %.1f fps: app %.1f ms, previous frame's GPU %.1f, frame callback %.1f, next buffer %.1f\n",
+				1000.0 * n / (s->st_app + s->st_gpu + s->st_frame + s->st_back),
+				s->st_app / n, s->st_gpu / n, s->st_frame / n, s->st_back / n);
+			s->st_app = s->st_gpu = s->st_frame = s->st_back = 0;
+			s->st_n = 0;
+		}
+	}
+	s->st_last = t3;
+}
+
+/* --------------------------------------------------------------- present */
+
+/* Attach and commit b (pm held). Its GPU work has finished. */
+static void commit_locked(struct wsurf *s, struct wbuf *b, int dx, int dy, int transform, bool frame_cb)
+{
+	if (s->gone)
+		return;
+	if (frame_cb) {
+		if (s->frame)
+			wl_callback_destroy(s->frame);
+		s->frame = wl_surface_frame(s->surf_wrap);
+		wl_callback_add_listener(s->frame, &frame_listener, s);
+	}
+	if (transform != s->transform) {
+		wl_surface_set_buffer_transform(s->surface, transform);
+		s->transform = transform;
+	}
+	uint32_t ver = wl_proxy_get_version((struct wl_proxy *)s->surface);
+	if (ver >= 5) {
+		wl_surface_attach(s->surface, b->wl, 0, 0);
+		if (dx || dy)
+			wl_surface_offset(s->surface, dx, dy);
+	} else {
+		wl_surface_attach(s->surface, b->wl, dx, dy);
+	}
+	if (ver >= 4)
+		wl_surface_damage_buffer(s->surface, 0, 0, INT32_MAX, INT32_MAX);
+	else
+		wl_surface_damage(s->surface, 0, 0, INT32_MAX, INT32_MAX);
+	wl_surface_commit(s->surface);
+	wl_display_flush(D.wl);
+}
+
+/* The presenter waits for each queued frame's fence, then commits it, so
+ * the app's thread builds the next frame while the GPU renders this one.
+ * The stock DDK has no implicit dma-buf fencing: the compositor may only
+ * see a buffer the GPU has finished (it scans it out as is). One frame at
+ * most waits here; swap() blocks until it has gone. */
+static void *presenter(void *arg)
+{
+	struct wsurf *s = arg;
+	pthread_mutex_lock(&s->pm);
+	for (;;) {
+		while (!s->q_buf && !s->quit)
+			pthread_cond_wait(&s->pcv, &s->pm);
+		if (!s->q_buf)
+			break;
+		EGLSyncKHR sync = s->q_sync;
+		pthread_mutex_unlock(&s->pm);
+		R.ClientWaitSyncKHR(D.dpy, sync, 0, EGL_FOREVER_KHR);
+		R.DestroySyncKHR(D.dpy, sync);
+		pthread_mutex_lock(&s->pm);
+		if (!s->quit)
+			commit_locked(s, s->q_buf, s->q_dx, s->q_dy, s->q_transform, s->q_frame_cb);
+		s->q_buf = NULL;
+		pthread_cond_broadcast(&s->pcv);
+	}
+	pthread_mutex_unlock(&s->pm);
+	return NULL;
+}
+
+/* The presenter for s; false: no fences (MORTAR_WLEGL_SYNC=finish, or the
+ * EGL lacks EGL_KHR_fence_sync), so swap() waits with glFinish. */
+static bool presenter_start(struct wsurf *s)
+{
+	if (s->pth_on)
+		return true;
+	static int off = -1;
+	if (off < 0) {
+		const char *e = getenv("MORTAR_WLEGL_SYNC");
+		off = (e && !strcmp(e, "finish")) || !R.CreateSyncKHR || !R.ClientWaitSyncKHR || !R.DestroySyncKHR;
+		dbg("frame sync: %s", off ? "glFinish" : "fence + presenter thread");
+	}
+	if (off)
+		return false;
+	s->quit = false;
+	s->pth_on = pthread_create(&s->pth, NULL, presenter, s) == 0;
+	return s->pth_on;
+}
+
+/* End the thread; a frame still waiting is not shown (surface destroyed). */
+static void presenter_stop(struct wsurf *s)
+{
+	if (!s->pth_on)
+		return;
+	pthread_mutex_lock(&s->pm);
+	s->quit = true;
+	pthread_cond_broadcast(&s->pcv);
+	pthread_mutex_unlock(&s->pm);
+	pthread_join(s->pth, NULL);
+	s->pth_on = false;
+}
+
 static EGLBoolean swap(struct wsurf *s)
 {
 	if (!gl_ok(s))
@@ -1145,41 +1307,56 @@ static EGLBoolean swap(struct wsurf *s)
 		R.glInvalidateFramebuffer(GL_DRAW_FRAMEBUFFER, 2, ds);
 		R.glBindFramebuffer(GL_DRAW_FRAMEBUFFER, (GLuint)draw);
 	}
+	double t0 = stats ? now_ms() : 0;
 	if (s->mode == MODE_BLIT)
 		blit(s, b);
-	glFinish(); /* no implicit fencing in this DDK: done before the compositor reads it */
-
-	if (s->interval > 0)
-		while (s->frame)
-			if (wl_display_dispatch_queue(D.wl, D.q) < 0)
-				return fail(EGL_BAD_NATIVE_WINDOW);
-	if (s->interval > 0) {
-		s->frame = wl_surface_frame(s->surf_wrap);
-		wl_callback_add_listener(s->frame, &frame_listener, s);
-	}
-	int t = s->mode == MODE_TRANSFORM ? WL_OUTPUT_TRANSFORM_FLIPPED_180 : WL_OUTPUT_TRANSFORM_NORMAL;
-	if (t != s->transform) {
-		wl_surface_set_buffer_transform(s->surface, t);
-		s->transform = t;
-	}
-	uint32_t ver = wl_proxy_get_version((struct wl_proxy *)s->surface);
-	int dx = s->win->dx, dy = s->win->dy;
-	if (ver >= 5) {
-		wl_surface_attach(s->surface, b->wl, 0, 0);
-		if (dx || dy)
-			wl_surface_offset(s->surface, dx, dy);
-	} else {
-		wl_surface_attach(s->surface, b->wl, dx, dy);
-	}
-	s->win->dx = s->win->dy = 0;
-	if (ver >= 4)
-		wl_surface_damage_buffer(s->surface, 0, 0, INT32_MAX, INT32_MAX);
+	/* Fence the frame and hand it to the presenter, which commits it once
+	   the GPU is done; without fences, wait for the GPU here. */
+	EGLSyncKHR sync = EGL_NO_SYNC_KHR;
+	if (presenter_start(s))
+		sync = R.CreateSyncKHR(D.dpy, EGL_SYNC_FENCE_KHR, NULL);
+	if (sync != EGL_NO_SYNC_KHR)
+		glFlush();
 	else
-		wl_surface_damage(s->surface, 0, 0, INT32_MAX, INT32_MAX);
-	wl_surface_commit(s->surface);
-	wl_display_flush(D.wl);
+		glFinish();
+
+	/* the previous frame must be committed (so its GPU work is done) */
+	pthread_mutex_lock(&s->pm);
+	while (s->q_buf)
+		pthread_cond_wait(&s->pcv, &s->pm);
+	double t1 = stats ? now_ms() : 0;
+	/* vsync: at most one commit per frame callback */
+	if (s->interval > 0)
+		while (s->frame) {
+			pthread_mutex_unlock(&s->pm);
+			int r = wl_display_dispatch_queue(D.wl, D.q);
+			pthread_mutex_lock(&s->pm);
+			if (r < 0) {
+				pthread_mutex_unlock(&s->pm);
+				if (sync != EGL_NO_SYNC_KHR)
+					R.DestroySyncKHR(D.dpy, sync);
+				return fail(EGL_BAD_NATIVE_WINDOW);
+			}
+		}
+	double t2 = stats ? now_ms() : 0;
+	int dx = s->win->dx, dy = s->win->dy;
+	s->win->dx = s->win->dy = 0;
+	int transform = s->mode == MODE_TRANSFORM ? WL_OUTPUT_TRANSFORM_FLIPPED_180 : WL_OUTPUT_TRANSFORM_NORMAL;
+	/* busy from now on: the compositor's release comes after the commit */
 	b->busy = true;
 	b->frame = ++s->frames;
+	if (sync != EGL_NO_SYNC_KHR) {
+		s->q_buf = b;
+		s->q_sync = sync;
+		s->q_dx = dx;
+		s->q_dy = dy;
+		s->q_transform = transform;
+		s->q_frame_cb = s->interval > 0;
+		pthread_cond_broadcast(&s->pcv);
+	} else {
+		commit_locked(s, b, dx, dy, transform, s->interval > 0);
+	}
+	pthread_mutex_unlock(&s->pm);
 	s->win->attached_width = b->w;
 	s->win->attached_height = b->h;
 
@@ -1197,6 +1374,8 @@ static EGLBoolean swap(struct wsurf *s)
 	attach(s);
 	if (s->mode == MODE_BLIT)
 		s->color_valid = true;
+	if (stats)
+		stats_frame(s, t0, t1, t2, now_ms());
 	return ok();
 }
 
