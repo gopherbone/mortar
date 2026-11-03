@@ -149,6 +149,11 @@ in
 
       systemd.tmpfiles.rules = [ "d /var/lib/mortar-setup 0700 root root - -" ];
 
+      # usb0 isn't a trusted interface (usb.nix).
+      networking.firewall.interfaces = lib.genAttrs cfg.pairing.interfaces (_: {
+        allowedTCPPorts = [ cfg.pairing.port ];
+      });
+
       systemd.services.mortar-setup-apply = {
         description = "Mortar: apply mortar.toml from the boot partition";
         wantedBy = [ "multi-user.target" ];

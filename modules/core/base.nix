@@ -7,10 +7,15 @@
 #     (see usb.nix), the session user's from ssh-keys/<user>.
 #   - Sessions on the panel (the greeter, the shell, apps) run as the
 #     session user (user.nix), not root.
-#   - Consoles that need physical access (the USB-C serial port, the
-#     internal UART pads, text VTs) log in as root automatically.
+#   - The internal UART pads (ttyS0) log in as root automatically: opening
+#     the Brick is the recovery path. No other console does, unless
+#     `mortar.usb.trustHost` is on (usb.nix): a USB host or keyboard gets no
+#     root by itself. docs/pairing.md has the whole picture.
 { config, lib, pkgs, ... }:
 
+let
+  getty = config.services.getty;
+in
 {
   # The first Mortar card was installed with 25.05; keep it.
   system.stateVersion = "25.05";
@@ -41,9 +46,19 @@
   # otherwise refuse to build a system where root has no password.
   users.allowNoPasswordLogin = true;
 
-  # Every getty (text VTs, ttyGS0 over USB-C, ttyS0 on the UART pads) logs
-  # straight in as root. (The panel's VT1 belongs to the greeter.)
-  services.getty.autologinUser = "root";
+  # With trustHost every getty (text VTs, ttyGS0 over USB-C, ttyS0 on the UART
+  # pads) logs straight in as root. (The panel's VT1 belongs to the greeter.)
+  services.getty.autologinUser = lib.mkIf config.mortar.usb.trustHost "root";
+  # Without it only ttyS0 does. Its unit is the template's, plus --autologin.
+  systemd.services."serial-getty@ttyS0".serviceConfig.ExecStart = lib.mkIf (!config.mortar.usb.trustHost) [
+    ""
+    "${lib.getExe' pkgs.util-linux "agetty"} ${
+      lib.escapeShellArgs (
+        [ "--login-program" "${getty.loginProgram}" "--issue-file" "/etc/issue:/etc/issue.d:/run/issue:/run/issue.d" "--autologin" "root" ]
+        ++ getty.extraArgs
+      )
+    } %I --keep-baud $TERM"
+  ];
 
   environment.systemPackages = with pkgs; [
     htop vim tmux file tree

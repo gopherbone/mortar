@@ -23,7 +23,10 @@ it's used: [docs/using.md](docs/using.md).
 
 The hardware layer on its own is for bringing up a device, not for daily use: it
 sets root's password to `trimui` and allows password SSH. Core locks that down, so
-add your own SSH setup if you use the hardware layer without core.
+add your own SSH setup if you use the hardware layer without core. With core, a
+computer on the USB cable can pair (with the code on the screen) and use SSH with a
+key, and has no console; `mortar.usb.trustHost = true` opens that up for development
+([docs/pairing.md](docs/pairing.md#what-a-usb-host-can-do)).
 
 ## Build a bare image
 

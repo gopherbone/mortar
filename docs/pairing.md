@@ -82,9 +82,10 @@ The code is a word from a list of 256 and four digits: about 21 bits.
   it. Without keys (first boot) a code is always on offer, since the
   screen is the only way in.
 - **USB only.** The service binds to `usb0` (`SO_BINDTODEVICE`) and refuses
-  peers outside `10.55.0.0/24`. The cable means someone has the Brick in
-  hand. (`mortar.setup.pairing.interfaces` could add `wlan0`; the
-  arguments above hold on a shared network too, but it is off.)
+  peers outside `10.55.0.0/24`. A cable doesn't prove anything by itself (see
+  [below](#what-a-usb-host-can-do)); seeing the code on the screen does.
+  (`mortar.setup.pairing.interfaces` could add `wlan0`; the arguments above
+  hold on a shared network too, but it is off.)
 - **Only keys.** The uploaded line must be a plain public key of a known
   type (no `command=`/`from=` options); it is appended to
   `<card>/ssh-keys/root` atomically.
@@ -99,6 +100,38 @@ The code is a word from a list of 256 and four digits: about 21 bits.
   `/run/mortar-setup/control.sock` (mode 0660, group `mortar-setup`). That
   socket can read the code, so the group is root-equivalent; only the
   session users of the Brick are in it.
+
+## What a USB host can do
+
+Whatever is at the other end of the USB-C cable is not trusted: it could be
+someone's computer or a charger with a data line, with nobody touching the
+Brick. By default it can reach these on `usb0` and nothing else:
+
+| Reaches | What it gets |
+|---|---|
+| SSH (22) | Keys only. A password is the code on the screen, and only while password login is on and a code is showing. |
+| Pairing (7330) | Adds a key only with the code on the screen. |
+| DHCP (67), mDNS (5353) | An address and the name `mortar.local`. |
+| The USB serial port | A port with no login behind it. |
+
+So a key has to come from someone who can see the screen or has opened the card,
+and `mortar deploy`, `mortar ssh` and the rest work over the cable once it has
+one. What's left to a host without a key is talking to those services.
+
+Being able to touch the Brick is a different level, and these are not protected
+from it:
+
+- **The UART pads** (`ttyS0`) log in as root with no password. They are inside the
+  case, and they are the recovery path when everything else is broken.
+- **The card.** A card reader can add a key to `ssh-keys/` and read everything:
+  nothing on it is encrypted, Wi-Fi passwords and update credentials included.
+- **The screen and buttons**, which show the code.
+
+For developing, `mortar.usb.trustHost = true` trusts the host: a root console with
+no login on `ttyGS0` (`/dev/cu.usbmodem*` on a Mac) and on the text VTs, and no
+firewall on `usb0`. Any computer you plug it into then has root, with nothing done
+on the Brick, so don't publish a system with it on or plug such a Brick into a
+computer or a charger you don't trust.
 
 ## No hotspot: why the plan's phone page changed
 

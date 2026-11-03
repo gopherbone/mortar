@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 # The person holding the Brick: one normal account that runs the greeter
 # sessions (the shell, its apps, PipeWire). Root stays for the
-# consoles that need physical access and for SSH administration (deploys).
+# UART pads and for SSH administration (deploys).
 #
 #   - No password, like root (base.nix). The greeter logs in without
 #     a prompt (pam_succeed_if, greeter.nix); SSH is key-only, from

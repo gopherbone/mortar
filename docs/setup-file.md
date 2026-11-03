@@ -42,7 +42,7 @@ screen.
 | `ssh.authorized_keys` | Public keys for root, added to `ssh-keys/root`. A single string is accepted too. Lines with options (`command=…`) are refused. |
 | `ssh-keys/*.pub` | Any `.pub` file in the `ssh-keys/` folder next to `mortar.toml` is added the same way. `ssh-keys/root` itself is the file sshd reads. |
 | `ssh.password_login` | `true` (default): while the pairing code is on the Brick's screen it is also root's SSH password over the USB cable (only), so plain `ssh root@mortar.local` or `ssh-copy-id` work. It turns itself off when the first key arrives. `false`: only keys and `mortar pair`. |
-| `usb.network` | `false` turns the USB network off (the USB serial console stays). |
+| `usb.network` | `false` turns the USB network off. |
 | `update.access_key_id`, `update.secret_access_key` | Read-only bucket credentials for over-the-air updates (needs `mortar.update.enable`). `mortar-update-init` moves them to `/var/lib/mortar-update/credentials` (root only) at boot, before `mortar-setup-apply` runs, and blanks the secret in the file. |
 | `update.auto_check` | `false`: Settings > Auto-check daily starts off. |
 

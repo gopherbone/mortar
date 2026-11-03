@@ -2,11 +2,13 @@
 #
 # Mortar: talk to the Brick over its USB-C port.
 #
-#   - configfs USB gadget: CDC-ACM serial (ttyGS0, with a getty) + CDC-ECM
-#     or CDC-NCM network (usb0), Linux Foundation multifunction composite IDs
+#   - configfs USB gadget: CDC-ACM serial (ttyGS0) + CDC-ECM or CDC-NCM
+#     network (usb0), Linux Foundation multifunction composite IDs
 #   - usb0 = 10.55.0.1/24 with networkd's DHCP server, mDNS as mortar.local
 #   - "black box" boot logs copied to the FAT /boot partition
 #   - root SSH key
+#   - a USB host is not trusted: it gets SSH (keys only), pairing, DHCP and
+#     mDNS. `trustHost` gives it a root console and the whole of usb0.
 #
 # Needs a kernel with USB_CONFIGFS{,_ACM,_ECM,_NCM} and a UDC (MUSB on the Brick).
 { config, lib, pkgs, ... }:
@@ -169,6 +171,20 @@ in
       description = "USB gadget (serial + network), mDNS and black-box logs for Mortar.";
     };
 
+    trustHost = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = ''
+        Trust whatever is at the other end of the USB-C cable, for developing:
+        a root console with no login on ttyGS0 (and on the text VTs, for a USB
+        keyboard) and no firewall on usb0. Any computer or charger with a data
+        line then has root, with nothing done on the Brick. Off, a USB host
+        gets SSH with a key, pairing (with the code on the screen), DHCP and
+        mDNS, and the UART pads stay the only console that logs in by itself
+        (docs/pairing.md).
+      '';
+    };
+
     network = lib.mkOption {
       type = lib.types.enum [ "ecm" "ncm" ];
       # ECM first: it is what jkingston's firmware ships (ACM+ECM) and is
@@ -243,7 +259,7 @@ in
         # /nix/store: no local-fs/remount-rw dependency.
         unitConfig.DefaultDependencies = false;
         wantedBy = [ "sysinit.target" ];
-        wants = [ "network-pre.target" "serial-getty@ttyGS0.service" ];
+        wants = [ "network-pre.target" ] ++ lib.optional cfg.trustHost "serial-getty@ttyGS0.service";
         after = [ "sys-kernel-config.mount" "systemd-modules-load.service" ];
         before = [ "network-pre.target" "shutdown.target" ];
         conflicts = [ "shutdown.target" ];
@@ -254,16 +270,6 @@ in
           ExecStop = gadgetDown;
           TimeoutStartSec = "45s";
         };
-      };
-
-      # Login on the ACM port: shows up on the Mac as /dev/cu.usbmodem*.
-      # Wanted from multi-user.target directly, and pulled in by the gadget.
-      systemd.services."serial-getty@ttyGS0" = {
-        wantedBy = [ "multi-user.target" ];
-        after = [ "mortar-usb-gadget.service" ];
-        # agetty exits when the host closes the port; keep respawning.
-        serviceConfig.Restart = "always";
-        serviceConfig.RestartSec = "1s";
       };
 
       # ---------------------------------------------------------------
@@ -305,8 +311,11 @@ in
       # In case dhcpcd is turned back on (useNetworkd = false).
       networking.dhcpcd.denyInterfaces = [ "usb0" ];
 
-      # The cable is physical access anyway; allow DHCP, mDNS, SSH, ...
-      networking.firewall.trustedInterfaces = [ "usb0" ];
+      # The host at the other end isn't trusted, and a cable isn't physical
+      # access: a USB charger or someone else's computer can be there. It gets
+      # the DHCP server here; SSH and mDNS are open on every interface
+      # (openFirewall), pairing opens its own port (setup.nix).
+      networking.firewall.interfaces.usb0.allowedUDPPorts = [ 67 ];
 
       services.avahi = {
         enable = true;
@@ -339,6 +348,24 @@ in
       # with the target user's rights, so this works for root only.
       services.openssh.authorizedKeysFiles = [ "/boot/ssh-keys/%u" ];
     }
+
+    # -----------------------------------------------------------------
+    # A trusted host (mortar.usb.trustHost): root console, no firewall
+    # -----------------------------------------------------------------
+    (lib.mkIf cfg.trustHost {
+      # Login on the ACM port: shows up on the Mac as /dev/cu.usbmodem*.
+      # Wanted from multi-user.target directly, and pulled in by the gadget.
+      # (The autologin is services.getty.autologinUser, base.nix.)
+      systemd.services."serial-getty@ttyGS0" = {
+        wantedBy = [ "multi-user.target" ];
+        after = [ "mortar-usb-gadget.service" ];
+        # agetty exits when the host closes the port; keep respawning.
+        serviceConfig.Restart = "always";
+        serviceConfig.RestartSec = "1s";
+      };
+
+      networking.firewall.trustedInterfaces = [ "usb0" ];
+    })
 
     # -----------------------------------------------------------------
     # Black box: logs on the FAT partition, readable from a Mac

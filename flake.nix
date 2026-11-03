@@ -104,6 +104,15 @@
           puzzlescript = pkgs.callPackage ./pkgs/puzzlescript/check.nix {
             puzzlescript = pkgs.callPackage ./pkgs/puzzlescript { };
           };
+          # pairing, SSH with a key and nix copy over an untrusted usb0
+          usb-pairing = import ./tests/usb-pairing.nix { inherit pkgs; };
+          # what a host on the USB cable gets (docs/pairing.md)
+          usb-access = pkgs.callPackage ./tests/usb-access.nix {
+            closed = bare;
+            open = (self.lib.mkSystem {
+              modules = [ ./configurations/bare.nix { mortar.usb.trustHost = true; } ];
+            }).config;
+          };
         } // lib.optionalAttrs (system == "aarch64-linux") {
           # the move from root's session, with and without the AI pack
           user-migrate = self.nixosConfigurations.brick-bare.pkgs.callPackage ./tests/user-migrate.nix {
