@@ -222,7 +222,7 @@ buildLinux (
       # vdd-cpu bounced on each one (67 transitions/s with a silent
       # stream, 2026-11-01). With UCLAMP_TASK, real-time tasks get
       # kernel.sched_util_clamp_min_rt_default (set to 0 in
-      # modules/trimui-brick.nix) and the clock follows the load.
+      # devices/brick/hardware.nix) and the clock follows the load.
       UCLAMP_TASK = yes;
 
       # console=tty0 on the panel

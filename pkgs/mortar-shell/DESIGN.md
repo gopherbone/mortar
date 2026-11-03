@@ -521,7 +521,7 @@ blocks with 1 px ink outlines, isometric illustrations.
   `ui.suspendGraceMs` (3 s, so a second tap just wakes the screen) the
   shell runs `actions.sleep` (`systemctl suspend`: s2idle by default,
   where any button wakes; SCP deep sleep is optional and wakes on the
-  power key only, see modules/trimui-brick.nix). The shell notices the resume as a jump of
+  power key only, see devices/brick/hardware.nix). The shell notices the resume as a jump of
   CLOCK_BOOTTIME against CLOCK_MONOTONIC (deep), or, while dark, a new
   count in /sys/power/suspend_stats/success (s2idle keeps MONOTONIC
   running), wakes the screen (also after an RTC or other non-key wake), swallows the waking power press (its

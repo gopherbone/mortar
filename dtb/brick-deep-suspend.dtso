@@ -5,7 +5,7 @@
  *
  * The same changes as the kernel tree's sun50i-a133-trimui-brick-native-deep.dts
  * (= -native-wake.dts + stock-psci-idle.dtsi + the stock-suspend context
- * flags), minus the PSCI CPU idle states (modules/trimui-brick.nix adds
+ * flags), minus the PSCI CPU idle states (devices/brick/hardware.nix adds
  * those separately, off by default). Applied as an overlay so the DTB keeps
  * its file name: generic-extlinux writes the current hardware.deviceTree.name
  * into every boot-menu entry, and older generations only have the plain DTB.

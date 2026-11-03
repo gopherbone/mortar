@@ -148,7 +148,7 @@ initrd above 0x49000000 and boots it in place.
   `systemd.settings.Manager.RuntimeWatchdogSec = "15s"` (the hardware maximum
   is 16 s). Add either `watchdog.open_timeout=0` (wait forever for userspace)
   or a generous value, so that a slow initrd or first-boot root resize cannot
-  trip it. `modules/trimui-brick.nix` already sets both.
+  trip it. `devices/brick/hardware.nix` already sets both.
 - jkingston's own userspace stops petting after 60 s if boot has not finished,
   so that the reset triggers his rollback. Mortar has no rollback, so
   deliberately starving the watchdog would only cause a reboot loop.

@@ -239,7 +239,7 @@ in {
   #     eMMC disable, EMAC disable: Liontron-DTB-specific. The Brick DTS
   #     describes the real AXP2202 (MFD_TRIMUI_BRICK + regulators) and has
   #     no EMAC, so none of it applies.
-  #   - PSCI disable: dropped. The mainline variant targets jkingston's
+  #   - PSCI disable: dropped. This targets jkingston's
   #     mainline SPL + TF-A + U-Boot chain, where PSCI/SMP work.
   #     (Booting it through brittonr's vendor-ATF chain would need PSCI
   #     disabled again.)
