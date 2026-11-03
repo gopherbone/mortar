@@ -3,7 +3,8 @@
 # OpenXcom (GPLv3), the open-source engine for UFO: Enemy Unknown, for the
 # Brick. SDL 1.2 API through sdl12-compat, sdl2-compat and our sdl3-pvr; no
 # desktop GL (the GPU is GLES only), so the engine's OpenGL path is left out
-# and SDL scales the 8-bit picture on the GPU.
+# and SDL scales the 8-bit picture on the GPU. app.nix adds its manifest:
+# it is installed as an app of its own, not with the system.
 #
 # Data: the user's own copy of the game in
 # $XDG_DATA_HOME/openxcom/UFO, put there by `mortar xcom --data PATH`. It is

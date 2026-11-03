@@ -35,7 +35,6 @@
         port-puzzlescript = ./modules/ports/puzzlescript.nix;
         port-pico8 = ./modules/ports/pico8.nix;
         port-acgc = ./modules/ports/acgc.nix;
-        port-openxcom = ./modules/ports/openxcom.nix;
 
         full = ./configurations/full.nix;
       };
@@ -74,8 +73,11 @@
           # Not in the system either: `mortar acgc` installs it into
           # /nix/var/nix/profiles/acgc (no game data; pkgs/acgc).
           acgc = full.mortar.apps.acgc.package;
-          # The engine alone, for testing builds on the Brick.
-          openxcom = full.mortar.apps.openxcom.package;
+          # An app with a manifest (lib.mkApp): `mortar xcom` installs it into
+          # /nix/var/nix/profiles/apps/openxcom (no game data; pkgs/openxcom).
+          openxcom = self.nixosConfigurations.brick-full.pkgs.callPackage ./pkgs/openxcom/app.nix {
+            inherit (self.lib) mkApp;
+          };
 
           # tools/showcase: frames of the real shell for the showcase video
           showcase-capture = pkgs.callPackage ./tools/showcase/capture.nix { };

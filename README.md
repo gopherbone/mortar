@@ -16,7 +16,8 @@ it's used: [docs/using.md](docs/using.md).
 | Hardware | `devices/brick/` (sources: `firmware/mainline`, `dtb`, `patches`, `pkgs/linux-trimui-brick.nix`, ...) | `nixosModules.brick` | Kernel, boot chain, firmware, GPU, PMIC, panel, radios, SD image. Works without the UI. |
 | Core | `modules/core/`, `pkgs/mortar-*` | `nixosModules.core` | Shell, greeter, setup, pairing, power, updates, the session user, the `mortar` command. |
 | Packs | `modules/packs/` | `nixosModules.pack-emulation`, `pack-music`, `pack-ai`, `pack-terminal` | mortar-play; m8c, ChooChoo, Little XM; Claude Code; zsh. Importing one turns it on. |
-| Ports | `modules/ports/` | `nixosModules.port-pico8`, `port-acgc`, `port-openxcom`, `port-puzzlescript` | Apps that need your own data. Each entry waits for it, or says where it goes. |
+| Ports | `modules/ports/` | `nixosModules.port-pico8`, `port-acgc`, `port-puzzlescript` | Apps that need your own data. Each entry waits for it, or says where it goes. |
+| Apps | `lib/mk-app.nix`, `pkgs/openxcom/app.nix` | `lib.mkApp`, `packages.*.openxcom` | A package with a manifest, in its own profile on the device: no system rebuild. |
 | Systems | `configurations/` | `nixosConfigurations.brick-bare`, `brick-full` | Device + core only, or everything. |
 
 `modules/device.nix` is what the layers above ask of a device (`mortar.device`).
@@ -57,7 +58,7 @@ nix run .#mortar -- deploy --reboot --config brick-bare # --flake FLAKE for your
   outputs = { mortar, ... }: {
     nixosConfigurations.brick = mortar.lib.mkSystem {
       packs = [ mortar.nixosModules.pack-music ];
-      ports = [ mortar.nixosModules.port-openxcom ];
+      ports = [ mortar.nixosModules.port-puzzlescript ];
       modules = [ ./my-apps.nix ];
     };
   };
@@ -93,6 +94,35 @@ SDL apps that should use the GPU start through
 name to `mortar.unfree`. `modules/ports/puzzlescript.nix` is a short real example;
 `mortar.shell.apps` in `modules/core/shell.nix` lists the options.
 
+### Add an app without rebuilding the system
+
+An app can also be a package with a manifest, in its own Nix profile on the device.
+The shell watches `/nix/var/nix/profiles/apps` (`mortar.shell.appProfiles`), so the
+entry shows when the profile appears and goes when it's removed:
+
+```nix
+packages.aarch64-linux.my-port = mortar.lib.mkApp pkgs {
+  package = pkgs.callPackage ./my-port { };
+  id = "my-port";
+  name = "My Port";
+  category = "games";
+  gpu = true; # through mortar-sdl-run
+  requires = [ "~/.local/share/my-port/data.bin" ]; # hidden until it's there
+};
+```
+
+```sh
+nix copy --no-check-sigs --to ssh-ng://root@mortar.local ./result
+ssh root@mortar.local 'mkdir -p /nix/var/nix/profiles/apps &&
+  nix-env -p /nix/var/nix/profiles/apps/my-port --set '"$(readlink result)"
+```
+
+Keep saves and data outside the profile, as `requires` above does, and removing it
+(`rm -f /nix/var/nix/profiles/apps/my-port /nix/var/nix/profiles/apps/my-port-*-link`)
+leaves them alone. The manifest format and the rules are in
+`pkgs/mortar-shell/DESIGN.md`, "Apps in their own profiles". `pkgs/openxcom/app.nix` is
+a real example; an entry in `mortar.shell.apps` with the same id wins over a manifest.
+
 ## Game data never goes in the repository
 
 Not game files, disc images, firmware dumps or ROMs: not in this repository, nor the
@@ -103,7 +133,7 @@ device (the store would make it world-readable and cacheable):
 |---|---|---|
 | PICO-8 | your Raspberry Pi zip | `nix-store --add-fixed sha256 pico-8_0.2.7_raspi.zip`, then `mortar pico8` installs it in its own profile (see pkgs/pico8) |
 | Animal Crossing | your disc image | `mortar acgc --iso PATH` |
-| OpenXcom | your UFO: Enemy Unknown files | `mortar xcom --data PATH` |
+| OpenXcom | your UFO: Enemy Unknown files | `mortar xcom --data PATH` installs the engine in its own profile and copies them (without `--data`, just the engine) |
 | PuzzleScript | `.txt` games | copy to `~/.local/share/puzzlescript/games` |
 
 Keep it that way in anything you contribute.
@@ -123,6 +153,11 @@ it as unproven. Keep your data elsewhere and expect to debug over the serial con
 Evaluated only: each pack and port on its own, a flake outside this repository using
 `mkSystem`, and core with no device module. Over-the-air updates have a VM test
 (`checks.*.mortar-update`) but have not been run on a device.
+
+Apps in their own profiles (`lib.mkApp`, `mortar xcom`): unit tests, the shell's
+headless backend in the build sandbox, and a VM with real profiles and garbage
+collection (`checks.*.mortar-shell-discovery`, `checks.*.app-profiles`). `mortar xcom`
+itself has only run against a stand-in for the device.
 
 Only the Brick exists as a device. `modules/device.nix` is a first cut, and the shell
 still assumes more than it covers: a 1024x768 panel and Brick button codes in Rust,
