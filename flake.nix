@@ -87,7 +87,6 @@
       apps = lib.genAttrs allSystems (system:
         let
           pkgs = nixpkgs.legacyPackages.${system};
-          mortar = pkgs.callPackage ./pkgs/mortar-cli { };
         in {
           mortar = { type = "app"; program = "${mortar}/bin/mortar"; };
           # tools/showcase: compose the showcase video from showcase-capture
@@ -133,6 +132,12 @@
           eval-matrix = pkgs.writeText "mortar-eval-matrix"
             (builtins.unsafeDiscardStringContext (builtins.toJSON self.lib.evalMatrix));
           public-policy = pkgs.callPackage ./tests/public-policy.nix { inherit self; };
+          # the Worker in front of the public cache, against a stand-in for R2
+          cloudflare-worker = pkgs.runCommand "mortar-cloudflare-worker-test" { nativeBuildInputs = [ pkgs.nodejs ]; } ''
+            cd ${./cloudflare}
+            node --test test/worker.test.mjs
+            touch $out
+          '';
         } // lib.optionalAttrs (system == "aarch64-linux") {
           # which generation U-Boot's rollback key boots (devices/brick/rollback.nix)
           previous-conf = self.nixosConfigurations.brick-bare.pkgs.callPackage ./tests/previous-conf.nix {

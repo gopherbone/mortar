@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Deploy (docs/updates.md): CLOUDFLARE_ACCOUNT_ID=… npx wrangler deploy
+# The account is given by the environment and isn't kept here.
+name = "mortar"
+main = "worker.js"
+compatibility_date = "2026-10-01"
+workers_dev = true
+
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "mortar-cache"
