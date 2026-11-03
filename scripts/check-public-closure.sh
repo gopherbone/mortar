@@ -8,7 +8,7 @@
 set -euo pipefail
 
 # Commercial software, and what comes from a user's own files.
-deny='-(claude-code|mortar-claude|pico-8|pico8|acgc|GAFE01|openxcom-data|UFO)[-.]'
+deny='-(claude-code|mortar-claude|pico-8|pico8|acgc|GAFE01|openxcom-data|UFO|liar)([-.]|$)'
 
 status=0
 for path in "$@"; do
