@@ -87,6 +87,37 @@ pub fn xcom(o: &Opts, data: Option<&str>) {
     }
 }
 
+/// `mortar files`: the file manager, the same way but with no data of its own.
+pub fn files(o: &Opts) {
+    const FILES: &str = "/nix/var/nix/profiles/apps/files";
+    if o.remove {
+        say(&format!("Removing Files from {} (your files stay)", o.host));
+        if !remote(&o.host, &format!("rm -f {FILES} {FILES}-*-link && echo removed")) {
+            die("could not remove the profile");
+        }
+        return;
+    }
+    say("Building Files (pkgs/mortar-files)");
+    let path = build(&format!("{}#packages.aarch64-linux.mortar-files", o.flake));
+    if !Path::new(&path).join(MANIFEST).is_file() {
+        die(&format!("{path} has no {MANIFEST}: is --flake an older Mortar? Update it"));
+    }
+    say(&format!("Copying to {}", o.host));
+    run(
+        Command::new("nix").args(["copy", "--no-check-sigs", "--to", &format!("ssh-ng://root@{}", o.host), &path]),
+        "nix copy",
+    );
+    let install = format!("mkdir -p -m 0755 {APPS_DIR} && nix-env -p {FILES} --set {p} && ls -l {FILES}/{MANIFEST}", p = sq(&path));
+    if !remote(&o.host, &install) {
+        die("could not set the files profile");
+    }
+    if remote(&o.host, &discovers_script()) {
+        say("Files now shows under Apps in the shell");
+    } else {
+        say("This Brick's system does not look for apps in profiles yet: run `mortar deploy` first");
+    }
+}
+
 /// Stream the folders the game reads into the session user's data directory.
 fn copy_data(o: &Opts, data: &str) {
     let (user, dir) = (&o.user, format!("{}/openxcom/UFO", o.data_home()));

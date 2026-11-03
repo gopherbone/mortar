@@ -43,6 +43,10 @@ mortar xcom [--data PATH] [--host HOST] [--remove]
     folders the game reads to the Brick (~/.local/share/openxcom/UFO). Neither
     is ever part of the system. --remove takes the engine away and leaves
     your game files and saves.
+mortar files [--host HOST] [--remove]
+    Files (pkgs/mortar-files): build the file manager and install it into its
+    own profile (/nix/var/nix/profiles/apps/files); the shell shows it at
+    once. --remove takes it away and leaves your files, and the Trash, alone.
 mortar publish [--config NAME] [--path STORE_PATH] [--channel C] [--key FILE]
                [--credentials FILE] [--force] [--dry-run]
                [--endpoint URL --bucket NAME [--region R]] [--upstream URL]...
@@ -410,6 +414,7 @@ fn main() {
         "pico8" => pico8(&o),
         "acgc" => acgc::acgc(&o, o.iso.as_deref()),
         "xcom" => xcom::xcom(&o, o.data.as_deref()),
+        "files" => xcom::files(&o),
         "update" => publish::update_now(&o.host),
         "update-creds" => publish::update_creds(&o.host, o.key_id.clone()),
         "attention" => {
