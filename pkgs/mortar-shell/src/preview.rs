@@ -30,7 +30,7 @@ pub fn demo_launcher() -> Vec<LauncherInfo> {
         category: Category::guess(art, id, name),
         single_instance: id != "terminal-new",
     };
-    vec![
+    let mut all = vec![
         l("m8", "M8", "Tracker · top USB-C", Art::M8, true),
         l("choochoo", "ChooChoo", "Tracker · groovebox", Art::Generic, false),
         l("pico8", "PICO-8", "Splore · carts", Art::Pico8, false),
@@ -39,7 +39,15 @@ pub fn demo_launcher() -> Vec<LauncherInfo> {
         l("games", "PuzzleScript", "94 puzzles", Art::Puzzle, false),
         l("terminal", "Terminal", "foot · on-screen keys", Art::Term, false),
         l("terminal-new", "New terminal", "Another foot window", Art::Term, false),
-    ]
+    ];
+    if public_apps() {
+        all.retain(|e| e.id != "claude");
+    }
+    all
+}
+
+fn public_apps() -> bool {
+    std::env::var("MORTAR_PREVIEW_APPS").is_ok_and(|v| v == "public")
 }
 
 pub fn demo_running() -> Vec<RunningInfo> {
@@ -55,6 +63,11 @@ pub fn demo_running() -> Vec<RunningInfo> {
         asleep: false,
         pic: None,
     };
+    // MORTAR_PREVIEW_APPS=public: what a stock system has, for published pictures
+    // (Claude Code is an optional extra).
+    if public_apps() {
+        return vec![r(2, "choochoo", "ChooChoo", Art::Generic), r(1, "m8", "M8", Art::M8)];
+    }
     vec![r(2, "claude", "Claude", Art::Claude), r(1, "m8", "M8", Art::M8)]
 }
 
