@@ -14,7 +14,7 @@ rustPlatform.buildRustPackage {
   cargoLock.lockFile = ./Cargo.lock;
 
   meta = {
-    description = "Over-the-air updates for Mortar from a private Nix binary cache";
+    description = "Over-the-air updates for Mortar from a Nix binary cache";
     license = lib.licenses.gpl2Plus;
     platforms = lib.platforms.linux ++ lib.platforms.darwin;
     mainProgram = "mortar-update";

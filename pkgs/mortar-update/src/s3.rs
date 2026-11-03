@@ -1,10 +1,51 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //! The bucket: plain objects through `curl --aws-sigv4`, Nix store URLs
-//! for `nix copy`.
+//! for `nix copy`. And the anonymous side: [`get_public`], plain HTTPS.
 
+use std::collections::HashSet;
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+
+/// GET many URLs at once, each into its file: the files that came back 200. The
+/// rest (404, or nothing at all: callers treat that the same) are removed. With a
+/// bucket and credentials the requests are signed for it.
+pub fn get_many(items: &[(String, PathBuf)], signed: Option<(&Bucket, &Credentials)>, curl: &str) -> Result<HashSet<PathBuf>, String> {
+    if items.is_empty() {
+        return Ok(HashSet::new());
+    }
+    let mut c = Command::new(curl);
+    c.args(["--silent", "--location", "--parallel", "--parallel-max", "16", "--connect-timeout", "15", "--max-time", "120", "--retry", "2"])
+        .args(["--config", "-", "--write-out", "%{http_code} %{filename_effective}\n"]);
+    if let Some((bucket, _)) = signed {
+        c.args(["--aws-sigv4", &format!("aws:amz:{}:s3", bucket.region)]);
+    }
+    let mut child = c.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().map_err(|e| format!("{curl}: {e}"))?;
+    {
+        let mut stdin = child.stdin.take().expect("piped stdin");
+        let mut config = String::new();
+        if let Some((_, creds)) = signed {
+            config.push_str(&format!("user = {}\n", cq(&format!("{}:{}", creds.access_key_id, creds.secret_access_key))));
+        }
+        for (url, file) in items {
+            config.push_str(&format!("url = {}\noutput = {}\n", cq(url), cq(&file.to_string_lossy())));
+        }
+        stdin.write_all(config.as_bytes()).map_err(|e| format!("{curl}: {e}"))?;
+    }
+    let out = child.wait_with_output().map_err(|e| format!("{curl}: {e}"))?;
+    let mut ok = HashSet::new();
+    for line in String::from_utf8_lossy(&out.stdout).lines() {
+        if let Some(("200", file)) = line.split_once(' ') {
+            ok.insert(PathBuf::from(file));
+        }
+    }
+    for (_, file) in items {
+        if !ok.contains(file) {
+            let _ = std::fs::remove_file(file);
+        }
+    }
+    Ok(ok)
+}
 
 /// An S3-compatible bucket. R2: endpoint `https://<ACCOUNT_ID>.r2.cloudflarestorage.com`,
 /// region `auto`.
@@ -78,6 +119,43 @@ fn cq(s: &str) -> String {
     format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
+/// curl's exit status and `--write-out "%{stderr}\n%{http_code}"`: the HTTP
+/// status, or why there is none.
+fn http_code(out: &std::process::Output) -> Result<u16, FetchError> {
+    let err = String::from_utf8_lossy(&out.stderr);
+    let code: u16 = err.lines().last().and_then(|l| l.trim().parse().ok()).unwrap_or(0);
+    let msg = err.lines().rev().skip(1).find(|l| !l.trim().is_empty()).unwrap_or("").trim().to_string();
+    match out.status.code() {
+        Some(0) => Ok(code),
+        // couldn't resolve, couldn't connect, timeout, TLS connect,
+        // empty reply, send/receive failure
+        Some(6 | 7 | 28 | 35 | 52 | 55 | 56) => Err(FetchError::Offline(msg)),
+        _ => Err(FetchError::Other(if msg.is_empty() { format!("curl failed ({})", out.status) } else { msg })),
+    }
+}
+
+/// The largest manifest taken from a public URL: it is read before its
+/// signature can be checked, and anyone may be answering.
+const MAX_PUBLIC_BYTES: &str = "1048576";
+
+/// GET a public URL, with no credentials (a channel manifest in HTTPS mode).
+/// What comes back is untrusted until its signature is checked.
+pub fn get_public(url: &str, curl: &str) -> Result<Vec<u8>, FetchError> {
+    let out = Command::new(curl)
+        .args(["--silent", "--show-error", "--location", "--proto", "=https,http", "--connect-timeout", "15", "--max-time", "120", "--retry", "2"])
+        .args(["--max-filesize", MAX_PUBLIC_BYTES, "--output", "-", "--write-out", "%{stderr}\n%{http_code}"])
+        .arg(url)
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|e| FetchError::Other(format!("{curl}: {e}")))?;
+    let code = http_code(&out)?;
+    match code {
+        200 => Ok(out.stdout),
+        404 => Err(FetchError::NotFound),
+        c => Err(FetchError::Other(format!("HTTP {c} from {url}"))),
+    }
+}
+
 impl Bucket {
     pub fn new(endpoint: &str, bucket: &str, region: &str) -> Result<Bucket, String> {
         let endpoint = endpoint.trim().trim_end_matches('/');
@@ -128,16 +206,7 @@ impl Bucket {
             let _ = writeln!(stdin, "user = {}", cq(&format!("{}:{}", creds.access_key_id, creds.secret_access_key)));
         }
         let out = child.wait_with_output().map_err(|e| FetchError::Other(format!("{curl}: {e}")))?;
-        let err = String::from_utf8_lossy(&out.stderr);
-        let code: u16 = err.lines().last().and_then(|l| l.trim().parse().ok()).unwrap_or(0);
-        let msg = err.lines().rev().skip(1).find(|l| !l.trim().is_empty()).unwrap_or("").trim().to_string();
-        match out.status.code() {
-            Some(0) => {}
-            // couldn't resolve, couldn't connect, timeout, TLS connect,
-            // empty reply, send/receive failure
-            Some(6 | 7 | 28 | 35 | 52 | 55 | 56) => return Err(FetchError::Offline(msg)),
-            _ => return Err(FetchError::Other(if msg.is_empty() { format!("curl failed ({})", out.status) } else { msg })),
-        }
+        let code = http_code(&out)?;
         Ok((out.stdout, code))
     }
 
@@ -156,10 +225,23 @@ impl Bucket {
     pub fn put(&self, creds: &Credentials, key: &str, file: &Path, content_type: &str, curl: &str) -> Result<(), FetchError> {
         let f = file.to_string_lossy();
         let ct = format!("Content-Type: {content_type}");
-        let (body, code) = self.curl(creds, key, &["--upload-file", &f, "--header", &ct, "--header", "Cache-Control: no-cache"], curl)?;
+        // the later --max-time wins: a NAR or an image takes longer than a manifest
+        let (body, code) = self.curl(creds, key, &["--max-time", "7200", "--upload-file", &f, "--header", &ct, "--header", "Cache-Control: no-cache"], curl)?;
         match code {
             200 | 201 | 204 => Ok(()),
             401 | 403 => Err(FetchError::Denied),
+            c => Err(FetchError::Other(format!("HTTP {c}: {}", String::from_utf8_lossy(&body).chars().take(300).collect::<String>()))),
+        }
+    }
+
+    /// Copy an object within the bucket (S3 CopyObject), without moving its bytes.
+    pub fn copy(&self, creds: &Credentials, from: &str, to: &str, curl: &str) -> Result<(), FetchError> {
+        let source = format!("x-amz-copy-source: /{}/{}", self.bucket, from.trim_start_matches('/'));
+        let (body, code) = self.curl(creds, to, &["--max-time", "600", "--request", "PUT", "--data-binary", "", "--header", &source, "--header", "Content-Type:"], curl)?;
+        match code {
+            200 | 201 | 204 => Ok(()),
+            401 | 403 => Err(FetchError::Denied),
+            404 => Err(FetchError::NotFound),
             c => Err(FetchError::Other(format!("HTTP {c}: {}", String::from_utf8_lossy(&body).chars().take(300).collect::<String>()))),
         }
     }

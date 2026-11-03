@@ -11,7 +11,7 @@ use std::path::Path;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Phase {
-    /// No credentials yet (docs/updates.md).
+    /// S3 mode without credentials yet (docs/updates.md).
     Unconfigured,
     /// Not checked since boot.
     Idle,

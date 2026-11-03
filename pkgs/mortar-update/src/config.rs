@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //! /etc/mortar-update/config.json, written by modules/core/update.nix.
-//! No secrets: the credentials live in `<stateDir>/credentials` (root, 0600).
+//! No secrets: in S3 mode the credentials live in `<stateDir>/credentials`
+//! (root, 0600); in HTTPS mode there are none.
 
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
@@ -8,8 +9,17 @@ use std::path::{Path, PathBuf};
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Config {
-    pub bucket: String,
-    pub endpoint: String,
+    /// HTTPS mode: the public cache, read with no credentials.
+    #[serde(default)]
+    pub base_url: Option<String>,
+    /// HTTPS mode: where the paths the public cache doesn't hold come from.
+    #[serde(default)]
+    pub upstreams: Vec<Upstream>,
+    /// S3 mode: bucket and endpoint, read with credentials.
+    #[serde(default)]
+    pub bucket: Option<String>,
+    #[serde(default)]
+    pub endpoint: Option<String>,
     #[serde(default = "d_region")]
     pub region: String,
     #[serde(default = "d_channel")]
@@ -59,6 +69,25 @@ pub struct Config {
     pub nix_env: String,
     #[serde(default = "d_gc")]
     pub nix_collect_garbage: String,
+    #[serde(default = "d_nix_store")]
+    pub nix_store: String,
+}
+
+/// Another binary cache, and the key its paths are signed with.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Upstream {
+    pub url: String,
+    pub public_key: String,
+}
+
+/// Where this Brick's updates come from.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Source {
+    /// `https://host`, no credentials.
+    Https(String),
+    /// A bucket, with the credentials in `<stateDir>/credentials`.
+    S3(mortar_update::Bucket),
 }
 
 fn yes() -> bool {
@@ -112,6 +141,9 @@ fn d_nix_env() -> String {
 fn d_gc() -> String {
     "nix-collect-garbage".into()
 }
+fn d_nix_store() -> String {
+    "nix-store".into()
+}
 
 pub const DEFAULT_PATH: &str = "/etc/mortar-update/config.json";
 
@@ -120,8 +152,28 @@ impl Config {
         let s = std::fs::read_to_string(p).map_err(|e| format!("{}: {e}", p.display()))?;
         serde_json::from_str(&s).map_err(|e| format!("{}: {e}", p.display()))
     }
-    pub fn bucket(&self) -> Result<mortar_update::Bucket, String> {
-        mortar_update::Bucket::new(&self.endpoint, &self.bucket, &self.region)
+    pub fn source(&self) -> Result<Source, String> {
+        match (&self.base_url, &self.bucket, &self.endpoint) {
+            (Some(u), None, None) => {
+                let u = u.trim().trim_end_matches('/');
+                let host = u.strip_prefix("https://").or_else(|| u.strip_prefix("http://")).unwrap_or("");
+                if host.is_empty() || host.contains('/') {
+                    return Err(format!("baseUrl '{u}': want https://host[:port]"));
+                }
+                Ok(Source::Https(u.to_string()))
+            }
+            (None, Some(b), Some(e)) => Ok(Source::S3(mortar_update::Bucket::new(e, b, &self.region)?)),
+            (None, None, None) => Err("set baseUrl, or bucket and endpoint".into()),
+            (None, _, _) => Err("S3 mode needs both bucket and endpoint".into()),
+            (Some(_), _, _) => Err("baseUrl and a bucket are both set: choose one".into()),
+        }
+    }
+    /// What Nix may accept a closure path by in HTTPS mode: the publisher's keys and
+    /// the upstreams'. A manifest is only ever checked against `trusted_keys`.
+    pub fn closure_keys(&self) -> Vec<String> {
+        let mut keys = self.trusted_keys.clone();
+        keys.extend(self.upstreams.iter().map(|u| u.public_key.clone()));
+        keys
     }
     /// This Brick's manifest in the bucket.
     pub fn manifest_key(&self) -> String {
@@ -150,7 +202,38 @@ mod tests {
         let c: Config = serde_json::from_str(r#"{"bucket":"b","endpoint":"https://x.r2.cloudflarestorage.com"}"#).unwrap();
         assert_eq!((c.region.as_str(), c.channel.as_str(), c.min_battery), ("auto", "mortar", 30));
         assert_eq!(c.credentials_file(), PathBuf::from("/var/lib/mortar-update/credentials"));
-        assert!(c.bucket().is_ok());
+        assert!(matches!(c.source(), Ok(Source::S3(_))));
         assert!(serde_json::from_str::<Config>(r#"{"bucket":"b","endpoint":"e","secret":"no"}"#).is_err());
+    }
+
+    fn cfg(j: &str) -> Config {
+        serde_json::from_str(j).unwrap()
+    }
+
+    #[test]
+    fn modes() {
+        // nulls are what the module writes for what isn't set
+        let c = cfg(r#"{"baseUrl":"https://x.workers.dev/","bucket":null,"endpoint":null}"#);
+        assert_eq!(c.source(), Ok(Source::Https("https://x.workers.dev".into())));
+        assert_eq!(cfg(r#"{"baseUrl":"http://cache:8080"}"#).source(), Ok(Source::Https("http://cache:8080".into())));
+        for bad in [
+            "{}",
+            r#"{"bucket":"b"}"#,
+            r#"{"endpoint":"https://x"}"#,
+            r#"{"baseUrl":"https://x","bucket":"b","endpoint":"https://y"}"#,
+            r#"{"baseUrl":"ftp://x"}"#,
+            r#"{"baseUrl":"https://x/path"}"#,
+            r#"{"baseUrl":"https://"}"#,
+        ] {
+            assert!(cfg(bad).source().is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn upstream_keys_count_for_closures_only() {
+        let c = cfg(r#"{"baseUrl":"https://x","trustedKeys":["mine:AA=="],
+                        "upstreams":[{"url":"https://cache.nixos.org","publicKey":"theirs:BB=="}]}"#);
+        assert_eq!(c.closure_keys(), ["mine:AA==", "theirs:BB=="]);
+        assert_eq!(c.trusted_keys, ["mine:AA=="]);
     }
 }
