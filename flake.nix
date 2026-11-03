@@ -36,7 +36,6 @@
         port-pico8 = ./modules/ports/pico8.nix;
         port-acgc = ./modules/ports/acgc.nix;
         port-openxcom = ./modules/ports/openxcom.nix;
-        port-liar = ./modules/ports/liar.nix;
 
         full = ./configurations/full.nix;
       };
@@ -75,8 +74,6 @@
           # Not in the system either: `mortar acgc` installs it into
           # /nix/var/nix/profiles/acgc (no game data; pkgs/acgc).
           acgc = full.mortar.apps.acgc.package;
-          # Same for Redemption: Liar: `mortar liar` (no game data; pkgs/liar).
-          liar = full.mortar.apps.liar.package;
           # The engine alone, for testing builds on the Brick.
           openxcom = full.mortar.apps.openxcom.package;
 

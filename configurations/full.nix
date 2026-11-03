@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
-# The full configuration: every pack and port, as on the owner's Brick.
+# The full configuration: every pack and port.
 #
 # The leaf modules are listed one by one, in this order, because module order
 # decides the order of merged lists (system packages, kernel parameters, ...;
@@ -20,7 +20,6 @@
     ../modules/ports/puzzlescript.nix
     ../modules/ports/acgc.nix
     ../modules/ports/pico8.nix
-    ../modules/ports/liar.nix
     ../modules/core/greeter.nix
     ../modules/core/shell.nix
     ../modules/packs/ai.nix

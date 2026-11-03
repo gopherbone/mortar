@@ -7,7 +7,6 @@
 //! over-the-air update bucket (docs/updates.md).
 
 mod acgc;
-mod liar;
 mod xcom;
 mod pair;
 mod publish;
@@ -41,12 +40,6 @@ mortar xcom --data PATH [--host HOST]
     OpenXcom (pkgs/openxcom): check your own copy of UFO: Enemy Unknown and
     copy the folders the game reads to the Brick
     (~/.local/share/openxcom/UFO). It is never part of the system.
-mortar liar [--data PATH] [--host HOST] [--remove]
-    Redemption: Liar (GP2X Wiz, pkgs/liar): check your own files from the card
-    (PATH: the card or its Liar_e folder), build the loader and install it into
-    its own profile (/nix/var/nix/profiles/liar), and copy the files to the Brick
-    (~brick/.local/share/liar). Neither is ever part of the system. --remove
-    takes the loader away and leaves the files and saves.
 mortar publish [--config NAME] [--path STORE_PATH] [--channel C] [--key FILE]
                [--credentials FILE] [--force] [--dry-run]
                [--endpoint URL --bucket NAME [--region R]]
@@ -380,7 +373,6 @@ fn main() {
         "pico8" => pico8(&o),
         "acgc" => acgc::acgc(&o, o.iso.as_deref()),
         "xcom" => xcom::xcom(&o, o.data.as_deref()),
-        "liar" => liar::liar(&o, o.data.as_deref()),
         "update" => publish::update_now(&o.host),
         "update-creds" => publish::update_creds(&o.host, o.key_id.clone()),
         "attention" => {
