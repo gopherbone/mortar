@@ -19,7 +19,7 @@
       # Vendor SCP blob (not redistributable) and the U-Boot image embedding it.
       # Build locally only; never push these to a public cache.
       mortarUnfree = pkg: builtins.elem (nixpkgs.lib.getName pkg)
-        [ "trimui-brick-scp" "u-boot-trimui-brick-mainline" "trimui-brick-firmware" "pvr-ddk-userspace" "claude-code" "pico-8" "pico" "acgc"
+        [ "trimui-brick-scp" "u-boot-trimui-brick-mainline" "trimui-brick-firmware" "pvr-ddk-userspace" "claude-code" "pico-8" "pico" "acgc" "liar"
           # mortar-play cores with non-commercial licences
           "libretro-snes9x2005-plus" "libretro-genesis-plus-gx" "libretro-fbneo" ];
     in {
@@ -73,6 +73,10 @@
             # with the user's own disc; the entry hides until the ISO is there.
             mortar.apps.acgc.enable = true;
             mortar.shell.categories.acgc = "games";
+            # Redemption: Liar: installed by `mortar liar --data` with the
+            # user's own files from their card; hidden until they're there.
+            mortar.apps.liar.enable = true;
+            mortar.shell.categories.liar = "games";
             mortar.shell.categories.littlexm = "music";
             mortar.shell.categories.openxcom = "games";
             mortar.greeter.enable = true;
@@ -130,6 +134,15 @@
                 order = 26;
                 requires = config.mortar.apps.acgc.rom;
                 command = "exec ${config.mortar.gpu.sdlRun}/bin/mortar-sdl-run ${config.mortar.apps.acgc.bin}";
+              };
+              liar = lib.mkIf config.mortar.apps.liar.enable {
+                name = "Redemption: Liar";
+                description = "GP2X Wiz · your own copy";
+                icon = "pad";
+                order = 28;
+                requires = config.mortar.apps.liar.data;
+                # No mortar-sdl-run: a 32-bit process, no GPU, its own Wayland client.
+                command = "exec ${config.mortar.apps.liar.bin}";
               };
               terminal = {
                 name = "Terminal";
@@ -241,6 +254,8 @@
           # Not in the system either: `mortar acgc` installs it into
           # /nix/var/nix/profiles/acgc (no game data; pkgs/acgc).
           acgc = mainlineConfig.mortar.apps.acgc.package;
+          # Same for Redemption: Liar: `mortar liar` (no game data; pkgs/liar).
+          liar = mainlineConfig.mortar.apps.liar.package;
           # The engine alone, for testing builds on the Brick.
           openxcom = mainlineConfig.mortar.apps.openxcom.package;
 

@@ -21,6 +21,10 @@
 #                 /nix/var/nix/profiles/acgc, and the user's own disc image
 #                 in ~/.local/share/acgc/rom/GAFE01.iso, both put there by
 #                 `mortar acgc --iso PATH`. The entry hides until both exist.
+#   liar          Redemption: Liar (retail GP2X Wiz RPG, pkgs/liar). Same
+#                 arrangement: its own profile, /nix/var/nix/profiles/liar,
+#                 and the user's own files from their card in
+#                 ~/.local/share/liar, put there by `mortar liar --data PATH`.
 #
 # Display: the sessions start both through `mortar-sdl-run` (brick-gpu.nix),
 # which puts them on the PowerVR GPU (pkgs/sdl3-pvr). If that fails they
@@ -118,6 +122,35 @@ in
         type = lib.types.str;
         default = "/home/brick/.local/share/acgc/rom/GAFE01.iso";
         description = "The disc image the entry waits for (`requires`); `mortar acgc --iso` puts it here.";
+      };
+    };
+    liar = {
+      enable = lib.mkEnableOption "the Redemption: Liar entry, shown once `mortar liar` has installed the loader and your files from the card (see pkgs/liar)";
+      package = lib.mkOption {
+        type = lib.types.package;
+        default = pkgs.callPackage ../pkgs/liar { };
+        defaultText = lib.literalExpression "pkgs.callPackage ../pkgs/liar { }";
+        description = ''
+          The loader (no game data, no Wiz firmware). Not part of the system:
+          `mortar liar` builds this (flake output
+          `packages.aarch64-linux.liar`) and installs it into `profile`.
+        '';
+      };
+      profile = lib.mkOption {
+        type = lib.types.str;
+        default = "/nix/var/nix/profiles/liar";
+        description = "The Nix profile the loader is installed into (a GC root of its own, untouched by system updates).";
+      };
+      bin = lib.mkOption {
+        type = lib.types.str;
+        readOnly = true;
+        default = "${cfg.liar.profile}/bin/liar";
+        description = "The launcher inside the profile.";
+      };
+      data = lib.mkOption {
+        type = lib.types.str;
+        default = "/home/brick/.local/share/liar/liar_e.gpe";
+        description = "The file the entry waits for (`requires`); `mortar liar --data` puts it here.";
       };
     };
     audio.pipewire = lib.mkOption {
