@@ -21,6 +21,10 @@ it's used: [docs/using.md](docs/using.md).
 
 `modules/device.nix` is what the layers above ask of a device (`mortar.device`).
 
+The hardware layer on its own is for bringing up a device, not for daily use: it
+sets root's password to `trimui` and allows password SSH. Core locks that down, so
+add your own SSH setup if you use the hardware layer without core.
+
 ## Build a bare image
 
 You need [Nix](https://nixos.org/download) with flakes and a way to build

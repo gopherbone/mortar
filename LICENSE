@@ -2,10 +2,11 @@ SPDX-License-Identifier: GPL-2.0-or-later
 
 All original code in this repository is licensed under GPL-2.0-or-later.
 
-Vendor binary blobs (firmware/boot0.bin, firmware/boot_package.bin,
-re_tools/monitor.bin) are extracted from TrimUI TG3040 stock firmware
-and are NOT covered by this license. They are included solely for
-interoperability with the Allwinner A133 SoC boot ROM.
+Exceptions:
+- pkgs/puzzlescript is under the MIT License; see pkgs/puzzlescript/LICENSE.
+- The repository holds no vendor binaries. Earlier commits in its history do
+  (TrimUI TG3040 boot firmware, extracted from stock firmware that TrimUI
+  distributes); they are not covered by this license.
 
                     GNU GENERAL PUBLIC LICENSE
                        Version 2, June 1991
