@@ -1,9 +1,15 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //! `channels/<channel>.json`: the newest published system.
 
+use base64::{engine::general_purpose::STANDARD as B64, Engine};
+use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 
 pub const SCHEMA: u32 = 1;
+
+/// What is signed: this tag, then the manifest as JSON without its signature.
+/// (A publisher that adds a field bumps SCHEMA: an older Brick can't check it.)
+const SIGNED_TAG: &[u8] = b"mortar-manifest-1\n";
 
 /// Where a channel's manifest lives in the bucket.
 pub fn key(channel: &str) -> String {
@@ -39,6 +45,34 @@ pub struct Manifest {
     /// "github-actions", "mortar publish", ...
     #[serde(default)]
     pub publisher: String,
+    /// `keyname:base64` Ed25519 over [`Manifest::signed_bytes`], made with the
+    /// publisher's Nix signing key; the Brick refuses a manifest without a
+    /// valid one (`mortar.update.trustedKeys`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature: Option<String>,
+}
+
+/// A Nix secret key: `name:base64(seed + public)` (`nix key generate-secret`).
+pub struct SecretKey {
+    name: String,
+    key: SigningKey,
+}
+
+impl SecretKey {
+    pub fn parse(text: &str) -> Result<SecretKey, String> {
+        let (name, b) = text.trim().split_once(':').ok_or("signing key: want name:base64")?;
+        let raw = B64.decode(b).map_err(|e| format!("signing key: {e}"))?;
+        let raw: [u8; 64] = raw.try_into().map_err(|_| "signing key: want 64 bytes (nix key generate-secret)")?;
+        let key = SigningKey::from_keypair_bytes(&raw).map_err(|e| format!("signing key: {e}"))?;
+        Ok(SecretKey { name: name.to_string(), key })
+    }
+}
+
+fn parse_public(text: &str) -> Result<(&str, VerifyingKey), String> {
+    let (name, b) = text.trim().split_once(':').ok_or_else(|| format!("key '{text}': want name:base64"))?;
+    let raw = B64.decode(b).map_err(|e| format!("key {name}: {e}"))?;
+    let raw: [u8; 32] = raw.try_into().map_err(|_| format!("key {name}: want 32 bytes"))?;
+    Ok((name, VerifyingKey::from_bytes(&raw).map_err(|e| format!("key {name}: {e}"))?))
 }
 
 /// `/nix/store/<32 base32 chars>-<name>` and nothing more.
@@ -74,6 +108,36 @@ impl Manifest {
         Ok(())
     }
 
+    /// The bytes the signature covers.
+    pub fn signed_bytes(&self) -> Vec<u8> {
+        let mut bare = self.clone();
+        bare.signature = None;
+        let mut out = SIGNED_TAG.to_vec();
+        out.extend(serde_json::to_vec(&bare).expect("manifest serializes"));
+        out
+    }
+
+    pub fn sign(&mut self, key: &SecretKey) {
+        let sig = key.key.sign(&self.signed_bytes());
+        self.signature = Some(format!("{}:{}", key.name, B64.encode(sig.to_bytes())));
+    }
+
+    /// A valid signature by one of `trusted` (Nix public keys, `name:base64`).
+    pub fn verify(&self, trusted: &[String]) -> Result<(), String> {
+        let sig = self.signature.as_deref().ok_or("the manifest isn't signed")?;
+        let (name, b) = sig.split_once(':').ok_or("malformed signature")?;
+        let raw = B64.decode(b).map_err(|_| "malformed signature")?;
+        let sig = Signature::from_slice(&raw).map_err(|_| "malformed signature")?;
+        let msg = self.signed_bytes();
+        for t in trusted {
+            let (key_name, key) = parse_public(t)?;
+            if key_name == name {
+                return key.verify(&msg, &sig).map_err(|_| format!("bad signature for key {name}"));
+            }
+        }
+        Err(format!("signed by {name}, which this Brick doesn't trust"))
+    }
+
     pub fn to_json(&self) -> String {
         serde_json::to_string_pretty(self).expect("manifest serializes") + "\n"
     }
@@ -104,7 +168,64 @@ mod tests {
             label: None,
             changelog: vec!["USB MIDI".into()],
             publisher: "test".into(),
+            signature: None,
         }
+    }
+
+    // Throwaway keys for these tests only: `nix key generate-secret --key-name test-1`
+    // and its public half.
+    const SECRET: &str = "test-1:JMPmnQgjB/X0wg+yK5jOkfHTpB0SnK3WQnrptJSIo5UgRd4ydstkc+7FqUCsadPkKIelyJQW0f62jEacj+reRA==";
+    const PUBLIC: &str = "test-1:IEXeMnbLZHPuxalArGnT5CiHpciUFtH+toxGnI/q3kQ=";
+    // another key with the name of the first
+    const OTHER_SECRET: &str = "test-1:+ELUiEGocXxNHU9eEKTaMrR9CqLsBrjEqhc5dNxvu9f4vfB4aFGzVIyFhC208mm4cj9TiFnqlLyxsqiGzj07lw==";
+
+    fn signed() -> Manifest {
+        let mut x = m();
+        x.sign(&SecretKey::parse(SECRET).unwrap());
+        x
+    }
+
+    #[test]
+    fn signature_round_trip() {
+        let x = signed();
+        assert_eq!(x.signature.as_deref().unwrap().split(':').next(), Some("test-1"));
+        // survives the bucket: JSON and back, unknown fields ignored
+        let mut v: serde_json::Value = serde_json::from_str(&x.to_json()).unwrap();
+        v["future"] = 1.into();
+        let back = Manifest::parse(v.to_string().as_bytes()).unwrap();
+        back.verify(&[PUBLIC.to_string()]).unwrap();
+    }
+
+    #[test]
+    fn signature_refusals() {
+        let keys = [PUBLIC.to_string()];
+        assert!(m().verify(&keys).unwrap_err().contains("isn't signed"));
+        // every signed field is covered
+        for tamper in [
+            (|x: &mut Manifest| x.toplevel = "/nix/store/0c7f8ms0x6r4n3pq7x2a9w1kz5lbv8yd-evil".into()) as fn(&mut Manifest),
+            |x| x.published += 1,
+            |x| x.channel = "testing".into(),
+            |x| x.config = "brick-full".into(),
+            |x| x.system = "x86_64-linux".into(),
+        ] {
+            let mut x = signed();
+            tamper(&mut x);
+            assert!(x.verify(&keys).unwrap_err().contains("bad signature"), "{x:?}");
+        }
+        // the right name, the wrong key
+        let mut x = m();
+        x.sign(&SecretKey::parse(OTHER_SECRET).unwrap());
+        assert!(x.verify(&keys).unwrap_err().contains("bad signature"));
+        // nothing trusted
+        assert!(signed().verify(&[]).unwrap_err().contains("doesn't trust"));
+        assert!(signed().verify(&["other:IEXeMnbLZHPuxalArGnT5CiHpciUFtH+toxGnI/q3kQ=".into()]).unwrap_err().contains("doesn't trust"));
+        // garbage
+        let mut x = m();
+        x.signature = Some("test-1:notbase64!".into());
+        assert!(x.verify(&keys).is_err());
+        x.signature = Some("nocolon".into());
+        assert!(x.verify(&keys).is_err());
+        assert!(SecretKey::parse("test-1:AAAA").is_err());
     }
 
     #[test]

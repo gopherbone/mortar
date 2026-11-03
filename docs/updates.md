@@ -9,8 +9,8 @@ git push (branch mortar)
        ├─ nix copy --to s3://BUCKET (Cloudflare R2, private)   closure, signed with your Nix key
        └─ channels/mortar.json                                 manifest, written last
 Brick (mortar-update, daily or Settings > Updates > Check now)
-  ├─ reads channels/mortar.json with a read-only key
-  ├─ nix copy --from s3://BUCKET <toplevel>                    Nix checks every signature
+  ├─ reads channels/mortar.json with a read-only key           checks signature, channel, configuration, age
+  ├─ nix copy --from s3://BUCKET <toplevel>                    Nix checks every signature against the same keys
   ├─ system profile + switch-to-configuration boot             a new boot entry; the old ones stay
   └─ toast "Update ready — restart to apply"
 ```
@@ -98,6 +98,8 @@ mortar.update = {
   bucket = "mortar-cache";
   endpoint = "https://<ACCOUNT_ID>.r2.cloudflarestorage.com";
   publicKey = "mortar-1:…=";   # the output of convert-secret-to-public
+  # configName: brick-bare and brick-full set theirs; a flake of your own sets
+  # it to the system's name under nixosConfigurations
 };
 ```
 
@@ -184,6 +186,20 @@ other way).
 - A manifest is only taken if it is newer than the last one taken, so a
   build you `mortar deploy` from the Mac is not replaced by an older
   published one; the next publish updates it as usual.
+- A manifest is refused, with the reason in Settings > Updates, when:
+  - it isn't signed by a key in `mortar.update.trustedKeys`, or was changed
+    since (every field is covered);
+  - it names another channel, Nix system or configuration, so a bare Brick
+    doesn't silently become a full one. `mortar-update check
+    --allow-config-change` takes it, once;
+  - it is older than the last one taken: an old manifest put back in the bucket
+    stays out. `mortar-update check --allow-downgrade` takes it. The floor is
+    what this Brick has taken or found running from the channel: a fresh card
+    has none until its first check, and a system you `mortar deploy` doesn't
+    raise it, since it has no publication date.
+- The closure must be signed by the same keys. For that copy they replace what
+  `nix.settings.trusted-public-keys` lists, so a path with cache.nixos.org's
+  signature alone isn't accepted from the bucket.
 - On SSH: `mortar-update status`, `mortar-update check`,
   `journalctl -u mortar-update -u mortar-update-auto`.
 
@@ -221,10 +237,12 @@ have the paths they run.
   `mortar update-creds` on your Bricks, delete the old token.
 - Write token: create a new one, update the two GitHub secrets (and
   `~/.config/mortar/r2-write`), delete the old one.
-- Signing key: generate a new one (step 2), put the new public key in
-  your configuration, update `NIX_SIGNING_KEY`, then `mortar deploy` once (a Brick
-  only trusts the key of the system it runs), and empty the bucket so
-  everything is re-signed.
+- Signing key: generate a new one (step 2). A Brick only trusts the keys of the
+  system it runs, so first publish a system that has both,
+  `mortar.update.trustedKeys = [ "old:…" "new:…" ]`, still signed with the old
+  key, and wait for your Bricks to take it (or `mortar deploy` them). Then update
+  `NIX_SIGNING_KEY`, set `publicKey` to the new key and drop the old one from
+  `trustedKeys`, and empty the bucket so everything is re-signed.
 
 ## Formats
 
@@ -242,9 +260,15 @@ have the paths they run.
   "rev": "fb4f6aa…",
   "label": "26.05…",
   "changelog": ["USB MIDI: ALSA sequencer in the kernel, loaded at boot; README"],
-  "publisher": "github-actions"
+  "publisher": "github-actions",
+  "signature": "mortar-1:base64…"
 }
 ```
+
+`signature` is Ed25519 with the publisher's Nix key, over `mortar-manifest-1\n` and
+the manifest as compact JSON without that field, in the field order above.
+`mortar sign-manifest --key FILE < manifest.json` makes one by hand. A publisher
+that adds a field bumps `schema`, since an older Brick couldn't check it.
 
 The Brick's status, for the shell: `/run/mortar-update/status.json`
 (`state`: unconfigured, idle, checking, downloading, installing, ready,
@@ -252,5 +276,7 @@ up-to-date, offline, low-battery, error).
 
 The end-to-end test (`nix build .#checks.aarch64-linux.mortar-update`) runs
 the whole path in VMs, with Garage as the S3 server: read key cannot write,
-credentials from the card, unsigned closures refused, low battery, publish,
-download and stage, offline, rollback, auto-check.
+credentials from the card, unsigned, tampered, wrong-key, wrong-channel,
+wrong-configuration and older manifests refused, unsigned closures and closures
+signed by a key only `nix.conf` trusts refused, low battery, publish, download and
+stage, offline, rollback, auto-check.

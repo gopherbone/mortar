@@ -72,8 +72,8 @@ impl Status {
 pub struct State {
     /// "Auto-check daily" (None: the module's default).
     pub auto_check: Option<bool>,
-    /// `published` of the last manifest staged here; older or equal ones
-    /// are never taken again.
+    /// `published` of the last manifest staged or found running here: equal
+    /// ones are not taken again, older ones are refused as downgrades.
     pub last_published: u64,
     pub last_toplevel: Option<String>,
     pub last_check: Option<u64>,
@@ -98,15 +98,30 @@ pub enum Plan {
     /// Not newer than the last manifest taken (e.g. the Brick has since
     /// been deployed to from a computer).
     NotNewer,
+    /// Older than what this Brick has already taken: an old manifest put back
+    /// (or a mistake). Taken only when asked for by name.
+    Downgrade,
     Update,
 }
 
-pub fn plan(m: &Manifest, running: Option<&str>, staged: Option<&str>, st: &State, force: bool) -> Plan {
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Allow {
+    /// `--force`: take the manifest last taken again.
+    pub same: bool,
+    /// `--allow-downgrade`
+    pub downgrade: bool,
+    /// `--allow-config-change`
+    pub config_change: bool,
+}
+
+pub fn plan(m: &Manifest, running: Option<&str>, staged: Option<&str>, st: &State, allow: Allow) -> Plan {
     if running == Some(m.toplevel.as_str()) {
         Plan::Running
     } else if staged == Some(m.toplevel.as_str()) {
         Plan::Staged
-    } else if !force && m.published <= st.last_published {
+    } else if m.published < st.last_published && !allow.downgrade {
+        Plan::Downgrade
+    } else if m.published == st.last_published && !allow.same && !allow.downgrade {
         Plan::NotNewer
     } else {
         Plan::Update
@@ -130,18 +145,29 @@ mod tests {
             label: None,
             changelog: vec![],
             publisher: String::new(),
+            signature: None,
         }
     }
 
     #[test]
     fn plans() {
         let st = State { last_published: 100, ..Default::default() };
-        assert_eq!(plan(&m("/a", 200), Some("/a"), Some("/a"), &st, false), Plan::Running);
-        assert_eq!(plan(&m("/b", 200), Some("/a"), Some("/b"), &st, false), Plan::Staged);
-        assert_eq!(plan(&m("/b", 100), Some("/local"), Some("/local"), &st, false), Plan::NotNewer);
-        assert_eq!(plan(&m("/b", 100), Some("/local"), Some("/local"), &st, true), Plan::Update);
-        assert_eq!(plan(&m("/c", 101), Some("/a"), Some("/a"), &st, false), Plan::Update);
-        assert_eq!(plan(&m("/c", 1), None, None, &State::default(), false), Plan::Update);
+        let no = Allow::default();
+        let same = Allow { same: true, ..no };
+        let down = Allow { downgrade: true, ..no };
+        assert_eq!(plan(&m("/a", 200), Some("/a"), Some("/a"), &st, no), Plan::Running);
+        assert_eq!(plan(&m("/b", 200), Some("/a"), Some("/b"), &st, no), Plan::Staged);
+        assert_eq!(plan(&m("/b", 100), Some("/local"), Some("/local"), &st, no), Plan::NotNewer);
+        assert_eq!(plan(&m("/b", 100), Some("/local"), Some("/local"), &st, same), Plan::Update);
+        assert_eq!(plan(&m("/c", 101), Some("/a"), Some("/a"), &st, no), Plan::Update);
+        assert_eq!(plan(&m("/c", 1), None, None, &State::default(), no), Plan::Update);
+        // older than what was taken: --force isn't enough
+        assert_eq!(plan(&m("/old", 99), Some("/a"), Some("/a"), &st, no), Plan::Downgrade);
+        assert_eq!(plan(&m("/old", 99), Some("/a"), Some("/a"), &st, same), Plan::Downgrade);
+        assert_eq!(plan(&m("/old", 99), Some("/a"), Some("/a"), &st, down), Plan::Update);
+        // already there: nothing to refuse
+        assert_eq!(plan(&m("/old", 99), Some("/old"), Some("/a"), &st, no), Plan::Running);
+        assert_eq!(plan(&m("/old", 99), Some("/a"), Some("/old"), &st, no), Plan::Staged);
     }
 
     #[test]

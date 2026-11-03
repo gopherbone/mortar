@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //! `mortar publish`: what CI does (.github/workflows/build.yml), from this
-//! computer. Build the system, push its closure signed to the private
-//! bucket (`nix copy --to s3://…&secret-key=…`), then write the channel
-//! manifest the Brick reads (docs/updates.md). Also `mortar update` and
+//! computer. Build the system, push its closure signed to the bucket
+//! (`nix copy --to s3://…&secret-key=…`), then write the channel manifest the
+//! Brick reads, signed with the same key (docs/updates.md). Also `mortar update` and
 //! `mortar update-creds` (the Brick's side, over SSH).
 
 use crate::{build_toplevel, die, remote, say, ssh_cmd};
+use mortar_update::manifest::SecretKey;
 use mortar_update::{manifest, time, Bucket, Credentials, FetchError, Manifest};
 use std::env;
 use std::io::{self, BufRead, Write};
@@ -32,6 +33,8 @@ pub struct Opts {
 struct Settings {
     bucket: Bucket,
     channel: String,
+    /// What the manifest calls this configuration.
+    config: String,
 }
 
 fn config_dir() -> PathBuf {
@@ -45,11 +48,11 @@ fn config_dir() -> PathBuf {
 fn settings(o: &Opts) -> Settings {
     if let (Some(e), Some(b)) = (&o.endpoint, &o.bucket) {
         let bucket = Bucket::new(e, b, o.region.as_deref().unwrap_or("auto")).unwrap_or_else(|e| die(&e));
-        return Settings { bucket, channel: o.channel.clone().unwrap_or_else(|| "mortar".into()) };
+        return Settings { bucket, channel: o.channel.clone().unwrap_or_else(|| "mortar".into()), config: o.config.clone() };
     }
     let attr = format!("{}#nixosConfigurations.{}.config.mortar.update", o.flake, o.config);
     let out = Command::new("nix")
-        .args(["eval", "--json", &attr, "--apply", "u: { inherit (u) enable bucket endpoint region channel; }"])
+        .args(["eval", "--json", &attr, "--apply", "u: { inherit (u) enable bucket endpoint region channel configName; }"])
         .stderr(Stdio::inherit())
         .output()
         .unwrap_or_else(|e| die(&format!("nix: {e}")));
@@ -65,7 +68,9 @@ fn settings(o: &Opts) -> Settings {
         die("mortar.update.endpoint is still the placeholder (docs/updates.md)");
     }
     let bucket = Bucket::new(&s("endpoint"), &s("bucket"), &s("region")).unwrap_or_else(|e| die(&e));
-    Settings { bucket, channel: o.channel.clone().unwrap_or_else(|| s("channel")) }
+    // the name the Brick compares with: an alias (brick-mainline) publishes under its own
+    let config = Some(s("configName")).filter(|c| !c.is_empty()).unwrap_or_else(|| o.config.clone());
+    Settings { bucket, channel: o.channel.clone().unwrap_or_else(|| s("channel")), config }
 }
 
 /// `key = "value"` lines (the same format as the Brick's credentials file).
@@ -111,6 +116,21 @@ fn signing_key(o: &Opts) -> PathBuf {
         }
     }
     p
+}
+
+fn read_secret(p: &Path) -> SecretKey {
+    let t = std::fs::read_to_string(p).unwrap_or_else(|e| die(&format!("{}: {e}", p.display())));
+    SecretKey::parse(&t).unwrap_or_else(|e| die(&format!("{}: {e}", p.display())))
+}
+
+/// `mortar sign-manifest --key FILE`: sign the manifest on stdin, print it. For
+/// tests and repairs; `mortar publish` signs what it writes.
+pub fn sign_stdin(key: &Path) {
+    let mut text = Vec::new();
+    io::Read::read_to_end(&mut io::stdin(), &mut text).unwrap_or_else(|e| die(&format!("stdin: {e}")));
+    let mut m: Manifest = serde_json::from_slice(&text).unwrap_or_else(|e| die(&format!("manifest: {e}")));
+    m.sign(&read_secret(key));
+    print!("{}", m.to_json());
 }
 
 fn git(flake: &str, args: &[&str]) -> Option<String> {
@@ -182,7 +202,7 @@ pub fn publish(o: &Opts) {
         channel: st.channel.clone(),
         // a NixOS toplevel names its platform
         system: std::fs::read_to_string(Path::new(&top).join("system")).map(|s| s.trim().to_string()).unwrap_or_else(|_| "aarch64-linux".into()),
-        config: o.config.clone(),
+        config: st.config.clone(),
         toplevel: top.clone(),
         // strictly newer than the previous one, even with a skewed clock
         published: now.max(prev.as_ref().map(|p| p.published + 1).unwrap_or(0)),
@@ -191,7 +211,10 @@ pub fn publish(o: &Opts) {
         label: label(&top),
         changelog: changelog(o, prev.as_ref(), rev.as_deref()),
         publisher: o.publisher.clone(),
+        signature: None,
     };
+    let mut m = m;
+    m.sign(&read_secret(&key));
     if o.dry_run {
         print!("{}", m.to_json());
         return;

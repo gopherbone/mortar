@@ -44,8 +44,8 @@ mortar publish [--config NAME] [--path STORE_PATH] [--channel C] [--key FILE]
                [--credentials FILE] [--force] [--dry-run]
                [--endpoint URL --bucket NAME [--region R]]
     Over-the-air updates without CI: build, push the closure signed to the
-    private bucket (mortar.update in the flake, or --endpoint/--bucket),
-    then write the channel manifest (docs/updates.md). Key:
+    bucket (mortar.update in the flake, or --endpoint/--bucket), then write
+    the signed channel manifest (docs/updates.md). Key:
     ~/.config/mortar/signing-key; bucket credentials:
     $AWS_ACCESS_KEY_ID/$AWS_SECRET_ACCESS_KEY or ~/.config/mortar/r2-write.
 mortar update [--host HOST]       check for an update on the Brick now
@@ -347,6 +347,11 @@ fn main() {
     };
     if cmd == "pair" {
         pair::run(&parse_pair(rest));
+        return;
+    }
+    if cmd == "sign-manifest" {
+        let key = rest.iter().position(|a| a == "--key").and_then(|i| rest.get(i + 1)).unwrap_or_else(|| die("sign-manifest --key FILE < manifest.json"));
+        publish::sign_stdin(std::path::Path::new(key));
         return;
     }
     if cmd == "publish" {

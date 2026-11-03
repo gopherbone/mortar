@@ -7,9 +7,11 @@
 #   brick  modules/core/update.nix with a read-only key from the card's
 #          mortar.toml; `mortar-update check` downloads and stages
 #
-# Also: the read key cannot write, unsigned closures are refused, low
-# battery waits, offline is reported, rollback, and a rolled-back Brick
-# does not take the same manifest again.
+# Also: the read key cannot write; unsigned or tampered manifests, closures
+# not signed by the publisher (even with a key nix.conf trusts), another
+# channel's or configuration's manifest and older ones are all refused; low
+# battery waits, offline is reported, rollback, and a rolled-back Brick does
+# not take the same manifest again.
 #
 #   nix build .#checks.aarch64-linux.mortar-update   (a Mac: via its linux-builder)
 { pkgs }:
@@ -24,6 +26,15 @@ let
   '';
   publicKey = builtins.readFile "${testKey}/public";
 
+  # A second key the Brick's Nix trusts as if for another cache, but the update
+  # path must not.
+  otherKey = pkgs.runCommand "mortar-update-test-other-key" { nativeBuildInputs = [ pkgs.nix ]; } ''
+    export HOME=$TMPDIR
+    mkdir $out
+    nix --extra-experimental-features nix-command key generate-secret --key-name other-cache-1 > $out/secret
+    nix --extra-experimental-features nix-command key convert-secret-to-public < $out/secret > $out/public
+  '';
+
   # The "new" system: small (a container config), but a real toplevel
   # with bin/switch-to-configuration.
   target =
@@ -37,6 +48,14 @@ let
   # Looks like a system, but nobody signs it.
   unsigned = pkgs.writeTextFile {
     name = "nixos-system-unsigned";
+    destination = "/bin/switch-to-configuration";
+    executable = true;
+    text = "#!/bin/sh\necho should never run; exit 1\n";
+  };
+
+  # Signed, but by the other key.
+  otherSigned = pkgs.writeTextFile {
+    name = "nixos-system-other-signer";
     destination = "/bin/switch-to-configuration";
     executable = true;
     text = "#!/bin/sh\necho should never run; exit 1\n";
@@ -67,8 +86,8 @@ pkgs.testers.runNixOSTest {
         };
       };
       networking.firewall.allowedTCPPorts = [ 3900 ];
-      environment.systemPackages = [ mortar pkgs.curl ];
-      virtualisation.additionalPaths = [ target unsigned ];
+      environment.systemPackages = [ mortar pkgs.curl pkgs.jq ];
+      virtualisation.additionalPaths = [ target unsigned otherSigned ];
       virtualisation.memorySize = 2048;
       virtualisation.diskSize = 4096;
       nix.settings.experimental-features = [ "nix-command" ];
@@ -83,8 +102,10 @@ pkgs.testers.runNixOSTest {
         bucket = "cache";
         endpoint = "http://ci:3900";
         inherit publicKey;
+        configName = "test";
         minFreeMiB = 64;
       };
+      nix.settings.trusted-public-keys = [ (builtins.readFile "${otherKey}/public") ];
       environment.systemPackages = [ pkgs.jq ];
       virtualisation.memorySize = 2048;
       virtualisation.diskSize = 4096;
@@ -142,11 +163,21 @@ pkgs.testers.runNixOSTest {
     def publish(path, extra=""):
         return ci.succeed(
             f"{w_env} MORTAR_REV=0123456789abcdef mortar publish --endpoint http://ci:3900 --bucket cache "
-            f"--key /root/signing-key --path {path} {extra} 2>&1"
+            f"--key /root/signing-key --config test --path {path} {extra} 2>&1"
         )
 
     # the publisher's key, as CI writes it from a secret
     ci.succeed("install -m 600 ${testKey}/secret /root/signing-key")
+    ci.succeed("install -m 600 ${otherKey}/secret /root/other-key")
+
+    # a manifest by hand; sign=None leaves it unsigned
+    def put_manifest(toplevel, published, sign="/root/signing-key", channel="mortar", config="test"):
+        m = {"schema": 1, "channel": channel, "system": "${pkgs.stdenv.hostPlatform.system}", "config": config,
+             "toplevel": toplevel, "published": published, "date": "1970-01-01T00:16:40Z", "changelog": ["evil"]}
+        ci.succeed(f"cat > /tmp/m.json <<'EOF'\n{json.dumps(m)}\nEOF")
+        if sign is not None:
+            ci.succeed(f"mortar sign-manifest --key {sign} < /tmp/m.json > /tmp/signed.json && mv /tmp/signed.json /tmp/m.json")
+        assert s3put("/tmp/m.json", f"channels/{channel}.json") == "200"
 
     brick.wait_for_unit("mortar-update-init.service")
     running = brick.succeed("readlink -f /run/current-system").strip()
@@ -179,23 +210,58 @@ pkgs.testers.runNixOSTest {
         s = check()
         assert s["state"] == "up-to-date", s
 
+    with subtest("an unsigned manifest is refused"):
+        put_manifest("${target}", 1000, sign=None)
+        s = check(expect_ok=False)
+        assert s["state"] == "error" and "isn't signed" in s["detail"], s
+        brick.fail("nix-store --check-validity ${target}")
+
+    with subtest("a tampered manifest is refused"):
+        put_manifest("${target}", 1000)
+        ci.succeed("jq '.published = 2000' /tmp/m.json > /tmp/t.json")
+        assert s3put("/tmp/t.json", "channels/mortar.json") == "200"
+        s = check(expect_ok=False)
+        assert s["state"] == "error" and "bad signature" in s["detail"], s
+
+    with subtest("a manifest signed by another key is refused"):
+        put_manifest("${target}", 1000, sign="/root/other-key")
+        s = check(expect_ok=False)
+        assert s["state"] == "error" and "doesn't trust" in s["detail"], s
+
+    with subtest("another channel's manifest, signed, is refused"):
+        put_manifest("${target}", 1000, channel="testing")
+        ci.succeed("curl -sf --aws-sigv4 aws:amz:auto:s3 --user " + w_id + ":" + w_sec + " -T /tmp/m.json http://localhost:3900/cache/channels/mortar.json")
+        s = check(expect_ok=False)
+        assert s["message"] == "Wrong channel", s
+
+    with subtest("another configuration's manifest, signed, is refused"):
+        put_manifest("${target}", 1000, config="brick-full")
+        s = check(expect_ok=False)
+        assert s["message"] == "Different configuration" and "brick-full" in s["detail"], s
+        brick.fail("nix-store --check-validity ${target}")
+
     with subtest("an unsigned closure is refused"):
         ci.succeed(f"{w_env} nix copy --to '{store}' ${unsigned}")
-        ci.succeed("""cat > /tmp/m.json <<EOF
-    {"schema":1,"channel":"mortar","system":"${pkgs.stdenv.hostPlatform.system}","config":"test",
-     "toplevel":"${unsigned}","published":1000,"date":"1970-01-01T00:16:40Z","changelog":["evil"]}
-    EOF""")
-        assert s3put("/tmp/m.json", "channels/mortar.json") == "200"
+        put_manifest("${unsigned}", 1000)
         s = check(expect_ok=False)
         assert s["state"] == "error" and "signed" in s["detail"], s
         brick.fail("nix-store --check-validity ${unsigned}")  # the VM sees the host store; validity is what counts
         assert brick.succeed("readlink -f /nix/var/nix/profiles/system").strip() == running
+
+    with subtest("a closure signed with a key only nix.conf trusts is refused"):
+        brick.succeed("grep -q other-cache-1 /etc/nix/nix.conf")
+        ci.succeed(f"{w_env} nix copy --to '{store}&secret-key=/root/other-key' ${otherSigned}")
+        put_manifest("${otherSigned}", 1000)
+        s = check(expect_ok=False)
+        assert s["state"] == "error" and "signed" in s["detail"], s
+        brick.fail("nix-store --check-validity ${otherSigned}")
 
     with subtest("publish a signed system"):
         print(publish("${target}"))
         m = json.loads(s3cat("channels/mortar.json"))
         assert m["toplevel"] == "${target}" and m["rev"] == "0123456789abcdef" and m["published"] > 1000, m
         assert m["system"] == "${pkgs.stdenv.hostPlatform.system}", m
+        assert m["signature"].startswith("mortar-test-1:"), m
         # publishing the same system again changes nothing
         out = publish("${target}")
         assert "Unchanged" in out, out
@@ -233,6 +299,27 @@ pkgs.testers.runNixOSTest {
         s = check()
         assert s["state"] == "up-to-date", s
         assert brick.succeed("readlink -f /nix/var/nix/profiles/system").strip() == running
+
+    with subtest("an older manifest, properly signed, is a downgrade"):
+        put_manifest("${target}", 1500)
+        s = check(expect_ok=False)
+        assert s["message"] == "Update is older", s
+        assert brick.succeed("readlink -f /nix/var/nix/profiles/system").strip() == running
+        brick.succeed("mortar-update check --force 2>&1 | grep -q 'Update is older' || true")
+        assert brick.succeed("readlink -f /nix/var/nix/profiles/system").strip() == running
+
+    with subtest("--allow-downgrade takes it"):
+        brick.succeed("mortar-update check --allow-downgrade")
+        assert status()["state"] == "ready", status()
+        assert brick.succeed("readlink -f /nix/var/nix/profiles/system").strip() == "${target}"
+        brick.succeed("mortar-update rollback")
+
+    with subtest("--allow-config-change takes another configuration"):
+        put_manifest("${target}", 9999999999, config="brick-full")
+        assert check(expect_ok=False)["message"] == "Different configuration"
+        brick.succeed("mortar-update check --allow-config-change")
+        assert status()["state"] == "ready", status()
+        brick.succeed("mortar-update rollback")
 
     with subtest("auto-check toggle"):
         brick.succeed("systemctl start mortar-update-auto@on.service")

@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //! mortar-update: over-the-air updates on the Brick.
 //!
-//!   check     read the channel manifest, download the system closure from
-//!             the bucket (`nix copy --from s3://…`, signatures checked by
-//!             Nix), make it the next boot entry, tell the shell
+//!   check     read the channel manifest and check its signature, channel,
+//!             configuration and age, download the system closure from the
+//!             bucket (`nix copy --from s3://…`, signatures checked by Nix
+//!             against the same keys), make it the next boot entry, tell the
+//!             shell
 //!   init      boot: take credentials from the card's mortar.toml, write
 //!             the first status
 //!   provision credentials from stdin (`mortar update-creds`)
@@ -21,7 +23,7 @@ mod status;
 
 use config::Config;
 use mortar_update::{manifest, Bucket, Credentials, FetchError, Manifest};
-use status::{plan, Phase, Plan, State, Status};
+use status::{plan, Allow, Phase, Plan, State, Status};
 use std::fs;
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
@@ -30,10 +32,13 @@ use std::process::{Command, ExitCode, Stdio};
 const USAGE: &str = "\
 usage: mortar-update [--config FILE] <command>
 
-  check [--auto] [--force]   check for an update; download and stage it
+  check [--auto] [--force] [--allow-downgrade] [--allow-config-change]
+                             check for an update; download and stage it
                              (--auto: only if Auto-check daily is on;
-                             --force: also take a manifest that is not newer
-                             than the last one taken)
+                             --force: take the manifest last taken again;
+                             --allow-downgrade: also one older than that;
+                             --allow-config-change: also one of another
+                             configuration, e.g. bare to full)
   status [--json]            what the last check found
   auto on|off                Auto-check daily
   provision --stdin          store bucket credentials read from stdin
@@ -104,7 +109,11 @@ fn main() -> ExitCode {
     let mut cx = Ctx { cfg, state };
     let rest = &args[1..];
     let r = match cmd.as_str() {
-        "check" => check(&mut cx, rest.iter().any(|a| a == "--auto"), rest.iter().any(|a| a == "--force")),
+        "check" => {
+            let has = |f: &str| rest.iter().any(|a| a == f);
+            let allow = Allow { same: has("--force"), downgrade: has("--allow-downgrade"), config_change: has("--allow-config-change") };
+            check(&mut cx, has("--auto"), allow)
+        }
         "status" => show_status(&cx, rest.iter().any(|a| a == "--json")),
         "auto" => match rest.first().map(String::as_str) {
             Some("on") => set_auto(&mut cx, true),
@@ -204,7 +213,7 @@ fn provision_stdin(cx: &mut Ctx) -> Result<(), String> {
     // try them
     let b = cx.cfg.bucket()?;
     match b.get(&c, &manifest::key(&cx.cfg.channel), &cx.cfg.curl) {
-        Ok(bytes) => match Manifest::parse(&bytes) {
+        Ok(bytes) => match Manifest::parse(&bytes).and_then(|m| m.verify(&cx.cfg.trusted_keys).map(|()| m)) {
             Ok(m) => println!("bucket ok: {} has {}", manifest::key(&cx.cfg.channel), m.short()),
             Err(e) => println!("bucket ok, but {e}"),
         },
@@ -243,7 +252,7 @@ fn lock(cfg: &Config) -> Result<fs::File, String> {
     }
 }
 
-fn check(cx: &mut Ctx, auto: bool, force: bool) -> Result<(), String> {
+fn check(cx: &mut Ctx, auto: bool, allow: Allow) -> Result<(), String> {
     if auto && !cx.auto_check() {
         eprintln!("mortar-update: auto-check is off");
         return Ok(());
@@ -256,7 +265,7 @@ fn check(cx: &mut Ctx, auto: bool, force: bool) -> Result<(), String> {
         }
         Err(e) => return Err(e),
     };
-    let s = do_check(cx, force);
+    let s = do_check(cx, allow);
     cx.write(&s);
     println!("{}{}", s.message, if s.detail.is_empty() { String::new() } else { format!(": {}", s.detail) });
     match s.state {
@@ -265,7 +274,26 @@ fn check(cx: &mut Ctx, auto: bool, force: bool) -> Result<(), String> {
     }
 }
 
-fn do_check(cx: &mut Ctx, force: bool) -> Status {
+/// What the signed manifest says against what this Brick is: the check before
+/// anything is downloaded.
+fn refuse(cfg: &Config, m: &Manifest, allow: Allow) -> Option<(&'static str, String)> {
+    if let Err(e) = m.verify(&cfg.trusted_keys) {
+        return Some(("Update not trusted", e));
+    }
+    if m.channel != cfg.channel {
+        return Some(("Wrong channel", format!("the manifest is for '{}', this Brick follows '{}'", m.channel, cfg.channel)));
+    }
+    if m.system != cfg.system {
+        return Some(("Wrong system", format!("the manifest is for {}", m.system)));
+    }
+    if !allow.config_change && cfg.config_name.as_deref() != Some(m.config.as_str()) {
+        let mine = cfg.config_name.as_deref().unwrap_or("not set");
+        return Some(("Different configuration", format!("the update is {}, this Brick is {mine} (--allow-config-change)", m.config)));
+    }
+    None
+}
+
+fn do_check(cx: &mut Ctx, allow: Allow) -> Status {
     let Some(creds) = creds::load(&cx.cfg.credentials_file()) else {
         return cx.status(Phase::Unconfigured, "Not set up").detail("no bucket credentials (docs/updates.md)");
     };
@@ -292,17 +320,35 @@ fn do_check(cx: &mut Ctx, force: bool) -> Status {
     };
     cx.state.last_check = Some(mortar_update::time::now());
     cx.save_state();
-    if m.system != cx.cfg.system {
-        return cx.status(Phase::Error, "Wrong system").detail(format!("the manifest is for {}", m.system));
+    if let Some((msg, why)) = refuse(&cx.cfg, &m, allow) {
+        return cx.status(Phase::Error, msg).detail(why);
     }
 
     let running = resolve(&cx.cfg.current_system);
     let staged = resolve(&cx.cfg.profile);
-    match plan(&m, running.as_deref(), staged.as_deref(), &cx.state, force) {
+    match plan(&m, running.as_deref(), staged.as_deref(), &cx.state, allow) {
+        Plan::Running | Plan::Staged if m.published > cx.state.last_published => {
+            // already here (deployed, or from before this was kept): the floor moves up
+            cx.state.last_published = m.published;
+            cx.state.last_toplevel = Some(m.toplevel.clone());
+            cx.save_state();
+            if running.as_deref() == Some(m.toplevel.as_str()) {
+                let mut s = cx.status(Phase::UpToDate, "Up to date");
+                s.detail = format!("latest: {}", m.short());
+                return s;
+            }
+            return ready(cx, m);
+        }
         Plan::Running | Plan::NotNewer => {
             let mut s = cx.status(Phase::UpToDate, "Up to date");
             s.detail = format!("latest: {}", m.short());
             return s;
+        }
+        Plan::Downgrade => {
+            return cx.status(Phase::Error, "Update is older").detail(format!(
+                "{} is older than the last update taken here (--allow-downgrade)",
+                m.short()
+            ));
         }
         Plan::Staged => return ready(cx, m),
         Plan::Update => {}
@@ -339,7 +385,8 @@ fn do_check(cx: &mut Ctx, force: bool) -> Status {
         s.available = Some(m);
         return s;
     }
-    cx.state.last_published = m.published;
+    // never lowered, also by an --allow-downgrade
+    cx.state.last_published = cx.state.last_published.max(m.published);
     cx.state.last_toplevel = Some(m.toplevel.clone());
     cx.save_state();
     ready(cx, m)
@@ -376,6 +423,10 @@ fn download(cfg: &Config, bucket: &Bucket, creds: &Credentials, toplevel: &str) 
     eprintln!("mortar-update: nix copy --from {url} {toplevel}");
     let mut c = Command::new(&cfg.nix);
     c.args(["--extra-experimental-features", "nix-command", "copy", "--from", &url])
+        // For this copy only the publisher's keys count, not what nix.conf
+        // trusts for other caches (cache.nixos.org): a path in the bucket with
+        // someone else's signature isn't part of a published system.
+        .args(["--option", "trusted-public-keys", &cfg.trusted_keys.join(" ")])
         .args(["--option", "connect-timeout", "20", "--option", "stalled-download-timeout", "120"])
         .args(["--option", "download-attempts", "3"])
         .arg(toplevel)
@@ -403,7 +454,7 @@ fn download(cfg: &Config, bucket: &Bucket, creds: &Credentials, toplevel: &str) 
     let err = tail.iter().rev().find(|l| l.contains("error")).cloned().unwrap_or_else(|| tail.last().cloned().unwrap_or_default());
     let low = all.to_ascii_lowercase();
     if low.contains("signature") {
-        return Err((false, "not signed by a trusted key (nix.settings.trusted-public-keys)".into()));
+        return Err((false, "not signed by a trusted key (mortar.update.trustedKeys)".into()));
     }
     let offline = ["could not resolve", "couldn't resolve", "couldn't connect", "could not connect", "timeout", "timed out", "network is unreachable", "connection reset"]
         .iter()
@@ -467,5 +518,56 @@ mod tests {
         assert_eq!(generation_number("system-42-link"), Some(42));
         assert_eq!(generation_number("/nix/var/nix/profiles/system-7-link"), Some(7));
         assert_eq!(generation_number("/nix/store/x"), None);
+    }
+
+    fn config() -> Config {
+        serde_json::from_str(
+            r#"{"bucket":"b","endpoint":"http://x","configName":"brick-bare",
+                "trustedKeys":["test-1:IEXeMnbLZHPuxalArGnT5CiHpciUFtH+toxGnI/q3kQ="]}"#,
+        )
+        .unwrap()
+    }
+
+    fn manifest() -> Manifest {
+        let mut m: Manifest = serde_json::from_str(
+            r#"{"schema":1,"channel":"mortar","system":"aarch64-linux","config":"brick-bare",
+                "toplevel":"/nix/store/0c7f8ms0x6r4n3pq7x2a9w1kz5lbv8yd-x","published":5,"date":"x"}"#,
+        )
+        .unwrap();
+        m.sign(&manifest::SecretKey::parse("test-1:JMPmnQgjB/X0wg+yK5jOkfHTpB0SnK3WQnrptJSIo5UgRd4ydstkc+7FqUCsadPkKIelyJQW0f62jEacj+reRA==").unwrap());
+        m
+    }
+
+    #[test]
+    fn refusals() {
+        let (cfg, m, no) = (config(), manifest(), Allow::default());
+        assert_eq!(refuse(&cfg, &m, no), None);
+
+        let mut x = m.clone();
+        x.signature = None;
+        assert_eq!(refuse(&cfg, &x, no).unwrap().0, "Update not trusted");
+
+        // signed, but for something else
+        let sign = |f: fn(&mut Manifest)| {
+            let mut x = manifest();
+            f(&mut x);
+            x.sign(&manifest::SecretKey::parse("test-1:JMPmnQgjB/X0wg+yK5jOkfHTpB0SnK3WQnrptJSIo5UgRd4ydstkc+7FqUCsadPkKIelyJQW0f62jEacj+reRA==").unwrap());
+            x
+        };
+        assert_eq!(refuse(&cfg, &sign(|m| m.channel = "testing".into()), no).unwrap().0, "Wrong channel");
+        assert_eq!(refuse(&cfg, &sign(|m| m.system = "x86_64-linux".into()), no).unwrap().0, "Wrong system");
+        let full = sign(|m| m.config = "brick-full".into());
+        assert_eq!(refuse(&cfg, &full, no).unwrap().0, "Different configuration");
+        assert_eq!(refuse(&cfg, &full, Allow { config_change: true, ..no }), None);
+
+        // a Brick that doesn't know its configuration refuses too
+        let mut unnamed = config();
+        unnamed.config_name = None;
+        assert_eq!(refuse(&unnamed, &m, no).unwrap().0, "Different configuration");
+
+        // no trust list: nothing is trusted
+        let mut empty = config();
+        empty.trusted_keys.clear();
+        assert_eq!(refuse(&empty, &m, no).unwrap().0, "Update not trusted");
     }
 }

@@ -17,6 +17,13 @@ pub struct Config {
     /// Only take manifests for this Nix system.
     #[serde(default = "d_system")]
     pub system: String,
+    /// Only take manifests of this configuration (`mortar.update.configName`).
+    #[serde(default)]
+    pub config_name: Option<String>,
+    /// Nix public keys (`name:base64`): a manifest must be signed by one, and
+    /// the closure too, whatever else nix.conf trusts. Empty: nothing is taken.
+    #[serde(default)]
+    pub trusted_keys: Vec<String>,
     /// Default for "Auto-check daily" until it is changed on the Brick.
     #[serde(default = "yes")]
     pub auto_check: bool,

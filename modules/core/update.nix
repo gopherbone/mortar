@@ -9,9 +9,10 @@
 #   mortar-update-init        boot: moves `[update]` credentials from the
 #                             card's mortar.toml to /var/lib/mortar-update
 #                             (root, 0600), writes the first status
-#   mortar-update             `mortar-update check`: manifest -> `nix copy
-#                             --from s3://…` (signatures checked against
-#                             publicKey) -> system profile ->
+#   mortar-update             `mortar-update check`: manifest (signature,
+#                             channel, configuration and age checked) ->
+#                             `nix copy --from s3://…` (signatures checked
+#                             against trustedKeys) -> system profile ->
 #                             `switch-to-configuration boot`
 #   mortar-update-auto.timer  the same once a day, while Auto-check daily
 #                             is on (Settings > Auto-check daily)
@@ -37,7 +38,7 @@ let
 
   configFile = pkgs.writeText "mortar-update.json" (
     builtins.toJSON {
-      inherit (cfg) bucket endpoint region channel autoCheck minBattery keepGenerations;
+      inherit (cfg) bucket endpoint region channel configName trustedKeys autoCheck minBattery keepGenerations;
       system = pkgs.stdenv.hostPlatform.system;
       minFreeMib = cfg.minFreeMiB;
       cardFile = cfg.cardFile;
@@ -100,8 +101,31 @@ in
       example = "mortar-1:3l5X0L…=";
       description = ''
         Public half of the publisher's Nix signing key (`nix key
-        convert-secret-to-public`). Added to nix.settings.trusted-public-keys:
-        paths copied from the bucket must carry its signature.
+        convert-secret-to-public`). Added to nix.settings.trusted-public-keys.
+      '';
+    };
+
+    trustedKeys = mkOption {
+      type = types.listOf types.str;
+      default = [ cfg.publicKey ];
+      defaultText = lib.literalExpression "[ config.mortar.update.publicKey ]";
+      description = ''
+        The keys an update must be signed with: the channel manifest, and the
+        closure copied from the bucket (for that copy these replace
+        nix.settings.trusted-public-keys, so a key trusted for other caches
+        counts for nothing here). List two while moving to a new key.
+      '';
+    };
+
+    configName = mkOption {
+      type = types.nullOr types.str;
+      default = null;
+      example = "brick-bare";
+      description = ''
+        Which configuration this system is: its name under
+        nixosConfigurations, which `mortar publish --config` writes in the
+        manifest. A manifest of another configuration is refused, so a bare
+        Brick doesn't silently become a full one.
       '';
     };
 
@@ -155,6 +179,14 @@ in
       {
         assertion = builtins.match "[^:]+:[A-Za-z0-9+/=]+" cfg.publicKey != null;
         message = "mortar.update.publicKey: want `name:base64` (nix key convert-secret-to-public).";
+      }
+      {
+        assertion = cfg.configName != null;
+        message = "mortar.update.configName: set it to this system's name under nixosConfigurations.";
+      }
+      {
+        assertion = cfg.trustedKeys != [ ];
+        message = "mortar.update.trustedKeys: with no keys every update is refused.";
       }
     ];
 

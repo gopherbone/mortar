@@ -8,6 +8,8 @@
 # decides the order of merged lists (system packages, kernel parameters, ...;
 # later modules come first), and with it the store path of the system. For the
 # same system, keep the order.
+{ lib, ... }:
+
 {
   imports = [
     ../devices/brick/hardware.nix
@@ -40,4 +42,6 @@
     ../modules/core
     ../modules/packs/music
   ];
+
+  mortar.update.configName = lib.mkDefault "brick-full";
 }
