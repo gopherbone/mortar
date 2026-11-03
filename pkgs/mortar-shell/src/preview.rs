@@ -277,6 +277,8 @@ pub fn run(o: &Opts) -> Result<(), String> {
     let home_art = match o.screen.as_str() {
         "home-truchet" => crate::homeart::Kind::Truchet,
         "home-life" => crate::homeart::Kind::Life,
+        "home-river" => crate::homeart::Kind::River,
+        "home-boids" => crate::homeart::Kind::Boids,
         "home-off" => crate::homeart::Kind::Off,
         _ => crate::homeart::Kind::Sun,
     };
@@ -357,7 +359,7 @@ pub fn run(o: &Opts) -> Result<(), String> {
     let v0 = mk(current, 0.0);
     settle(&mut ui, &v0, 0.05);
     match s {
-        "boot" | "home" | "home-sun" | "home-truchet" | "home-life" | "home-off" | "home-default" | "home-custom" | "home-attention" | "home-empty" | "nothing-running" | "home-charging" | "home-low" | "app" => {}
+        "boot" | "home" | "home-sun" | "home-truchet" | "home-life" | "home-river" | "home-boids" | "home-off" | "home-default" | "home-custom" | "home-attention" | "home-empty" | "nothing-running" | "home-charging" | "home-low" | "app" => {}
         // home, A: into the dashboard's tiles
         "home-tiles" => {
             ui.button(Button::A, false, &v0);

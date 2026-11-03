@@ -502,8 +502,7 @@ const BOOT_END: [(f32, f32); 4] = [(362.0, 166.0), (512.0, 166.0), (362.0, 316.0
 
 /// The charging line's highlight moves this long after the last press.
 const DRIFT_SECS: f64 = 30.0;
-/// Home's pattern changes every ART_EVERY s for ART_AWAKE s after a press.
-const ART_EVERY: f64 = 3.0;
+/// Home's pattern runs (`Kind::every`) for ART_AWAKE s after a press.
 const ART_AWAKE: f64 = 45.0;
 
 /// How often the compositor should redraw.
@@ -979,7 +978,7 @@ impl ShellUi {
     }
 
     /// Home's pattern: the kind chosen in Settings; a change every
-    /// ART_EVERY s while awake, each eased in over a moment.
+    /// `Kind::every` s while awake, each eased in over a moment.
     fn step_art(&mut self, dt: f32) {
         if self.art.kind != self.prefs.home_art {
             self.art = crate::homeart::HomeArt::new(self.prefs.home_art);
@@ -995,10 +994,10 @@ impl ShellUi {
             return;
         }
         if self.art_next == 0.0 {
-            self.art_next = self.t + ART_EVERY;
+            self.art_next = self.t + self.art.kind.every();
         } else if self.t >= self.art_next {
             self.art.step();
-            self.art_next = self.t + ART_EVERY;
+            self.art_next = self.t + self.art.kind.every();
             self.dirty = true;
         }
     }
@@ -2269,7 +2268,7 @@ mod tests {
         let l = launcher();
         let r = [run(5, "m8")];
         let v = view(&r, &l, &sys, None);
-        for kind in [crate::homeart::Kind::Sun, crate::homeart::Kind::Truchet, crate::homeart::Kind::Life, crate::homeart::Kind::Off] {
+        for kind in crate::homeart::Kind::ALL {
             let mut ui = ShellUi::new(Prefs { home_art: kind, ..quiet() }, false);
             settle(&mut ui, &v);
             // a press, then two minutes at 30 frames a second, counting the
@@ -2287,8 +2286,11 @@ mod tests {
             if kind == crate::homeart::Kind::Off {
                 assert_eq!((first, ui.art_steps()), (0, 0));
             } else {
-                assert!((14..=16).contains(&ui.art_steps()), "{kind:?}: a change every 3 s for 45 s");
-                assert!(first <= 16 * 15, "{kind:?}: {first} frames");
+                let every = kind.every();
+                let want = (45.0 / every) as u64;
+                assert!(ui.art_steps().abs_diff(want) <= want / 10 + 1, "{kind:?}: a change every {every} s for 45 s: {}", ui.art_steps());
+                // never more frames than 45 s of them, plus settling
+                assert!(first <= 46 * 30, "{kind:?}: {first} frames");
             }
             // Reduce motion: never
             let mut ui = ShellUi::new(Prefs { home_art: kind, reduce_motion: true, ..quiet() }, false);

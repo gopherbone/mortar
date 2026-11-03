@@ -246,6 +246,11 @@ pub struct Patterns {
     /// The scope's frequency ratio (shown, easing to `ratio_to`).
     ratio: f32,
     ratio_to: f32,
+    /// The scope's path position, accumulated: `ratio * t` would speed up without
+    /// limit as `t` grows, because any change in the ratio moves it by `t` times
+    /// that change.
+    scope_x: f32,
+    scope_y: f32,
     boost: f32,
     /// The Truchet wave's push from ▲▼ (px along the diagonal), eased.
     pub nudge: Spring,
@@ -259,12 +264,17 @@ impl Default for Patterns {
     }
 }
 
+/// How fast the scope's path runs, and the highest ratio ▲▼ reaches: its top speed
+/// is about (SCOPE_RATIO_MAX + 0.5) * SCOPE_RATE radians a second.
+const SCOPE_RATE: f32 = 0.6;
+const SCOPE_RATIO_MAX: f32 = 4.0;
+
 impl Patterns {
     pub fn new() -> Patterns {
         let mut nudge = Spring::new(0.0);
         nudge.k_mul = 0.4;
         // a nice still frame for Reduce motion: some time in
-        Patterns { t: 7.0, inch_t: 7.0, ratio: 2.0, ratio_to: 2.0, boost: 0.0, nudge, life: Life::new(), life_acc: 0.0 }
+        Patterns { t: 7.0, inch_t: 7.0, ratio: 2.0, ratio_to: 2.0, scope_x: 18.9, scope_y: 12.6, boost: 0.0, nudge, life: Life::new(), life_acc: 0.0 }
     }
 
     /// Advance by `dt` seconds (only while the cross shows).
@@ -273,6 +283,8 @@ impl Patterns {
         self.t += dt;
         self.inch_t += dt * (1.0 + 2.0 * self.boost);
         self.ratio += (self.ratio_to - self.ratio) * (dt * 2.0).min(1.0);
+        self.scope_x = (self.scope_x + 3.0 * SCOPE_RATE * dt) % std::f32::consts::TAU;
+        self.scope_y = (self.scope_y + self.scope_ratio() * SCOPE_RATE * dt) % std::f32::consts::TAU;
         self.boost = (self.boost - dt * 1.2).max(0.0);
         self.life_acc += dt;
         while self.life_acc >= 0.25 {
@@ -280,6 +292,11 @@ impl Patterns {
             self.life.step();
         }
         self.life.ease(dt);
+    }
+
+    /// The scope's ratio now: where ▲▼ left it, drifting slowly.
+    fn scope_ratio(&self) -> f32 {
+        self.ratio + 0.5 * (self.t * 0.06).sin()
     }
 
     /// ▲▼: a little push (`dir` +1 down, -1 up).
@@ -290,7 +307,7 @@ impl Patterns {
                 self.life_acc = 0.0;
             }
             Kind::Zigzag => self.boost = 1.0,
-            Kind::Scope => self.ratio_to = (self.ratio_to.round() + dir.signum()).clamp(1.0, 6.0),
+            Kind::Scope => self.ratio_to = (self.ratio_to.round() + dir.signum()).clamp(1.0, SCOPE_RATIO_MAX),
             Kind::Truchet => self.nudge.set(self.nudge.t + 120.0 * dir.signum()),
         }
     }
@@ -370,7 +387,7 @@ impl Patterns {
     fn scope(&self, b: &mut B, pal: &Pal, e: f32, vis: Vis) {
         const CW: usize = NCOL as usize;
         const CH: usize = 27;
-        let r = self.ratio + 0.5 * (self.t * 0.06).sin();
+        let r = self.scope_ratio();
         let strip_cx = STRIP_COL as f32 * GRID + (SCREEN_W - STRIP_X) / 2.0;
         let full_cx = (SCREEN_W - OX) / 2.0;
         let (cx, cy) = (strip_cx + (full_cx - strip_cx) * e, Y0 + CH as f32 * GRID / 2.0);
@@ -380,8 +397,11 @@ impl Patterns {
         let mut rank = [0u16; CW * CH];
         let n = 480;
         for k in (0..n).rev() {
-            let s = self.t * 0.9 - k as f32 * 0.013;
-            let (x, y) = (cx + ax * breathe * (3.0 * s + 0.6).sin(), cy + ay * breathe * (r * s).sin());
+            let back = k as f32 * 0.013;
+            let (x, y) = (
+                cx + ax * breathe * (self.scope_x - 3.0 * back + 0.6).sin(),
+                cy + ay * breathe * (self.scope_y - r * back).sin(),
+            );
             let (i, j) = ((x / GRID).floor(), ((y - Y0) / GRID).floor());
             if i < 0.0 || j < 0.0 || i as usize >= CW || j as usize >= CH {
                 continue;
@@ -524,6 +544,23 @@ mod tests {
         p.nudge(Kind::Zigzag, 1.0);
         p.step(0.05);
         assert!(p.inch_t - a > 0.12, "a 50 ms step went {}", p.inch_t - a);
+    }
+
+    #[test]
+    fn scope_speed_stays_bounded_however_long_it_runs() {
+        let mut p = Patterns::new();
+        for _ in 0..8 {
+            p.nudge(Kind::Scope, 1.0);
+        }
+        assert_eq!(p.ratio_to, SCOPE_RATIO_MAX);
+        let top = (SCOPE_RATIO_MAX + 0.5) * SCOPE_RATE;
+        for _ in 0..(3600 * 30) {
+            let y = p.scope_y;
+            p.step(1.0 / 30.0);
+            let moved = (p.scope_y - y).rem_euclid(std::f32::consts::TAU);
+            assert!(moved * 30.0 <= top + 0.001, "{moved}");
+        }
+        assert!(p.scope_y.is_finite());
     }
 
     #[test]

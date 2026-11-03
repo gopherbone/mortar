@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //! Home's pattern: a small mosaic to the right of the big clock, in the
 //! cross's language (patterns.rs: solid palette tiles on a 28 px grid with
-//! 4 px of grout), but calm: a tile or two changes every few seconds, and
-//! only for a while after the last press; then it holds still (no frames).
+//! 4 px of grout). Sun and Truchet are calm, a tile or two every few seconds;
+//! Life is lively, about two generations a second. All of them run only for a
+//! while after the last press; then they hold still (no frames).
 //! Its colours follow the time of day: yellow and lime by day, orange and
 //! pink at dawn and dusk, lavender and ink at night.
 //!
@@ -10,8 +11,14 @@
 //!   the day, rising and setting; at night a crescent moon and stars. A ray
 //!   (or a star) blinks out or back each step.
 //! - Truchet: the classic two-colour tiles; each step turns one a quarter.
-//! - Life: Conway's Game of Life on the block (a small torus), a
-//!   generation each step; a glider drops in when it dies out or repeats.
+//! - Life: Conway's Game of Life on the block (a small torus), a generation
+//!   each step. A small torus settles fast, so an R-pentomino drops in when it
+//!   thins out or repeats, and a glider every so often regardless.
+//! - River: a landscape eroding. Rain falls on rough ground that drains to one
+//!   outlet; water cuts channels in proportion to how much flows through them,
+//!   so a branching river system forms by itself, and starts over on new ground.
+//! - Boids: a small flock (separation, alignment, cohesion) that lights the tiles
+//!   it crosses and leaves them fading behind it.
 //!
 //! Pure state: shellui steps it (`step`) and eases it (`ease`) and draws
 //! it (`draw`) in full-screen coordinates.
@@ -28,16 +35,29 @@ pub enum Kind {
     Sun,
     Truchet,
     Life,
+    River,
+    Boids,
     Off,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 4] = [Kind::Sun, Kind::Truchet, Kind::Life, Kind::Off];
+    pub const ALL: [Kind; 6] = [Kind::Sun, Kind::Truchet, Kind::Life, Kind::River, Kind::Boids, Kind::Off];
+    /// Seconds between changes while it runs.
+    pub fn every(self) -> f64 {
+        match self {
+            Kind::Life => 0.55,
+            Kind::River => 0.3,
+            Kind::Boids => 0.1,
+            _ => 3.0,
+        }
+    }
     pub fn name(self) -> &'static str {
         match self {
             Kind::Sun => "Sun",
             Kind::Truchet => "Truchet",
             Kind::Life => "Life",
+            Kind::River => "River",
+            Kind::Boids => "Boids",
             Kind::Off => "Off",
         }
     }
@@ -53,6 +73,20 @@ pub const X0: f32 = 1024.0 - 56.0 - COLS as f32 * GRID + GROUT;
 pub const Y0: f32 = 92.0;
 /// A step's change eases in over this long.
 pub const EASE: f32 = 0.45;
+/// Life's steps are close together, so each eases in faster.
+const LIFE_EASE: f32 = 0.22;
+/// Fewer live cells than this and Life gets a new seed.
+const LIFE_THIN: usize = 14;
+const LIFE_GLIDER_EVERY: u32 = 16;
+/// River: how hard water cuts, how fast land rises, what counts as a channel, how
+/// many raindrops, and how long a landscape lasts (steps) before new ground.
+const RIVER_CUT: f32 = 0.05;
+const RIVER_UPLIFT: f32 = 0.004;
+const RIVER_CHANNEL: f32 = 3.0;
+const RIVER_CARVE: f32 = 0.022;
+const RIVER_DROPS: usize = 14;
+const RIVER_LIFE: u32 = 280;
+const FLOCK: usize = 13;
 
 /// The colours for the hour (0..24): three tones.
 pub fn tones(pal: &Pal, hour: f32) -> [Color; 3] {
@@ -89,6 +123,24 @@ pub struct HomeArt {
     /// Truchet: each cell's quarter turns; the cell turning now.
     rot: Vec<u8>,
     turning: Option<usize>,
+    /// River: ground height, where each cell drains (a neighbour; itself at the
+    /// outlet), how much flows through it, the raindrops, and how long it has run.
+    ground: Vec<f32>,
+    drain: Vec<usize>,
+    flow: Vec<f32>,
+    outlet: usize,
+    /// How deep the water has cut each cell: a channel shows once it passes 1, so
+    /// the network grows back from the outlet into the hills, as real ones do.
+    carved: Vec<f32>,
+    drops: Vec<usize>,
+    river_age: u32,
+    /// River and Boids: each tile's size, shown and heading for.
+    shown: Vec<f32>,
+    goal: Vec<f32>,
+    /// Boids: position and velocity, in cells.
+    flock: Vec<[f32; 4]>,
+    /// Life: generations since the last glider dropped in.
+    since_glider: u32,
     /// Life: cells now and before the last step, and their ages.
     cells: Vec<bool>,
     old: Vec<bool>,
@@ -121,6 +173,17 @@ impl HomeArt {
             p: 1.0,
             rng: 0x686f_6d65,
             steps: 0,
+            since_glider: 0,
+            ground: vec![0.0; COLS * ROWS],
+            drain: (0..COLS * ROWS).collect(),
+            flow: vec![1.0; COLS * ROWS],
+            outlet: 0,
+            carved: vec![0.0; COLS * ROWS],
+            drops: Vec::new(),
+            river_age: 0,
+            shown: vec![0.0; COLS * ROWS],
+            goal: vec![0.0; COLS * ROWS],
+            flock: Vec::new(),
         };
         a.rot = (0..TW * TH).map(|_| (a.rand() & 1) as u8).collect();
         // Life: an R-pentomino and a glider, a few generations in
@@ -132,7 +195,183 @@ impl HomeArt {
             a.life_step();
         }
         a.old = a.cells.clone();
+        match kind {
+            Kind::River => {
+                a.new_ground();
+                // a stream already running, the rest still to come
+                for _ in 0..6 {
+                    a.river_step();
+                }
+                a.shown = a.goal.clone();
+            }
+            Kind::Boids => {
+                for _ in 0..FLOCK {
+                    let (x, y) = (a.unit() * COLS as f32, a.unit() * ROWS as f32);
+                    let (vx, vy) = (a.unit() - 0.5, a.unit() - 0.5);
+                    a.flock.push([x, y, vx, vy]);
+                }
+                for _ in 0..30 {
+                    a.boids_step();
+                }
+                a.shown = a.goal.clone();
+            }
+            _ => {}
+        }
         a
+    }
+
+    fn unit(&mut self) -> f32 {
+        (self.rand() % 10_000) as f32 / 10_000.0
+    }
+
+    /// Rough ground, sloping gently to one outlet on the lower edge.
+    fn new_ground(&mut self) {
+        let ox = 2 + self.rand() as usize % (COLS - 4);
+        self.outlet = (ROWS - 1) * COLS + ox;
+        for i in 0..COLS * ROWS {
+            let (dx, dy) = ((i % COLS) as f32 - ox as f32, (ROWS - 1 - i / COLS) as f32);
+            self.ground[i] = 0.12 * (dx * dx + dy * dy).sqrt() + 1.4 * self.unit();
+        }
+        self.carved.iter_mut().for_each(|c| *c = 0.0);
+        self.drops.clear();
+        self.river_age = 0;
+    }
+
+    /// One step of erosion. Flood outward from the outlet so that every cell has a
+    /// downhill way out (lakes fill until they spill), measure how much drains
+    /// through each cell, then let the flow cut: more water, faster.
+    fn river_step(&mut self) {
+        let n = COLS * ROWS;
+        let mut level = vec![f32::INFINITY; n];
+        let mut done = vec![false; n];
+        let mut order = Vec::with_capacity(n);
+        level[self.outlet] = self.ground[self.outlet];
+        self.drain[self.outlet] = self.outlet;
+        for _ in 0..n {
+            let Some(i) = (0..n).filter(|i| !done[*i]).min_by(|a, b| level[*a].total_cmp(&level[*b])) else {
+                break;
+            };
+            done[i] = true;
+            order.push(i);
+            let (x, y) = ((i % COLS) as i32, (i / COLS) as i32);
+            // Four neighbours: a channel's tiles always touch side by side.
+            for (dx, dy) in [(0, -1), (-1, 0), (1, 0), (0, 1)] {
+                let (nx, ny) = (x + dx, y + dy);
+                if nx < 0 || ny < 0 || nx >= COLS as i32 || ny >= ROWS as i32 {
+                    continue;
+                }
+                let j = ny as usize * COLS + nx as usize;
+                let through = self.ground[j].max(level[i] + 0.001);
+                if !done[j] && through < level[j] {
+                    level[j] = through;
+                    self.drain[j] = i;
+                }
+            }
+        }
+        self.ground = level;
+        self.flow.iter_mut().for_each(|f| *f = 1.0);
+        for &i in order.iter().rev() {
+            let to = self.drain[i];
+            if to != i {
+                self.flow[to] += self.flow[i];
+            }
+        }
+        for &i in &order {
+            let to = self.drain[i];
+            if to != i {
+                let drop = self.ground[i] - self.ground[to];
+                let cut = (RIVER_CUT * self.flow[i].sqrt()).min(0.9) * drop;
+                // the land keeps rising a little, so hills between channels stay
+                self.ground[i] += RIVER_UPLIFT - cut;
+            }
+        }
+        // Raindrops run down the channels, a cell a step, and fall again.
+        for d in 0..self.drops.len() {
+            self.drops[d] = self.drain[self.drops[d]];
+        }
+        while self.drops.len() < RIVER_DROPS {
+            let i = self.rand() as usize % n;
+            self.drops.push(i);
+        }
+        for d in 0..self.drops.len() {
+            if self.drops[d] == self.outlet {
+                self.drops[d] = self.rand() as usize % n;
+            }
+        }
+        for i in 0..n {
+            if self.flow[i] >= RIVER_CHANNEL {
+                self.carved[i] += RIVER_CARVE * self.flow[i].sqrt();
+            }
+            self.goal[i] = if self.is_water(i) {
+                (0.42 + 0.1 * self.flow[i].ln()).min(1.0)
+            } else {
+                (0.12 + 0.05 * self.ground[i]).clamp(0.12, 0.36)
+            };
+        }
+        self.river_age += 1;
+    }
+
+    fn is_water(&self, i: usize) -> bool {
+        self.carved[i] >= 1.0
+    }
+
+    /// Separation, alignment and cohesion, kept inside the block by a soft wall.
+    fn boids_step(&mut self) {
+        let now = self.flock.clone();
+        for (i, b) in self.flock.iter_mut().enumerate() {
+            let (mut sep, mut ali, mut coh, mut near) = ([0.0f32; 2], [0.0f32; 2], [0.0f32; 2], 0.0f32);
+            for (j, o) in now.iter().enumerate() {
+                let (dx, dy) = (o[0] - b[0], o[1] - b[1]);
+                let d2 = dx * dx + dy * dy;
+                if i == j || d2 > 20.0 {
+                    continue;
+                }
+                near += 1.0;
+                ali[0] += o[2];
+                ali[1] += o[3];
+                coh[0] += dx;
+                coh[1] += dy;
+                if d2 < 2.5 {
+                    sep[0] -= dx / (d2 + 0.1);
+                    sep[1] -= dy / (d2 + 0.1);
+                }
+            }
+            if near > 0.0 {
+                b[2] += 0.05 * ali[0] / near + 0.012 * coh[0] / near + 0.05 * sep[0];
+                b[3] += 0.05 * ali[1] / near + 0.012 * coh[1] / near + 0.05 * sep[1];
+            }
+            let wall = |p: f32, max: f32| {
+                if p < 1.5 {
+                    0.07
+                } else if p > max - 1.5 {
+                    -0.07
+                } else {
+                    0.0
+                }
+            };
+            b[2] += wall(b[0], COLS as f32);
+            b[3] += wall(b[1], ROWS as f32);
+            let speed = (b[2] * b[2] + b[3] * b[3]).sqrt().max(0.001);
+            let want = speed.clamp(0.18, 0.42);
+            b[2] *= want / speed;
+            b[3] *= want / speed;
+            // bounce off the edge rather than stall against it
+            for (pos, vel, max) in [(0, 2, COLS as f32), (1, 3, ROWS as f32)] {
+                if b[pos] + b[vel] < 0.0 || b[pos] + b[vel] >= max {
+                    b[vel] = -b[vel];
+                }
+                b[pos] = (b[pos] + b[vel]).clamp(0.0, max - 0.01);
+            }
+        }
+        for g in &mut self.goal {
+            *g *= 0.86;
+            if *g < 0.05 {
+                *g = 0.0;
+            }
+        }
+        for b in &self.flock {
+            self.goal[b[1] as usize * COLS + b[0] as usize] = 1.0;
+        }
     }
 
     fn rand(&mut self) -> u32 {
@@ -144,6 +383,13 @@ impl HomeArt {
 
     fn glider(&mut self, x: usize, y: usize) {
         for (dx, dy) in [(1, 0), (2, 1), (0, 2), (1, 2), (2, 2)] {
+            self.cells[((y + dy) % ROWS) * COLS + (x + dx) % COLS] = true;
+        }
+    }
+
+    /// The classic long-lived seed: it boils for a good while from five cells.
+    fn r_pentomino(&mut self, x: usize, y: usize) {
+        for (dx, dy) in [(1, 0), (2, 0), (0, 1), (1, 1), (1, 2)] {
             self.cells[((y + dy) % ROWS) * COLS + (x + dx) % COLS] = true;
         }
     }
@@ -169,14 +415,21 @@ impl HomeArt {
         }
         self.cells = next;
         let h = self.cells.iter().enumerate().fold(0xcbf2_9ce4_8422_2325u64, |h, (i, c)| if *c { (h ^ i as u64).wrapping_mul(0x100_0000_01b3) } else { h });
-        if !self.cells.contains(&true) || self.hist.contains(&h) {
+        let alive = self.cells.iter().filter(|c| **c).count();
+        self.since_glider += 1;
+        if alive < LIFE_THIN || self.hist.contains(&h) {
             let (x, y) = (self.rand() as usize % COLS, self.rand() as usize % ROWS);
-            self.glider(x, y);
+            self.r_pentomino(x, y);
             self.hist.clear();
         } else {
             self.hist.push(h);
             if self.hist.len() > 16 {
                 self.hist.remove(0);
+            }
+            if self.since_glider >= LIFE_GLIDER_EVERY {
+                let (x, y) = (self.rand() as usize % COLS, self.rand() as usize % ROWS);
+                self.glider(x, y);
+                self.since_glider = 0;
             }
         }
     }
@@ -205,6 +458,13 @@ impl HomeArt {
                 self.old = self.cells.clone();
                 self.life_step();
             }
+            Kind::River => {
+                if self.river_age >= RIVER_LIFE {
+                    self.new_ground();
+                }
+                self.river_step();
+            }
+            Kind::Boids => self.boids_step(),
             Kind::Off => self.p = 1.0,
         }
     }
@@ -214,7 +474,22 @@ impl HomeArt {
         if self.p >= 1.0 {
             return;
         }
-        self.p = (self.p + dt / EASE).min(1.0);
+        let ease = match self.kind {
+            Kind::Life => LIFE_EASE,
+            Kind::River => 0.28,
+            Kind::Boids => 0.1,
+            _ => EASE,
+        };
+        self.p = (self.p + dt / ease).min(1.0);
+        if matches!(self.kind, Kind::River | Kind::Boids) {
+            let k = (dt * if self.kind == Kind::River { 7.0 } else { 16.0 }).min(1.0);
+            for (s, g) in self.shown.iter_mut().zip(&self.goal) {
+                *s += (*g - *s) * k;
+            }
+            if self.p >= 1.0 {
+                self.shown.clone_from(&self.goal);
+            }
+        }
         if self.p >= 1.0 {
             if let Some(i) = self.turning.take() {
                 self.rot[i] = (self.rot[i] + 1) % 4;
@@ -247,6 +522,39 @@ impl HomeArt {
                     };
                     if s > 0.0 {
                         let c = if now && self.age[i] <= 1 { t[0] } else { t[1] };
+                        tile(b, (i % COLS) as f32, (i / COLS) as f32, s, c);
+                    }
+                }
+            }
+            Kind::River => {
+                let centre = |i: usize| {
+                    (X0 + (i % COLS) as f32 * GRID + (GRID - GROUT) / 2.0, Y0 + (i / COLS) as f32 * GRID + (GRID - GROUT) / 2.0)
+                };
+                for i in 0..COLS * ROWS {
+                    let water = self.is_water(i);
+                    tile(b, (i % COLS) as f32, (i / COLS) as f32, self.shown[i], if water { pal.lavender } else { t[1] });
+                    // a channel runs on into the next tile, across the grout
+                    let to = self.drain[i];
+                    if water && to != i {
+                        let ((x0, y0), (x1, y1)) = (centre(i), centre(to));
+                        let w = (GRID - GROUT) * self.shown[i].min(self.shown[to]);
+                        let (x, y) = (x0.min(x1) - if y0 == y1 { 0.0 } else { w / 2.0 }, y0.min(y1) - if y0 == y1 { w / 2.0 } else { 0.0 });
+                        let (dw, dh) = if y0 == y1 { ((x1 - x0).abs(), w) } else { (w, (y1 - y0).abs()) };
+                        b.rect(x, y, dw, dh, pal.lavender);
+                    }
+                }
+                // Rain only shows once it is running in a channel.
+                for &d in &self.drops {
+                    if self.is_water(d) {
+                        tile(b, (d % COLS) as f32, (d / COLS) as f32, 0.5, t[0]);
+                    }
+                }
+            }
+            Kind::Boids => {
+                for i in 0..COLS * ROWS {
+                    let s = self.shown[i];
+                    if s > 0.05 {
+                        let c = if s > 0.82 { t[0] } else { t[1] };
                         tile(b, (i % COLS) as f32, (i / COLS) as f32, s, c);
                     }
                 }
@@ -369,8 +677,60 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_river_system_forms_and_starts_over() {
+        let mut a = HomeArt::new(Kind::River);
+        let early = (0..COLS * ROWS).filter(|i| a.is_water(*i)).count();
+        for _ in 0..100 {
+            a.step();
+            a.ease(1.0);
+        }
+        let (n, biggest) = (COLS * ROWS, a.flow.iter().cloned().fold(0.0, f32::max));
+        assert_eq!(biggest, n as f32, "everything drains to the outlet");
+        assert_eq!(a.drain[a.outlet], a.outlet);
+        for i in 0..n {
+            // every cell's water reaches the outlet, without loops
+            let (mut c, mut hops) = (i, 0);
+            while c != a.outlet {
+                c = a.drain[c];
+                hops += 1;
+                assert!(hops <= n, "cell {i} never drains");
+            }
+        }
+        let channels = (0..n).filter(|i| a.is_water(*i)).count();
+        let tributaries = (0..n).filter(|i| a.is_water(*i) && (0..n).filter(|j| a.drain[*j] == *i && *j != *i && a.is_water(*j)).count() >= 2).count();
+        assert!(channels >= 12 && channels > early * 2, "{early} grew to {channels} channel cells");
+        assert!(tributaries >= 1, "the channels branch");
+        let outlet = a.outlet;
+        let mut new_ground = false;
+        for _ in 0..(RIVER_LIFE * 3) {
+            a.step();
+            a.ease(1.0);
+            new_ground |= a.outlet != outlet;
+            assert!(a.ground.iter().all(|h| h.is_finite()));
+        }
+        assert!(new_ground, "it starts over on new ground");
+    }
+
+    #[test]
+    fn the_flock_stays_in_the_block_and_keeps_moving() {
+        let mut a = HomeArt::new(Kind::Boids);
+        let mut lit = 0;
+        for _ in 0..600 {
+            let was = a.flock.clone();
+            a.step();
+            a.ease(1.0);
+            lit += a.goal.iter().filter(|g| **g >= 1.0).count();
+            for (o, b) in was.iter().zip(&a.flock) {
+                assert!(b[0] >= 0.0 && b[0] < COLS as f32 && b[1] >= 0.0 && b[1] < ROWS as f32);
+                assert!((o[0] - b[0]).abs() + (o[1] - b[1]).abs() > 0.01);
+            }
+        }
+        assert!(lit > 600, "{lit}");
+    }
+
+    #[test]
     fn steps_change_a_little_and_settle() {
-        for kind in [Kind::Sun, Kind::Truchet, Kind::Life] {
+        for kind in [Kind::Sun, Kind::Truchet, Kind::Life, Kind::River, Kind::Boids] {
             let mut a = HomeArt::new(kind);
             assert!(!a.moving());
             a.step();
@@ -387,6 +747,16 @@ mod tests {
             a.ease(1.0);
             assert!(a.cells.contains(&true));
         }
+        // and stays lively: most generations change plenty of cells
+        let mut a = HomeArt::new(Kind::Life);
+        let (mut changed, n) = (0usize, 400);
+        for _ in 0..n {
+            let was = a.cells.clone();
+            a.step();
+            a.ease(1.0);
+            changed += was.iter().zip(&a.cells).filter(|(x, y)| x != y).count();
+        }
+        assert!(changed / n >= 8, "{} cells change per generation", changed / n);
         assert_eq!(hour_of("08:42"), 8.7);
         assert_eq!(hour_of("23:30"), 23.5);
         // the sun rises in the morning, is highest at midday
