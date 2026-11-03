@@ -38,7 +38,7 @@ bootloader boots NixOS generations through extlinux.
 | `extract-scp.py` | Extractor that `scp.nix` uses (IMAGEWTY → boot_package → items, every step hash-checked) |
 | `u-boot.nix` | SPL + U-Boot + FIT (BL31, SCP) → `u-boot-sunxi-with-spl.bin`, with patches in `patches/u-boot/` |
 | `reserved-memory.dtso` | DT overlay: `/reserved-memory` no-map for BL31 at 0x40000000 (size 0x40000) |
-| `../../image/build-image-mainline.nix` | NixOS module that builds the SD image (wraps nixpkgs `sd-image.nix`) |
+| `../../devices/brick/image.nix` | NixOS module that builds the SD image (wraps nixpkgs `sd-image.nix`) |
 
 ## Pinned revisions
 
@@ -148,7 +148,7 @@ initrd above 0x49000000 and boots it in place.
   `systemd.settings.Manager.RuntimeWatchdogSec = "15s"` (the hardware maximum
   is 16 s). Add either `watchdog.open_timeout=0` (wait forever for userspace)
   or a generous value, so that a slow initrd or first-boot root resize cannot
-  trip it. `modules/trimui-brick.nix` (mainline variant) already sets both.
+  trip it. `modules/trimui-brick.nix` already sets both.
 - jkingston's own userspace stops petting after 60 s if boot has not finished,
   so that the reset triggers his rollback. Mortar has no rollback, so
   deliberately starving the watchdog would only cause a reboot loop.
@@ -182,7 +182,7 @@ selection without UART would need a `gpio input` key check in bootcmd.
 
 ## Using it
 
-The integration lives in `flake.nix` and `modules/`.
+The integration lives in `devices/brick/`.
 
 - Packages are `pkgs.callPackage ./firmware/mainline/u-boot.nix { }` and the
   matching `tf-a.nix` and `scp.nix`. Build them natively for aarch64-linux.

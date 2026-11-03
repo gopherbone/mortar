@@ -1,20 +1,17 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
-# Mortar base system for the TrimUI Brick (replaces configuration.nix,
-# which stays as-is for the original Liontron-based config).
+# Mortar base system.
 #
 # Access model:
 #   - No account has a password. Nothing to leak, nothing to guess.
 #   - SSH is key-only; root's keys come from <card>/ssh-keys/root
-#     (see mortar-usb.nix), the session user's from ssh-keys/<user>.
+#     (see usb.nix), the session user's from ssh-keys/<user>.
 #   - Sessions on the panel (the greeter, the shell, apps) run as the
-#     session user (mortar-user.nix), not root.
+#     session user (user.nix), not root.
 #   - Consoles that need physical access (the USB-C serial port, the
 #     internal UART pads, text VTs) log in as root automatically.
 { config, lib, pkgs, ... }:
 
 {
-  hardware.trimui-brick.enable = true;
-
   # The first Mortar card was installed with 25.05; keep it.
   system.stateVersion = "25.05";
 
@@ -37,7 +34,7 @@
   # `gamer` account) is removed on the next switch.
   users.mutableUsers = false;
   users.users.root = {
-    initialPassword = lib.mkForce null; # trimui-brick.nix sets "trimui"
+    initialPassword = lib.mkForce null; # devices/brick/hardware.nix sets "trimui"
     hashedPassword = "!"; # locked
   };
   # NixOS can't see the keys on the card (<card>/ssh-keys/root) and would
@@ -54,7 +51,7 @@
     strace dtc i2c-tools
     usbutils pciutils
     ghostty.terminfo # `ssh` from Ghostty without TERM overrides
-    (pkgs.callPackage ../pkgs/mortar-rumble { }) # `mortar attention` buzzes it
+    (pkgs.callPackage ../../pkgs/mortar-rumble { }) # `mortar attention` buzzes it
     fastfetch
     (pkgs.writeShellScriptBin "screenfetch" ''exec ${pkgs.fastfetch}/bin/fastfetch "$@"'')
   ];
@@ -122,7 +119,7 @@
   # and nothing on the Brick speaks.
   services.speechd.enable = false;
   # linux-firmware (865 MB) has nothing the Brick loads: XR829 and GPU
-  # firmware come from brick-firmware.nix. The Wi-Fi regulatory database
+  # firmware come from devices/brick/firmware.nix. The Wi-Fi regulatory database
   # stays. For a USB Wi-Fi or Bluetooth dongle that needs firmware:
   # hardware.enableRedistributableFirmware = lib.mkForce true.
   hardware.enableRedistributableFirmware = lib.mkOverride 90 false;

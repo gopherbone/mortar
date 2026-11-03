@@ -1,16 +1,11 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 # TrimUI Brick (TG3040) - Allwinner A133 (sun50iw10) handheld
 #
-# Boot chain:
-#   BROM → vendor boot0 (DRAM init) → vendor ATF (patched) →
-#   AArch32 shim → RMR → AArch64 trampoline → mainline U-Boot 2026.01 →
-#   extlinux.conf → Linux kernel
+# Boot chain (firmware/mainline/README.md, image.nix):
+#   BROM -> mainline U-Boot SPL -> TF-A BL31 + vendor SCP -> U-Boot ->
+#   extlinux.conf -> Linux (jkingston's trimui-brick-kernel, Linux 7.3)
 #
-# SD card layout:
-#   Sector 16 (8KB):      vendor boot0.bin
-#   Sector 32800 (16MB):  modified boot_package (mainline U-Boot + patched ATF)
-#   Partition 1 (~128MB): FAT32 /boot (extlinux.conf, kernel, initrd, DTB)
-#   Partition 2 (rest):   ext4 NixOS rootfs
+# SD card layout: see image.nix.
 #
 { config, lib, pkgs, ... }:
 
@@ -18,42 +13,26 @@ with lib;
 
 let
   cfg = config.hardware.trimui-brick;
-  isLiontron = cfg.variant == "liontron";
-  isMainline = cfg.variant == "mainline";
 in {
   options.hardware.trimui-brick = {
     enable = mkEnableOption "TrimUI Brick (Allwinner A133) hardware support";
 
-    variant = mkOption {
-      type = types.enum [ "liontron" "mainline" ];
-      default = "liontron";
-      description = ''
-        Which kernel + device tree to use.
-
-        - `liontron`: nixpkgs linuxPackages_6_18 with the Liontron H-A133L
-          DTB and the trimui-brick.dtso overlay (brittonr's original setup).
-        - `mainline`: jkingston's trimui-brick-kernel (Linux 7.3) with its
-          native sun50i-a133-trimui-brick.dtb.
-      '';
-    };
-
-    mainlineKernelPackages = mkOption {
+    kernelPackages = mkOption {
       type = types.raw;
       # GCC 15: the vendor GPU driver (img-rogue) builds with -Werror and
       # trips a new GCC 16 warning; jkingston tests with GCC 14.
-      default = pkgs.linuxPackagesFor (pkgs.callPackage ../pkgs/linux-trimui-brick.nix { stdenv = pkgs.gcc15Stdenv; });
+      default = pkgs.linuxPackagesFor (pkgs.callPackage ../../pkgs/linux-trimui-brick.nix { stdenv = pkgs.gcc15Stdenv; });
       defaultText = literalExpression
-        "pkgs.linuxPackagesFor (pkgs.callPackage ../pkgs/linux-trimui-brick.nix { stdenv = pkgs.gcc15Stdenv; })";
-      description = "Kernel package set used when variant = \"mainline\".";
+        "pkgs.linuxPackagesFor (pkgs.callPackage ../../pkgs/linux-trimui-brick.nix { stdenv = pkgs.gcc15Stdenv; })";
+      description = "Kernel package set.";
     };
 
     suspend = {
       enable = mkOption {
         type = types.bool;
-        default = isMainline;
-        defaultText = literalExpression ''config.hardware.trimui-brick.variant == "mainline"'';
+        default = true;
         description = ''
-          (mainline only) `systemctl suspend` works: sleep.conf, the
+          `systemctl suspend` works: sleep.conf, the
           brick-sleep.service hooks and the wake sources for `mode`.
         '';
       };
@@ -72,7 +51,7 @@ in {
           lines) until reboot. The only register difference found was
           PLL_DDR0 bit 24 (sigma-delta enable: set at boot, clear after the
           SCP's DRAM resume); writing it back on the live system hung the
-          Brick. See notes in modules/trimui-brick.nix.
+          Brick. See the notes in the suspend section of this file.
         '';
       };
       cpuIdle = mkOption {
@@ -108,7 +87,7 @@ in {
         [ { name = "tfa-reserved-memory"; dtsFile = ./tfa-reserved-memory.dtso; } ]
       '';
       description = ''
-        (mainline only) Extra hardware.deviceTree.overlays entries for
+        Extra hardware.deviceTree.overlays entries for
         sun50i-a133-trimui-brick.dtb, e.g. the bootloader's /reserved-memory
         node for TF-A. Overlays need a root `compatible = "trimui,brick";`
         to be applied. (Appending to hardware.deviceTree.overlays directly
@@ -172,7 +151,7 @@ in {
     hardware = {
       enableRedistributableFirmware = true;
       # PowerVR GE8300: no Mesa driver. Mortar turns Mesa on anyway for its
-      # software GL (llvmpipe), see mortar-apps.nix.
+      # software GL (llvmpipe), see modules/core/audio.nix.
       graphics.enable = mkDefault false;
     };
 
@@ -252,53 +231,10 @@ in {
   }
 
   # ===================================================================
-  # Liontron variant: nixpkgs 6.18 + Liontron H-A133L DTB + overlay.
-  # Everything here is unchanged from brittonr's original module.
-  # ===================================================================
-  (mkIf isLiontron {
-    # Kernel 6.18+ required — has sun50i-a133-liontron-h-a133l.dtb
-    boot.kernelPackages = pkgs.linuxPackages_6_18;
-
-    # --- Device Tree ---
-    # Apply TrimUI Brick overlay to the Liontron H-A133L DTB:
-    #   - Disable PSCI (vendor ATF can't handle AArch64 SMC)
-    #   - Disable AXP803 PMIC (TrimUI has AXP2202)
-    #   - Add fixed 3.3V regulator for SD card
-    #   - Limit SD card speed to 25MHz
-    #   - Disable eMMC (needs AXP2202 for voltage)
-    #   - Remove pinctrl supply references
-
-    hardware.deviceTree = {
-      enable = true;
-      filter = "sun50i-a133-liontron-h-a133l.dtb";
-      overlays = [
-        {
-          name = "trimui-brick";
-          dtsFile = ../dtb/trimui-brick.dtso;
-        }
-      ];
-    };
-
-    # No framebuffer/display driver yet — disable ALL VT gettys.
-    # Without a working console, getty@tty1 autologin crash-loops,
-    # generating sustained journal writes that overwhelm the SD card
-    # (~90s: "Card stuck being busy" → I/O errors → read-only remount).
-    services.logind.settings.Login = {
-      NAutoVTs = 0;
-      ReserveVT = 0;
-    };
-    # Mask getty on all VTs — wantedBy override alone is insufficient
-    systemd.services."getty@tty1".wantedBy = lib.mkForce [];
-    # Also mask the entire getty template to prevent logind from spawning VT gettys
-    systemd.targets."getty".wantedBy = lib.mkForce [];
-    systemd.services."autovt@".unitConfig.ConditionPathExists = "/dev/null-nonexistent";
-
-  })
-
-  # ===================================================================
-  # Mainline variant: jkingston/trimui-brick-kernel + native Brick DTB.
+  # jkingston/trimui-brick-kernel + native Brick DTB.
   #
-  # Review of the Liontron workarounds against the new kernel/DTS:
+  # Review of the workarounds of the earlier Liontron-DTB setup (still in the
+  # git history) against this kernel/DTS:
   #   - AXP803 PMIC disable, fixed 3.3V vmmc, pinctrl supply redirects,
   #     eMMC disable, EMAC disable: Liontron-DTB-specific. The Brick DTS
   #     describes the real AXP2202 (MFD_TRIMUI_BRICK + regulators) and has
@@ -306,7 +242,7 @@ in {
   #   - PSCI disable: dropped. The mainline variant targets jkingston's
   #     mainline SPL + TF-A + U-Boot chain, where PSCI/SMP work.
   #     (Booting it through brittonr's vendor-ATF chain would need PSCI
-  #     disabled again, as in trimui-brick.dtso.)
+  #     disabled again.)
   #   - Watchdog disable: dropped. U-Boot arms the hardware watchdog and the
   #     defconfig has WATCHDOG_HANDLE_BOOT_ENABLED + WATCHDOG_OPEN_TIMEOUT=30,
   #     so systemd must take it over (RuntimeWatchdogSec below), or the board
@@ -327,8 +263,8 @@ in {
   #     tty1 is a real console now. Journal is in RAM, so a crash-looping
   #     getty would no longer hammer the SD card anyway.
   # ===================================================================
-  (mkIf isMainline {
-    boot.kernelPackages = cfg.mainlineKernelPackages;
+  {
+    boot.kernelPackages = cfg.kernelPackages;
 
     systemd.settings.Manager.RuntimeWatchdogSec = mkDefault "15s";
 
@@ -379,15 +315,15 @@ in {
     hardware.deviceTree = {
       enable = true;
       filter = "sun50i-a133-trimui-brick.dtb";
-      # Also used by image/build-image.nix for the extlinux FDT line, and by
+      # Also used by image.nix for the extlinux FDT line, and by
       # generic-extlinux-compatible for on-device rebuilds. Keep this name:
       # generic-extlinux writes it into every boot-menu entry (older
       # generations only have this file), so deep suspend comes as overlays
       # rather than as the kernel tree's -native-deep DTB.
       name = "allwinner/sun50i-a133-trimui-brick.dtb";
       overlays = cfg.extraDtOverlays
-        ++ optional (cfg.suspend.enable && cfg.suspend.mode == "deep") { name = "brick-deep-suspend"; dtsFile = ../dtb/brick-deep-suspend.dtso; }
-        ++ optional (cfg.suspend.enable && cfg.suspend.cpuIdle) { name = "brick-cpu-idle"; dtsFile = ../dtb/brick-cpu-idle.dtso; }
+        ++ optional (cfg.suspend.enable && cfg.suspend.mode == "deep") { name = "brick-deep-suspend"; dtsFile = ../../dtb/brick-deep-suspend.dtso; }
+        ++ optional (cfg.suspend.enable && cfg.suspend.cpuIdle) { name = "brick-cpu-idle"; dtsFile = ../../dtb/brick-cpu-idle.dtso; }
         ++ optional (cfg.suspend.enable && cfg.suspend.padWake) {
           name = "brick-pad-wake";
           dtsText = ''
@@ -406,17 +342,16 @@ in {
     # connections" rule fails to load and takes the whole ruleset with it.
     networking.firewall.logRefusedConnections = false;
 
-    # Don't rely on getty.target (the Liontron variant forces its wantedBy
-    # to []); pull the consoles in from multi-user.target directly.
+    # Pull the consoles in from multi-user.target directly.
     systemd.services."serial-getty@ttyS0".wantedBy = [ "multi-user.target" ];
     systemd.services."getty@tty1" = {
       enable = true;
       wantedBy = [ "multi-user.target" ];
     };
-  })
+  }
 
   # ===================================================================
-  # Suspend (mainline). jkingston's brick-suspend (trimui-brick-firmware
+  # Suspend. jkingston's brick-suspend (trimui-brick-firmware
   # package/brick-power) is the reference sequence: mute the codec, power
   # Bluetooth off (hci_xradio refuses to suspend an open HCI), then
   # mem/deep. Wi-Fi (xradio) drops its link and comes back on resume; iwd
@@ -437,7 +372,7 @@ in {
   #  - Sometimes sun6i-dma refuses suspend_noirq with -EBUSY (a DMA client
   #    other than the paused codec still active); the attempt just fails.
   # ===================================================================
-  (mkIf (isMainline && cfg.suspend.enable) {
+  (mkIf cfg.suspend.enable {
     boot.kernelParams = [ "mem_sleep_default=${cfg.suspend.mode}" ];
 
     systemd.sleep.settings.Sleep = {

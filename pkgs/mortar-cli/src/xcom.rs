@@ -8,8 +8,6 @@ use crate::{die, say, ssh_cmd, Opts};
 use std::path::Path;
 use std::process::{Command, Stdio};
 
-const USER: &str = "brick";
-const DIR: &str = "/home/brick/.local/share/openxcom/UFO";
 const FOLDERS: [&str; 9] = ["GEODATA", "GEOGRAPH", "MAPS", "ROUTES", "SOUND", "TERRAIN", "UFOGRAPH", "UFOINTRO", "UNITS"];
 /// One file per folder that OpenXcom can't start without.
 const NEEDED: [&str; 8] = [
@@ -41,7 +39,8 @@ pub fn xcom(o: &Opts, data: Option<&str>) {
     if let Err(e) = check_data(data) {
         die(&format!("{data}: {e}"));
     }
-    say(&format!("Copying your game files to {}:{DIR}", o.host));
+    let (user, dir) = (&o.user, format!("{}/openxcom/UFO", o.data_home()));
+    say(&format!("Copying your game files to {}:{dir}", o.host));
     let mut tar = Command::new("tar")
         .env("COPYFILE_DISABLE", "1")
         .arg("cf")
@@ -53,9 +52,9 @@ pub fn xcom(o: &Opts, data: Option<&str>) {
         .spawn()
         .unwrap_or_else(|e| die(&format!("tar: {e}")));
     let script = format!(
-        "set -e; runuser -u {USER} -- mkdir -p {DIR}; \
-         tar xf - -C {DIR} --no-same-owner --warning=no-unknown-keyword; \
-         chown -R {USER}:users {DIR}; du -sh {DIR}"
+        "set -e; runuser -u {user} -- mkdir -p {dir}; \
+         tar xf - -C {dir} --no-same-owner --warning=no-unknown-keyword; \
+         chown -R {user}:users {dir}; du -sh {dir}"
     );
     let ok = ssh_cmd(&o.host)
         .arg(script)

@@ -1,37 +1,11 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
-# Built-in apps (greeter sessions in flake.nix) and what they need at
-# runtime.
+# What apps need at runtime: software GL and audio.
 #
-#   puzzlescript  PuzzleScript engine (C core + Rust/SDL3 shell). No games ship
-#                 with it: it lists ~/.local/share/puzzlescript/games.
-#   m8c           Dirtywave M8 / M8 Headless client. Plug the M8 into the
-#                 Brick's TOP USB-C port (USB host).
-#   choochootracker  multi-engine tracker / groovebox ("ChooChoo"); see
-#                 pkgs/choochootracker for controls, data dir and MIDI.
-#   littlexm      Little XM Tracker, an XM tracker for gamepads ("Little
-#                 XM"); see pkgs/little-xm-tracker for controls and data.
-#   pico8         PICO-8 is commercial, so it is never part of the system
-#                 closure (which CI builds and the update cache holds). It
-#                 lives in its own Nix profile on the Brick,
-#                 /nix/var/nix/profiles/pico8, put there from a computer
-#                 with `mortar pico8` (built from your own zip, see
-#                 pkgs/pico8). Over-the-air updates leave that profile
-#                 alone; the PICO-8 entries hide while it is missing.
-#   acgc          Animal Crossing (GameCube decomp port, pkgs/acgc). Same
-#                 arrangement as PICO-8: its own profile,
-#                 /nix/var/nix/profiles/acgc, and the user's own disc image
-#                 in ~/.local/share/acgc/rom/GAFE01.iso, both put there by
-#                 `mortar acgc --iso PATH`. The entry hides until both exist.
-#   liar          Redemption: Liar (retail GP2X Wiz RPG, pkgs/liar). Same
-#                 arrangement: its own profile, /nix/var/nix/profiles/liar,
-#                 and the user's own files from their card in
-#                 ~/.local/share/liar, put there by `mortar liar --data PATH`.
-#
-# Display: the sessions start both through `mortar-sdl-run` (brick-gpu.nix),
+# Display: app sessions start through `mortar-sdl-run` (devices/brick/gpu.nix),
 # which puts them on the PowerVR GPU (pkgs/sdl3-pvr). If that fails they
 # run on SDL's KMSDRM backend with Mesa's software GL, described here.
 # KMSDRM needs GBM and EGL. The PowerVR userspace has neither (NULL WSEGL only, see
-# brick-gpu.nix), so Mesa provides them in software: GBM's kms_swrast on
+# devices/brick/gpu.nix), so Mesa provides them in software: GBM's kms_swrast on
 # the sun4i display, llvmpipe for GL/GLES on the 4 A53 cores. SDL picks
 # card0 (the only card with a connector) on its own; no env is needed.
 # The PowerVR libs stay off the default library paths (only the GPU tests
@@ -43,7 +17,7 @@
 #   scanout buffer back (see pkgs/m8c and pkgs/puzzlescript).
 #
 # Audio (`mortar.apps.audio.pipewire`, on by default): PipeWire with
-# WirePlumber in the session user's systemd manager (mortar-user.nix), with
+# WirePlumber in the session user's systemd manager (user.nix), with
 # its ALSA plugin (ALSA `default`) and PulseAudio server, so SDL, ALSA and
 # Pulse apps share the codec, USB audio (the M8) and Bluetooth headphones
 # (A2DP through BlueZ). Low latency for the trackers: 256-frame quantum
@@ -64,97 +38,6 @@ let
 in
 {
   options.mortar.apps = {
-    puzzlescript = {
-      enable = lib.mkEnableOption "PuzzleScript" // { default = true; };
-      package = lib.mkOption {
-        type = lib.types.package;
-        default = pkgs.callPackage ../pkgs/puzzlescript { };
-        defaultText = lib.literalExpression "pkgs.callPackage ../pkgs/puzzlescript { }";
-        description = "The PuzzleScript engine. Games are the user's own, in ~/.local/share/puzzlescript/games.";
-      };
-    };
-    pico8 = {
-      enable = lib.mkEnableOption "PICO-8 entries, shown once `mortar pico8` has installed it (see pkgs/pico8)";
-      package = lib.mkOption {
-        type = lib.types.package;
-        default = pkgs.callPackage ../pkgs/pico8 { };
-        defaultText = lib.literalExpression "pkgs.callPackage ../pkgs/pico8 { }";
-        description = ''
-          PICO-8 built from the user-supplied Raspberry Pi zip. Not part of
-          the system: `mortar pico8` builds this (flake output
-          `packages.aarch64-linux.pico8`) and installs it into `profile`.
-        '';
-      };
-      profile = lib.mkOption {
-        type = lib.types.str;
-        default = "/nix/var/nix/profiles/pico8";
-        description = "The Nix profile PICO-8 is installed into (a GC root of its own, untouched by system updates).";
-      };
-      bin = lib.mkOption {
-        type = lib.types.str;
-        readOnly = true;
-        default = "${cfg.pico8.profile}/bin/pico8";
-        description = "PICO-8 inside the profile (for launcher entries; use it with `requires`).";
-      };
-    };
-    acgc = {
-      enable = lib.mkEnableOption "the Animal Crossing entry, shown once `mortar acgc` has installed the port and your disc image (see pkgs/acgc)";
-      package = lib.mkOption {
-        type = lib.types.package;
-        default = pkgs.callPackage ../pkgs/acgc { };
-        defaultText = lib.literalExpression "pkgs.callPackage ../pkgs/acgc { }";
-        description = ''
-          The Animal Crossing port (no game data). Not part of the system:
-          `mortar acgc` builds this (flake output
-          `packages.aarch64-linux.acgc`) and installs it into `profile`.
-        '';
-      };
-      profile = lib.mkOption {
-        type = lib.types.str;
-        default = "/nix/var/nix/profiles/acgc";
-        description = "The Nix profile the port is installed into (a GC root of its own, untouched by system updates).";
-      };
-      bin = lib.mkOption {
-        type = lib.types.str;
-        readOnly = true;
-        default = "${cfg.acgc.profile}/bin/acgc";
-        description = "The launcher inside the profile.";
-      };
-      rom = lib.mkOption {
-        type = lib.types.str;
-        default = "/home/brick/.local/share/acgc/rom/GAFE01.iso";
-        description = "The disc image the entry waits for (`requires`); `mortar acgc --iso` puts it here.";
-      };
-    };
-    liar = {
-      enable = lib.mkEnableOption "the Redemption: Liar entry, shown once `mortar liar` has installed the loader and your files from the card (see pkgs/liar)";
-      package = lib.mkOption {
-        type = lib.types.package;
-        default = pkgs.callPackage ../pkgs/liar { };
-        defaultText = lib.literalExpression "pkgs.callPackage ../pkgs/liar { }";
-        description = ''
-          The loader (no game data, no Wiz firmware). Not part of the system:
-          `mortar liar` builds this (flake output
-          `packages.aarch64-linux.liar`) and installs it into `profile`.
-        '';
-      };
-      profile = lib.mkOption {
-        type = lib.types.str;
-        default = "/nix/var/nix/profiles/liar";
-        description = "The Nix profile the loader is installed into (a GC root of its own, untouched by system updates).";
-      };
-      bin = lib.mkOption {
-        type = lib.types.str;
-        readOnly = true;
-        default = "${cfg.liar.profile}/bin/liar";
-        description = "The launcher inside the profile.";
-      };
-      data = lib.mkOption {
-        type = lib.types.str;
-        default = "/home/brick/.local/share/liar/liar_e.gpe";
-        description = "The file the entry waits for (`requires`); `mortar liar --data` puts it here.";
-      };
-    };
     audio.pipewire = lib.mkOption {
       type = lib.types.bool;
       default = true;
@@ -165,67 +48,10 @@ in
       default = 256;
       description = "PipeWire's default quantum (frames per cycle) at 44.1 kHz.";
     };
-    choochootracker = {
-      enable = lib.mkEnableOption "ChooChooTracker, a multi-engine music tracker" // { default = true; };
-      package = lib.mkOption {
-        type = lib.types.package;
-        default = pkgs.callPackage ../pkgs/choochootracker { };
-        defaultText = lib.literalExpression "pkgs.callPackage ../pkgs/choochootracker { }";
-        description = "ChooChooTracker (Mortar build) with its launcher.";
-      };
-    };
-    littlexm = {
-      enable = lib.mkEnableOption "Little XM Tracker, an XM tracker for gamepads" // { default = true; };
-      package = lib.mkOption {
-        type = lib.types.package;
-        default = pkgs.callPackage ../pkgs/little-xm-tracker { };
-        defaultText = lib.literalExpression "pkgs.callPackage ../pkgs/little-xm-tracker { }";
-        description = "Little XM Tracker (Mortar build) with its launcher.";
-      };
-    };
-    openxcom = {
-      enable = lib.mkEnableOption "OpenXcom, shown once `mortar xcom --data PATH` has installed your copy of the game" // { default = true; };
-      package = lib.mkOption {
-        type = lib.types.package;
-        default = pkgs.callPackage ../pkgs/openxcom { };
-        defaultText = lib.literalExpression "pkgs.callPackage ../pkgs/openxcom { }";
-        description = "OpenXcom (Mortar build) with its launcher; no game data.";
-      };
-      data = lib.mkOption {
-        type = lib.types.str;
-        default = "/home/brick/.local/share/openxcom/UFO/GEODATA/WORLD.DAT";
-        description = "A file from the user's copy of the game: the entry waits for it (`requires`).";
-      };
-    };
-    m8c = {
-      enable = lib.mkEnableOption "m8c, the M8 tracker client" // { default = true; };
-      package = lib.mkOption {
-        type = lib.types.package;
-        default = pkgs.callPackage ../pkgs/m8c { };
-        defaultText = lib.literalExpression "pkgs.callPackage ../pkgs/m8c { }";
-        description = "m8c with the Brick button config (m8c-brick).";
-      };
-    };
   };
 
   config = {
-    environment.systemPackages =
-      lib.optional cfg.puzzlescript.enable cfg.puzzlescript.package
-      ++ lib.optional cfg.m8c.enable cfg.m8c.package
-      ++ lib.optional cfg.choochootracker.enable cfg.choochootracker.package
-      ++ lib.optional cfg.littlexm.enable cfg.littlexm.package
-      ++ lib.optional cfg.openxcom.enable cfg.openxcom.package
-      ++ [ pkgs.alsa-utils ];
-
-    # `pico8` on PATH once installed (the profile is not in the closure)
-    environment.profiles = lib.mkMerge [
-      (lib.mkIf cfg.pico8.enable (lib.mkAfter [ cfg.pico8.profile ]))
-      (lib.mkIf cfg.acgc.enable (lib.mkAfter [ cfg.acgc.profile ]))
-    ];
-
-    # ALSA sequencer: /dev/snd/seq exists only once snd-seq is loaded; MIDI
-    # apps (ChooChooTracker) list USB MIDI ports through it.
-    boot.kernelModules = [ "snd-seq" "snd-seq-midi" ];
+    environment.systemPackages = [ pkgs.alsa-utils ];
 
     # Mesa: GBM + EGL + llvmpipe for SDL's KMSDRM backend (see above).
     hardware.graphics.enable = true;

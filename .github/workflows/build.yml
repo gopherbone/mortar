@@ -13,7 +13,7 @@
 # Secrets (Settings > Secrets and variables > Actions):
 #   R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY  R2 token with write access to the bucket
 #   NIX_SIGNING_KEY                         `nix key generate-secret` output
-# Bucket, endpoint and public key come from mortar.update in flake.nix.
+# Bucket, endpoint and public key come from mortar.update in the configuration.
 #
 # Runners: GitHub's arm64 Linux runners (ubuntu-24.04-arm); on a private
 # repository they bill per minute against the plan's included usage.
@@ -55,7 +55,7 @@ jobs:
     runs-on: ${{ fromJSON(inputs.runner == 'x86-qemu' && '"ubuntu-24.04"' || inputs.runner == 'self-hosted' && '["self-hosted","mortar"]' || '"ubuntu-24.04-arm"') }}
     timeout-minutes: 360
     env:
-      CONFIG: brick-mainline
+      CONFIG: brick-full
     steps:
       - name: Free disk space
         if: runner.environment == 'github-hosted'

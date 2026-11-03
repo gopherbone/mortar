@@ -1116,7 +1116,7 @@ shell through it; over SSH it gives remote screenshots and app control
   `mortar-shell-session`: `mortar-shell run` under `systemd-cat -t
   mortar-shell`. greetd + pam_systemd give it a logind session on seat0,
   which libseat uses (no seatd needed).
-- `autologin.user` (the Brick: `brick`, in flake.nix): greetd's
+- `autologin.user` (default: `mortar.user.name`): greetd's
   `initial_session` starts the same session for that user at boot, once
   (greetd's runfile), so the Brick boots straight into the shell; the
   greeter (`default_session`) appears only when the session ends. The

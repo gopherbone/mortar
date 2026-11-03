@@ -18,7 +18,7 @@ use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 const USAGE: &str = "\
-mortar deploy [--boot] [--reboot] [--host HOST] [--config NAME]
+mortar deploy [--boot] [--reboot] [--host HOST] [--config NAME] [--flake FLAKE]
     Build the system, copy it to the Brick, make it the default boot entry
     and switch to it now (--boot: only on next boot; --reboot: reboot into it
     and wait until it is back).
@@ -35,12 +35,12 @@ mortar acgc [--host HOST] [--iso PATH] [--remove]
     Animal Crossing (GameCube decomp port, pkgs/acgc): check your own disc
     image (USA, GAFE01 rev 0), build the port and install it into its own
     profile (/nix/var/nix/profiles/acgc), and copy the image to the Brick
-    (~brick/.local/share/acgc/rom/GAFE01.iso). Neither is ever part of the
+    (~/.local/share/acgc/rom/GAFE01.iso). Neither is ever part of the
     system. --remove takes the port away and leaves the image and saves.
 mortar xcom --data PATH [--host HOST]
     OpenXcom (pkgs/openxcom): check your own copy of UFO: Enemy Unknown and
     copy the folders the game reads to the Brick
-    (~brick/.local/share/openxcom/UFO). It is never part of the system.
+    (~/.local/share/openxcom/UFO). It is never part of the system.
 mortar liar [--data PATH] [--host HOST] [--remove]
     Redemption: Liar (GP2X Wiz, pkgs/liar): check your own files from the card
     (PATH: the card or its Liar_e folder), build the loader and install it into
@@ -64,8 +64,9 @@ mortar pair [--host HOST] [--key FILE.pub] [--name ALIAS] [--code CODE] [--no-ss
     (over the USB cable), check its host key, and add `Host ALIAS`
     (default: brick) to ~/.ssh/config so `ssh brick` works.
 
-Defaults: HOST=$MORTAR_HOST or mortar.local, CONFIG=brick-mainline,
-flake=$MORTAR_FLAKE or the current directory.";
+Defaults: HOST=$MORTAR_HOST or mortar.local, CONFIG=brick-full,
+FLAKE=$MORTAR_FLAKE or the current directory, session user (--user NAME, for
+pico8, acgc, xcom)=$MORTAR_USER or brick.";
 
 const PROFILE: &str = "/nix/var/nix/profiles/system";
 
@@ -73,6 +74,7 @@ struct Opts {
     host: String,
     config: String,
     flake: String,
+    user: String,
     boot_only: bool,
     reboot: bool,
     remove: bool,
@@ -80,6 +82,13 @@ struct Opts {
     iso: Option<String>,
     data: Option<String>,
     rest: Vec<String>,
+}
+
+impl Opts {
+    /// The session user's data directory on the device.
+    fn data_home(&self) -> String {
+        format!("/home/{}/.local/share", self.user)
+    }
 }
 
 fn die(msg: &str) -> ! {
@@ -94,8 +103,9 @@ fn say(msg: &str) {
 fn parse(args: &[String]) -> Opts {
     let mut o = Opts {
         host: env::var("MORTAR_HOST").unwrap_or_else(|_| "mortar.local".into()),
-        config: "brick-mainline".into(),
+        config: "brick-full".into(),
         flake: env::var("MORTAR_FLAKE").unwrap_or_else(|_| ".".into()),
+        user: env::var("MORTAR_USER").unwrap_or_else(|_| "brick".into()),
         boot_only: false,
         reboot: false,
         remove: false,
@@ -109,6 +119,8 @@ fn parse(args: &[String]) -> Opts {
         match a.as_str() {
             "--host" => o.host = it.next().cloned().unwrap_or_else(|| die("--host needs a value")),
             "--config" => o.config = it.next().cloned().unwrap_or_else(|| die("--config needs a value")),
+            "--flake" => o.flake = it.next().cloned().unwrap_or_else(|| die("--flake needs a value")),
+            "--user" => o.user = it.next().cloned().unwrap_or_else(|| die("--user needs a value")),
             "--boot" => o.boot_only = true,
             "--remove" => o.remove = true,
             "--iso" => o.iso = Some(it.next().cloned().unwrap_or_else(|| die("--iso needs a value"))),
@@ -217,7 +229,7 @@ fn reboot(host: &str) {
 fn parse_publish(args: &[String]) -> publish::Opts {
     let mut o = publish::Opts {
         flake: env::var("MORTAR_FLAKE").unwrap_or_else(|_| ".".into()),
-        config: "brick-mainline".into(),
+        config: "brick-full".into(),
         path: None,
         channel: None,
         endpoint: None,

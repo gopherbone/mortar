@@ -9,11 +9,7 @@
 # first-boot root resize, nix-store --load-db registration) and only adds
 # the Brick specifics. Usage:
 #
-#   modules = [
-#     ./modules/trimui-brick.nix
-#     (import ./image/build-image-mainline.nix { })        # default U-Boot
-#     # or (import ./image/build-image-mainline.nix { ubootImage = pkg; })
-#   ];
+#   modules = [ ./devices/brick ];                     # imports this, default U-Boot
 #   => config.system.build.sdImage  (sd-image/<name>.img.zst)
 #
 # Layout (MBR, 512-byte sectors):
@@ -34,15 +30,10 @@
 # The SPL/FIT embeds the non-redistributable SCP blob, so the image is too:
 # do not publish it. The configuration must allow the unfree SCP derivation
 # (see firmware/mainline/scp.nix).
-{ ubootImage ? null }:
-
 { config, lib, pkgs, modulesPath, ... }:
 
 let
-  uboot =
-    if ubootImage != null
-    then ubootImage
-    else pkgs.callPackage ../firmware/mainline/u-boot.nix { };
+  uboot = pkgs.callPackage ../../firmware/mainline/u-boot.nix { };
 
   bootloader = "${uboot}/u-boot-sunxi-with-spl.bin";
 

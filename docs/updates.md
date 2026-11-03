@@ -5,7 +5,7 @@ The Brick updates itself over Wi-Fi, without your computer:
 ```
 git push (branch mortar)
   └─ GitHub Actions (.github/workflows/build.yml, arm64 runner)
-       ├─ nix build …brick-mainline…toplevel
+       ├─ nix build …brick-full…toplevel
        ├─ nix copy --to s3://BUCKET (Cloudflare R2, private)   closure, signed with your Nix key
        └─ channels/mortar.json                                 manifest, written last
 Brick (mortar-update, daily or Settings > Updates > Check now)
@@ -27,7 +27,7 @@ your Mac with `mortar pico8`, and updates leave it alone.
 
 | Thing | Where | Secret? |
 |---|---|---|
-| Bucket name, endpoint, public signing key | `mortar.update` in `flake.nix` | no |
+| Bucket name, endpoint, public signing key | `mortar.update` in your configuration | no |
 | Signing key (secret half) | `~/.config/mortar/signing-key` on the Mac; GitHub secret `NIX_SIGNING_KEY` | yes |
 | R2 write token | GitHub secrets `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`; `~/.config/mortar/r2-write` on the Mac | yes |
 | R2 read-only token | the Brick: `/var/lib/mortar-update/credentials` (root, 0600, ext4 root fs) | yes |
@@ -222,7 +222,7 @@ have the paths they run.
 - Write token: create a new one, update the two GitHub secrets (and
   `~/.config/mortar/r2-write`), delete the old one.
 - Signing key: generate a new one (step 2), put the new public key in
-  `flake.nix`, update `NIX_SIGNING_KEY`, then `mortar deploy` once (a Brick
+  your configuration, update `NIX_SIGNING_KEY`, then `mortar deploy` once (a Brick
   only trusts the key of the system it runs), and empty the bucket so
   everything is re-signed.
 
@@ -235,7 +235,7 @@ have the paths they run.
   "schema": 1,
   "channel": "mortar",
   "system": "aarch64-linux",
-  "config": "brick-mainline",
+  "config": "brick-full",
   "toplevel": "/nix/store/…-nixos-system-mortar-26.05…",
   "published": 1793525400,
   "date": "2026-11-01T09:30:00Z",

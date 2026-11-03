@@ -1,13 +1,12 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 #
 # Mortar: watchdog for a wedged USB gadget link (see README.md).
-# Import next to modules/mortar-usb.nix (or merge into it).
 { config, lib, pkgs, ... }:
 
 let
   cfg = config.mortar.usb.watchdog;
   watchdog = pkgs.writeShellScript "mortar-usb-watchdog"
-    (builtins.readFile ./mortar-usb-watchdog.sh);
+    (builtins.readFile ./usb-watchdog.sh);
 in
 {
   options.mortar.usb.watchdog = {

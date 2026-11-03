@@ -13,8 +13,6 @@ use std::io::{Read, Seek, SeekFrom};
 use std::process::{Command, Stdio};
 
 pub const PROFILE: &str = "/nix/var/nix/profiles/acgc";
-const USER: &str = "brick";
-const ROM_DIR: &str = "/home/brick/.local/share/acgc/rom";
 
 fn be32(b: &[u8], off: usize) -> u32 {
     u32::from_be_bytes([b[off], b[off + 1], b[off + 2], b[off + 3]])
@@ -105,10 +103,11 @@ pub fn acgc(o: &Opts, iso: Option<&str>) {
         die("could not set the acgc profile");
     }
 
+    let rom_dir = format!("{}/acgc/rom", o.data_home());
     match iso {
-        Some(iso) => copy_iso(&o.host, iso),
+        Some(iso) => copy_iso(&o.host, iso, &o.user, &rom_dir),
         None => {
-            if !remote(&o.host, &format!("test -s {ROM_DIR}/GAFE01.iso")) {
+            if !remote(&o.host, &format!("test -s {rom_dir}/GAFE01.iso")) {
                 say("No disc image on the Brick yet: run `mortar acgc --iso PATH` with your Animal Crossing (USA) ISO");
                 return;
             }
@@ -117,11 +116,11 @@ pub fn acgc(o: &Opts, iso: Option<&str>) {
     say("Animal Crossing installed; it shows under Games in the shell");
 }
 
-/// Stream the image into ~brick/.local/share/acgc/rom/GAFE01.iso, owned by
-/// the session user (skipped when an image of the same size is there).
-fn copy_iso(host: &str, iso: &str) {
+/// Stream the image into ~/.local/share/acgc/rom/GAFE01.iso of the session
+/// user, owned by them (skipped when an image of the same size is there).
+fn copy_iso(host: &str, iso: &str, user: &str, rom_dir: &str) {
     let len = std::fs::metadata(iso).map(|m| m.len()).unwrap_or_else(|e| die(&format!("{iso}: {e}")));
-    let dst = format!("{ROM_DIR}/GAFE01.iso");
+    let dst = format!("{rom_dir}/GAFE01.iso");
     if crate::remote_output(host, &format!("stat -c %s {dst}")).is_some_and(|s| s == len.to_string()) {
         say("The Brick already has this disc image");
         return;
@@ -129,8 +128,8 @@ fn copy_iso(host: &str, iso: &str) {
     say(&format!("Copying your disc image ({} MB) to {host}:{dst}", len / 1_000_000));
     let script = format!(
         "set -e; umask 022; \
-         runuser -u {USER} -- mkdir -p {ROM_DIR}; \
-         cat > {dst}.part; chown {USER}:users {dst}.part; chmod 0644 {dst}.part; mv -f {dst}.part {dst}; \
+         runuser -u {user} -- mkdir -p {rom_dir}; \
+         cat > {dst}.part; chown {user}:users {dst}.part; chmod 0644 {dst}.part; mv -f {dst}.part {dst}; \
          ls -l {dst}"
     );
     let file = File::open(iso).unwrap_or_else(|e| die(&format!("{iso}: {e}")));

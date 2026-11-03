@@ -41,22 +41,22 @@ in
     };
     package = lib.mkOption {
       type = lib.types.package;
-      default = pkgs.callPackage ../pkgs/pvr-ddk-userspace.nix {
-        trimui-brick-firmware = pkgs.callPackage ../pkgs/trimui-brick-firmware.nix { };
+      default = pkgs.callPackage ../../pkgs/pvr-ddk-userspace.nix {
+        trimui-brick-firmware = pkgs.callPackage ../../pkgs/trimui-brick-firmware.nix { };
       };
-      defaultText = lib.literalExpression "pkgs.callPackage ../pkgs/pvr-ddk-userspace.nix { ... }";
+      defaultText = lib.literalExpression "pkgs.callPackage ../../pkgs/pvr-ddk-userspace.nix { ... }";
       description = "Stock PowerVR userspace libraries.";
     };
     wlegl = lib.mkOption {
       type = lib.types.package;
-      default = pkgs.callPackage ../pkgs/mortar-wlegl { pvr-ddk = cfg.package; };
-      defaultText = lib.literalExpression "pkgs.callPackage ../pkgs/mortar-wlegl { pvr-ddk = config.mortar.gpu.package; }";
+      default = pkgs.callPackage ../../pkgs/mortar-wlegl { pvr-ddk = cfg.package; };
+      defaultText = lib.literalExpression "pkgs.callPackage ../../pkgs/mortar-wlegl { pvr-ddk = config.mortar.gpu.package; }";
       description = "Wayland EGL platform for the stock EGL (GPU apps inside mortar-shell).";
     };
     sdl3 = lib.mkOption {
       type = lib.types.package;
-      default = pkgs.callPackage ../pkgs/sdl3-pvr { pvr-ddk = cfg.package; mortar-wlegl = cfg.wlegl; };
-      defaultText = lib.literalExpression "pkgs.callPackage ../pkgs/sdl3-pvr { pvr-ddk = config.mortar.gpu.package; mortar-wlegl = config.mortar.gpu.wlegl; }";
+      default = pkgs.callPackage ../../pkgs/sdl3-pvr { pvr-ddk = cfg.package; mortar-wlegl = cfg.wlegl; };
+      defaultText = lib.literalExpression "pkgs.callPackage ../../pkgs/sdl3-pvr { pvr-ddk = config.mortar.gpu.package; mortar-wlegl = config.mortar.gpu.wlegl; }";
       description = "SDL3 with the PowerVR (vivante-style) video backend.";
     };
     cmaMegabytes = lib.mkOption {
@@ -109,8 +109,8 @@ in
     };
   } (lib.mkIf cfg.enable {
     boot.extraModulePackages = [
-      # must match the kernel's compiler (GCC 15, see trimui-brick.nix)
-      (kp.callPackage ../pkgs/brick-dc-drm { stdenv = pkgs.gcc15Stdenv; })
+      # must match the kernel's compiler (GCC 15, see hardware.nix)
+      (kp.callPackage ../../pkgs/brick-dc-drm { stdenv = pkgs.gcc15Stdenv; })
     ];
     boot.kernelModules = [ "pvrsrvkm" "brick_dc_drm" ];
     boot.kernelParams = [ "cma=${toString cfg.cmaMegabytes}M" ];
@@ -120,7 +120,7 @@ in
 
     environment.systemPackages = [
       cfg.package
-      (pkgs.callPackage ../pkgs/mortar-gpu-tests { pvr-ddk = cfg.package; })
+      (pkgs.callPackage ../../pkgs/mortar-gpu-tests { pvr-ddk = cfg.package; })
       cfg.wlegl # mortar-wlegl-demo
       cfg.sdlRun
     ];

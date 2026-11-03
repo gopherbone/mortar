@@ -27,8 +27,8 @@
 let
   inherit (lib) mkOption mkEnableOption mkIf types;
   cfg = config.mortar.power;
-  pkg = pkgs.callPackage ../pkgs/mortar-power { };
-  rumble = pkgs.callPackage ../pkgs/mortar-rumble { };
+  pkg = pkgs.callPackage ../../pkgs/mortar-power { };
+  rumble = pkgs.callPackage ../../pkgs/mortar-rumble { };
   pct = types.ints.between 0 100;
 in
 {

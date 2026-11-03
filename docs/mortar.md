@@ -10,10 +10,9 @@ evaluates to exactly the same system derivation as before.
 | Path | What |
 |---|---|
 | `pkgs/linux-trimui-brick.nix` | Kernel. `buildLinux` from `trimui_brick_defconfig` at jkingston `91f15effb15f3752f50d46ac70c8d296c8a9c179` (the rev the Brick firmware qualifies). `enableCommonConfig = false`, `autoModules = false`, `ignoreConfigErrors = false`. Adds the NixOS/systemd options (AUTOFS, BPF/CGROUP_BPF, AUDIT, KEYS, CRYPTO_USER_API_HASH, TMPFS_XATTR, ...), nftables, zstd firmware loading, VT/fbcon, and the USB configfs functions ACM/ECM/NCM/RNDIS plus `U_SERIAL_CONSOLE`. The source hash is `lib.fakeHash` until the first build. |
-| `modules/trimui-brick.nix` | Hardware module. New option `hardware.trimui-brick.variant`: `"liontron"` (default, brittonr's setup, unchanged) or `"mainline"`. Also adds `mainlineKernelPackages` and `extraDtOverlays`. |
+| `devices/brick/hardware.nix` | Hardware module: jkingston's kernel and native Brick DTB, consoles, journald on RAM, suspend. |
 | `modules/mortar-usb.nix` | `mortar.usb.*`: configfs gadget, getty on `ttyGS0`, networkd + DHCP server on `usb0`, Avahi `mortar.local`, black-box logs on `/boot`, root SSH key. |
-| `image/build-image.nix` | The FDT path now comes from `hardware.deviceTree.name`, falling back to the Liontron DTB. The image script is byte-identical for `trimui-brick`. |
-| `flake.nix` | `nixosConfigurations.brick-mainline` (hostname `mortar`), `packages.<sys>.linux-trimui-brick` and `mortar-toplevel`. `sd-image-mainline` is a marked TODO: the mainline SPL + TF-A + U-Boot image (`image/build-image-mainline.nix`, `firmware/mainline/`) is being built separately. |
+| `flake.nix` | `nixosConfigurations.brick-full` (hostname `mortar`; old name `brick-mainline`) and `brick-bare`, `packages.<sys>.linux-trimui-brick`, `mortar-toplevel`, `sd-image` (bare) and `sd-image-full`. |
 
 ### Mainline variant vs. the Liontron workarounds
 
@@ -60,7 +59,7 @@ Each file is tail-capped at 256 KiB and followed by `sync -f`. Only the last 5 b
 Already checked here by evaluation only (no builds):
 
 - `nix flake check --no-build --all-systems` passes.
-- `brick-mainline` evaluates with no warnings.
+- `brick-full` evaluates with no warnings.
 - `trimui-brick`'s toplevel `.drv` is unchanged from before these commits.
 - The pinned nixpkgs `generic.nix` accepts every argument used.
 - NixOS skips `requiredKernelConfig` assertions for `buildLinux` kernels.

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
-# zsh for the session user (modules/mortar-user.nix) in the shell's
+# zsh for the session user (modules/core/user.nix) in the shell's
 # Terminal. Root keeps bash (consoles, SSH deploys), and scripts are not
 # touched. Everything is system-wide (/etc/zshrc); the user's home is
 # migrated data, so nothing is written there except zsh's own history and

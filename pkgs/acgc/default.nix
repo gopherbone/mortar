@@ -18,7 +18,7 @@
 # Nintendo game, so Mortar treats it like PICO-8: it is not part of the
 # system closure (CI never builds it, the update cache never holds it);
 # `mortar acgc` builds it and installs it into its own profile on the Brick,
-# /nix/var/nix/profiles/acgc (modules/mortar-apps.nix).
+# /nix/var/nix/profiles/acgc (modules/ports/acgc.nix).
 #
 #   bin/acgc                 launcher: data dir, shaders link, ROM check
 #   libexec/acgc/AnimalCrossing

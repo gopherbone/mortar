@@ -1,9 +1,8 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 # Mortar AI: Claude Code on the Brick, inside the Mortar shell.
 #
-# Off by default: importing this module changes nothing until
-# `mortar.ai.enable = true`. Claude Code is unfree; the flake's
-# allowUnfreePredicate must allow "claude-code".
+# Opt-in: importing this module turns it on. Claude Code is unfree, so this
+# adds it to `mortar.unfree`; it is never put in a cache of its own accord.
 #
 # Launcher entries (mortar.shell.apps):
 #   Claude Code     foot running claude in a persistent tmux session
@@ -36,14 +35,14 @@ let
   cfg = config.mortar.ai;
   home = config.users.users.${cfg.user}.home;
 
-  mortar-ai = pkgs.callPackage ../pkgs/mortar-ai { mortar-shell = config.mortar.shell.package; };
+  mortar-ai = pkgs.callPackage ../../pkgs/mortar-ai { mortar-shell = config.mortar.shell.package; };
 
   remoteArgs = lib.concatStringsSep " " (
     [ "--spawn" cfg.remoteControl.spawn ]
     ++ lib.optionals (cfg.remoteControl.permissionMode != null) [ "--permission-mode" cfg.remoteControl.permissionMode ]
   );
 
-  scripts = pkgs.callPackage ../pkgs/mortar-ai/scripts.nix {
+  scripts = pkgs.callPackage ../../pkgs/mortar-ai/scripts.nix {
     claude = cfg.package;
     inherit mortar-ai remoteArgs;
     inherit (cfg) workDir;
@@ -77,7 +76,7 @@ let
 in
 {
   options.mortar.ai = {
-    enable = mkEnableOption "Claude Code on the Brick (launcher entries, tmux sessions, Remote Control)";
+    enable = mkEnableOption "Claude Code on the Brick (launcher entries, tmux sessions, Remote Control)" // { default = true; };
 
     pairPort = mkOption {
       type = types.port;
@@ -103,7 +102,7 @@ in
       defaultText = lib.literalExpression "config.mortar.user.name";
       description = ''
         Who runs Claude Code and owns its sign-in (~/.claude): the session
-        user (modules/mortar-user.nix), whose apps the shell starts.
+        user (modules/core/user.nix), whose apps the shell starts.
       '';
     };
 
@@ -172,6 +171,7 @@ in
   config = lib.mkIf cfg.enable (
     lib.mkMerge [
       {
+        mortar.unfree = [ "claude-code" ];
         environment.variables.MORTAR_AI_PAIR_PORT = toString cfg.pairPort;
         networking.firewall.interfaces.wlan0.allowedTCPPorts = [ cfg.pairPort ];
       }

@@ -10,16 +10,16 @@
 #          missing, e.g. scph5501.bin for the PlayStation)
 #   Saves  /var/lib/mortar-play/saves/<system>/, states in .../states/
 #
-# Off by default. When enabled every game runs as its own mortar-shell app
+# Opt-in: importing this module turns it on. Every game runs as its own mortar-shell app
 # (MENU > Games lists the library; `mortar.shell.games`), it adds a "Games"
 # launcher entry (mortar-play's own library, "All systems") to
 # mortar-shell (and a greeter session when the greeter is on; it then runs
 # on the PowerVR GPU through mortar-sdl-run).
 #
 # Several of the best cores for a 2 GHz A53 are "unfree redistributable"
-# (non-commercial licences): snes9x2005-plus, genesis-plus-gx, fbneo. The
-# flake's allowUnfreePredicate must name them (`mortar.play.unfreeCores`
-# lists the package names), or swap the system's core.
+# (non-commercial licences): snes9x2005-plus, genesis-plus-gx, fbneo. They are
+# in `mortar.unfree` below (`mortar.play.unfreeCores` lists what is enabled);
+# changing a system's core may need another entry there.
 {
   config,
   lib,
@@ -336,12 +336,12 @@ let
 in
 {
   options.mortar.play = {
-    enable = mkEnableOption "mortar-play, emulators through libretro with a preconfigured minimal frontend";
+    enable = mkEnableOption "mortar-play, emulators through libretro with a preconfigured minimal frontend" // { default = true; };
 
     package = mkOption {
       type = types.package;
-      default = pkgs.callPackage ../pkgs/mortar-play { };
-      defaultText = lib.literalExpression "pkgs.callPackage ../pkgs/mortar-play { }";
+      default = pkgs.callPackage ../../pkgs/mortar-play { };
+      defaultText = lib.literalExpression "pkgs.callPackage ../../pkgs/mortar-play { }";
     };
 
     dataDir = mkOption {
@@ -426,6 +426,7 @@ in
   };
 
   config = lib.mkMerge [
+    { mortar.unfree = [ "libretro-snes9x2005-plus" "libretro-genesis-plus-gx" "libretro-fbneo" ]; }
     { mortar.play.systems = lib.mapAttrs (_: s: lib.mapAttrs (_: lib.mkDefault) s) curated; }
     (lib.mkIf cfg.enable (
       lib.mkMerge [

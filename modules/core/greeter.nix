@@ -158,8 +158,8 @@ in
 
     package = mkOption {
       type = types.package;
-      default = pkgs.callPackage ../pkgs/mortar-ui { };
-      defaultText = lib.literalExpression "pkgs.callPackage ../pkgs/mortar-ui { }";
+      default = pkgs.callPackage ../../pkgs/mortar-ui { };
+      defaultText = lib.literalExpression "pkgs.callPackage ../../pkgs/mortar-ui { }";
       description = "The mortar-ui package.";
     };
 

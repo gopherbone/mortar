@@ -59,7 +59,7 @@ fn settings(o: &Opts) -> Settings {
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap_or_else(|e| die(&format!("mortar.update: {e}")));
     let s = |k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
     if v.get("enable").and_then(|e| e.as_bool()) != Some(true) {
-        die("mortar.update.enable is false: fill in mortar.update in flake.nix first (docs/updates.md)");
+        die("mortar.update.enable is false: fill in mortar.update in your configuration first (docs/updates.md)");
     }
     if s("endpoint").contains("ACCOUNT_ID") {
         die("mortar.update.endpoint is still the placeholder (docs/updates.md)");

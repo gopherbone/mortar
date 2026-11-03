@@ -8,7 +8,7 @@
 # Off by default: importing this module changes nothing until
 # `mortar.shell.enable = true`.
 #
-# With the greeter (modules/mortar-greeter.nix) the shell is one more greeter
+# With the greeter (greeter.nix) the shell is one more greeter
 # session, "Mortar", sorted first. By default every other greeter session
 # also becomes a launcher entry inside the shell (except console-only ones,
 # see `excludeGreeterSessions`), so the app list is defined once. With
@@ -311,11 +311,11 @@ let
         inherit (cfg.ui) renderer motion reduceMotion sounds soundVolume haptics bootAnimation screenshotDir cardFps msaa audioDevice suspend suspendGraceMs idleMinutes;
         hapticMs = cfg.ui.hapticMs;
         palette = if cfg.ui.palette != null then cfg.ui.palette else (if cfg.theme == "dark" then "night" else "day");
-        # the stock PowerVR libs for the GPU UI renderer (modules/brick-gpu.nix)
+        # the stock PowerVR libs for the GPU UI renderer (devices/brick/gpu.nix)
         glLibDir = if (config.mortar.gpu.enable or false) then "${config.mortar.gpu.package}/lib" else null;
       };
       inherit (cfg) autostart backgroundFps theme keyboardLayout;
-      # SDL apps started through mortar-sdl-run (modules/brick-gpu.nix)
+      # SDL apps started through mortar-sdl-run (devices/brick/gpu.nix)
       # must not take the GPU's display path (brick_dc_drm drives the CRTC,
       # and the shell owns it). With gpuApps they render on the GPU as
       # Wayland clients (mortar-wlegl dma-bufs, scanned out directly),
@@ -333,11 +333,11 @@ let
         streamMute = [ "${pkgs.wireplumber}/bin/wpctl" "set-mute" "{id}" "{mute}" ];
       };
       # MENU > Settings > Wi-Fi / Bluetooth / Remote access
-      # Bluetooth devices (modules/mortar-setup.nix)
+      # Bluetooth devices (setup.nix)
       setupSocket = if config.mortar ? setup && config.mortar.setup.enable then "/run/mortar-setup/control.sock" else null;
-      # Settings > Updates (modules/mortar-update.nix)
+      # Settings > Updates (update.nix)
       update = if config.mortar ? update && config.mortar.update.enable then config.mortar.update.shell else null;
-      # MENU > Games: mortar-play's library, one app per game (modules/mortar-play.nix)
+      # MENU > Games: mortar-play's library, one app per game (modules/packs/emulation.nix)
       games =
         if cfg.games != null then
           {
@@ -418,8 +418,8 @@ in
 
     package = mkOption {
       type = types.package;
-      default = pkgs.callPackage ../pkgs/mortar-shell { };
-      defaultText = lib.literalExpression "pkgs.callPackage ../pkgs/mortar-shell { }";
+      default = pkgs.callPackage ../../pkgs/mortar-shell { };
+      defaultText = lib.literalExpression "pkgs.callPackage ../../pkgs/mortar-shell { }";
       description = "The mortar-shell package.";
     };
 
@@ -509,7 +509,7 @@ in
       );
       default = null;
       description = ''
-        Games as apps (set by modules/mortar-play.nix): MENU > Games lists
+        Games as apps (set by modules/packs/emulation.nix): MENU > Games lists
         the library, each game runs as its own app, Y on one in Running
         opens its game panel.
       '';
@@ -568,7 +568,7 @@ in
       audioDevice = mkOption {
         type = types.str;
         default = "default";
-        description = "ALSA PCM for UI sounds (the codec's dmix by default, see mortar-apps.nix).";
+        description = "ALSA PCM for UI sounds (the codec's dmix by default, see audio.nix).";
       };
       haptics = mkOption {
         type = types.bool;
@@ -685,7 +685,8 @@ in
 
     autologin.user = mkOption {
       type = types.nullOr types.str;
-      default = null;
+      default = config.mortar.user.name or null;
+      defaultText = lib.literalExpression "config.mortar.user.name";
       example = "brick";
       description = ''
         Boot straight into the shell as this user (greetd's

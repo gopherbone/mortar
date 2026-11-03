@@ -68,7 +68,7 @@
 # m8c also creates its window with SDL_WINDOW_OPENGL, so it needs a working
 # GL/GLES path (EGL on KMSDRM or a compositor); with no GL it exits "Failed
 # to initialize renderer" (SDL_RENDER_DRIVER=software does not avoid that
-# flag). On Mortar that is Mesa's llvmpipe (modules/mortar-apps.nix).
+# flag). On Mortar that is Mesa's llvmpipe (modules/modules/core/audio.nix).
 {
   lib,
   m8c,

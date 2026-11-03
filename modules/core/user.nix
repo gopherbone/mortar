@@ -3,8 +3,8 @@
 # sessions (the shell, its apps, Claude Code, PipeWire). Root stays for the
 # consoles that need physical access and for SSH administration (deploys).
 #
-#   - No password, like root (mortar-base.nix). The greeter logs in without
-#     a prompt (pam_succeed_if, mortar-greeter.nix); SSH is key-only, from
+#   - No password, like root (base.nix). The greeter logs in without
+#     a prompt (pam_succeed_if, greeter.nix); SSH is key-only, from
 #     <card>/ssh-keys/<name> (optional; root's keys stay in ssh-keys/root).
 #   - Groups for the hardware it drives directly: video (backlight, fbdev,
 #     DRM), render, input (rumble, pads), uinput (per-app virtual pads),
@@ -13,9 +13,9 @@
 #   - What used to need root goes through polkit (below): time zone
 #     (timedated), restart/power off/sleep (logind, also while root has
 #     SSH sessions open). Wi-Fi and remote access go through mortar-setupd's
-#     control socket (group mortar-setup, mortar-setup.nix), Bluetooth
+#     control socket (group mortar-setup, setup.nix), Bluetooth
 #     through mortar-setupd too, the backlight through a udev rule
-#     (mortar-shell.nix).
+#     (shell.nix).
 #
 # Moving from the root-session Brick: the first boot with this module copies
 # the session data root collected (`migrateFromRoot`: Claude Code's sign-in
@@ -28,7 +28,7 @@
 let
   inherit (lib) mkOption types;
   cfg = config.mortar.user;
-  home = config.users.users.${cfg.name}.home;
+  home = cfg.home;
   group = config.users.users.${cfg.name}.group;
   stamp = "/var/lib/mortar-user/migrated-from-root";
 
@@ -132,6 +132,12 @@ in
       default = "brick";
       description = "The session user: greeter profile, shell, apps, Claude Code.";
     };
+    home = mkOption {
+      type = types.str;
+      default = "/home/${cfg.name}";
+      defaultText = lib.literalExpression ''"/home/''${config.mortar.user.name}"'';
+      description = "Its home directory; app data lives under it.";
+    };
     uid = mkOption {
       type = types.int;
       default = 1000;
@@ -176,13 +182,13 @@ in
   config = {
     users.users.${cfg.name} = {
       isNormalUser = true;
-      inherit (cfg) uid;
+      inherit (cfg) uid home;
       description = "Mortar";
       hashedPassword = "!"; # no password, like root
       extraGroups = [ "video" "render" "input" "uinput" "audio" "dialout" "systemd-journal" ]
         # real-time limits for PipeWire (pam_limits, set by the pipewire module)
         ++ lib.optional config.services.pipewire.enable "pipewire"
-        # Settings > Updates: check now, auto-check (polkit rule in mortar-update.nix)
+        # Settings > Updates: check now, auto-check (polkit rule in update.nix)
         ++ lib.optional (config.mortar.update.enable or false) "mortar-update"
         ++ cfg.extraGroups;
     };

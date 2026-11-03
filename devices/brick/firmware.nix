@@ -157,8 +157,8 @@ in
 
     package = lib.mkOption {
       type = lib.types.package;
-      default = pkgs.callPackage ../pkgs/trimui-brick-firmware.nix { };
-      defaultText = lib.literalExpression "pkgs.callPackage ../pkgs/trimui-brick-firmware.nix { }";
+      default = pkgs.callPackage ../../pkgs/trimui-brick-firmware.nix { };
+      defaultText = lib.literalExpression "pkgs.callPackage ../../pkgs/trimui-brick-firmware.nix { }";
       description = ''
         Firmware package. Its main output goes into hardware.firmware; its
         `gpu` output (PowerVR DDK userspace) is not installed.
@@ -198,7 +198,7 @@ in
     {
       hardware.firmware = [ cfg.package ];
 
-      # iwd replaces wpa_supplicant (modules/trimui-brick.nix still enables
+      # iwd replaces wpa_supplicant (hardware.nix still enables
       # the latter from the RTL8189FTV days; NixOS refuses both at once).
       networking.wireless.enable = lib.mkForce false;
       networking.wireless.iwd = {

@@ -8,8 +8,7 @@
 #   - "black box" boot logs copied to the FAT /boot partition
 #   - root SSH key
 #
-# Needs a kernel with USB_CONFIGFS{,_ACM,_ECM,_NCM} and a UDC (MUSB on the Brick),
-# i.e. hardware.trimui-brick.variant = "mainline".
+# Needs a kernel with USB_CONFIGFS{,_ACM,_ECM,_NCM} and a UDC (MUSB on the Brick).
 { config, lib, pkgs, ... }:
 
 let
@@ -258,8 +257,7 @@ in
       };
 
       # Login on the ACM port: shows up on the Mac as /dev/cu.usbmodem*.
-      # Wanted from multi-user.target directly (the Liontron config forces
-      # getty.target's wantedBy to []), and pulled in by the gadget.
+      # Wanted from multi-user.target directly, and pulled in by the gadget.
       systemd.services."serial-getty@ttyGS0" = {
         wantedBy = [ "multi-user.target" ];
         after = [ "mortar-usb-gadget.service" ];

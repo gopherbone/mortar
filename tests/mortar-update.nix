@@ -77,7 +77,7 @@ pkgs.testers.runNixOSTest {
   nodes.brick =
     { ... }:
     {
-      imports = [ ../modules/mortar-update.nix ];
+      imports = [ ../modules/core/update.nix ];
       mortar.update = {
         enable = true;
         bucket = "cache";

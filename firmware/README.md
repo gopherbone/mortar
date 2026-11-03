@@ -37,6 +37,7 @@ See `re_tools/RE_PLAN.md` for the path to eliminating these dependencies.
 ## Build
 
 ```bash
+# (no longer flake outputs; see the git history)
 nix build .#boot-package   # Assemble boot_package (U-Boot + patched ATF + shim)
 nix build .#u-boot          # Cross-compile mainline U-Boot only
 ```

@@ -17,10 +17,10 @@
 #                        (Match LocalAddress 10.55.0.1 + pam_exec).
 #
 # mortar-shell's Settings > Wi-Fi, Bluetooth and Remote access open the same screens
-# (modules/mortar-shell.nix passes the socket when this is enabled).
+# (shell.nix passes the socket when this is enabled).
 #
 # Off by default: importing this module changes nothing until
-# `mortar.setup.enable = true`. Needs modules/mortar-usb.nix.
+# `mortar.setup.enable = true`. Needs usb.nix.
 {
   config,
   lib,
@@ -68,8 +68,8 @@ in
 
     package = mkOption {
       type = types.package;
-      default = pkgs.callPackage ../pkgs/mortar-setup { };
-      defaultText = lib.literalExpression "pkgs.callPackage ../pkgs/mortar-setup { }";
+      default = pkgs.callPackage ../../pkgs/mortar-setup { };
+      defaultText = lib.literalExpression "pkgs.callPackage ../../pkgs/mortar-setup { }";
       description = "The mortar-setup package.";
     };
 
@@ -140,7 +140,7 @@ in
       assertions = [
         {
           assertion = config.mortar.usb.enable;
-          message = "mortar.setup needs mortar.usb (modules/mortar-usb.nix).";
+          message = "mortar.setup needs mortar.usb (usb.nix).";
         }
       ];
 

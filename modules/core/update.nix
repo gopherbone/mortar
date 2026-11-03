@@ -66,8 +66,8 @@ in
 
     package = mkOption {
       type = types.package;
-      default = pkgs.callPackage ../pkgs/mortar-update { };
-      defaultText = lib.literalExpression "pkgs.callPackage ../pkgs/mortar-update { }";
+      default = pkgs.callPackage ../../pkgs/mortar-update { };
+      defaultText = lib.literalExpression "pkgs.callPackage ../../pkgs/mortar-update { }";
       description = "The mortar-update package.";
     };
 
@@ -209,7 +209,7 @@ in
       };
     };
 
-    # The session user (modules/mortar-user.nix) and other members of the
+    # The session user (user.nix) and other members of the
     # mortar-update group may start these units.
     users.groups.mortar-update = { };
     security.polkit.extraConfig = lib.mkIf config.security.polkit.enable ''
@@ -226,7 +226,7 @@ in
       });
     '';
 
-    # for the shell (modules/mortar-shell.nix)
+    # for the shell (shell.nix)
     mortar.update.shell = {
       status = "/run/mortar-update/status.json";
       check = [ systemctl "start" "--no-block" "mortar-update.service" ];
