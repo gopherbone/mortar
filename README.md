@@ -15,9 +15,9 @@ it's used: [docs/using.md](docs/using.md).
 |---|---|---|---|
 | Hardware | `devices/brick/` (sources: `firmware/mainline`, `dtb`, `patches`, `pkgs/linux-trimui-brick.nix`, ...) | `nixosModules.brick` | Kernel, boot chain, firmware, GPU, PMIC, panel, radios, SD image. Works without the UI. |
 | Core | `modules/core/`, `pkgs/mortar-*` | `nixosModules.core` | Shell, greeter, setup, pairing, power, updates, the session user, the `mortar` command. |
-| Packs | `modules/packs/` | `nixosModules.pack-emulation`, `pack-music`, `pack-ai`, `pack-terminal` | mortar-play; m8c, ChooChoo, Little XM; Claude Code; zsh. Importing one turns it on. |
+| Packs | `modules/packs/` | `nixosModules.pack-emulation`, `pack-music`, `pack-terminal`, `pack-ai` | mortar-play; m8c, ChooChoo, Little XM; zsh; Claude Code (optional, in no configuration here). Importing one turns it on. |
 | Ports | `modules/ports/` | `nixosModules.port-pico8`, `port-acgc`, `port-openxcom`, `port-puzzlescript` | Apps that need your own data. Each entry waits for it, or says where it goes. |
-| Systems | `configurations/` | `nixosConfigurations.brick-bare`, `brick-full` | Device + core only, or everything. |
+| Systems | `configurations/` | `nixosConfigurations.brick-bare`, `brick-full` | Device + core only, or every pack and port that may be published. |
 
 `modules/device.nix` is what the layers above ask of a device (`mortar.device`).
 
@@ -31,7 +31,7 @@ You need [Nix](https://nixos.org/download) with flakes and a way to build
 `aarch64-linux` (a native machine, or on macOS `nixpkgs#darwin.linux-builder`).
 
 ```sh
-nix build .#sd-image                 # bare; .#sd-image-full for everything
+nix build .#sd-image                 # bare; .#sd-image-full for all packs and ports
 zstd -d result/sd-image/*.img.zst -o mortar.img
 # write mortar.img to a microSD card (macOS helper: scripts/flash-mac.sh)
 ```
@@ -62,6 +62,18 @@ nix run .#mortar -- deploy --reboot --config brick-bare # --flake FLAKE for your
     };
   };
 }
+```
+
+Claude Code and the emulator cores with non-commercial licences (SNES, Mega Drive,
+Master System, Game Gear, Arcade) are in no configuration here. To have them on your
+own Brick:
+
+```nix
+modules = [
+  mortar.nixosModules.full
+  mortar.nixosModules.pack-ai
+  { mortar.play.nonCommercialCores = true; }
+];
 ```
 
 ### Add a pack
@@ -110,10 +122,10 @@ Keep it that way in anything you contribute.
 
 ## What has and hasn't been tested
 
-Tested on one Brick, by its owner: the system the full configuration describes,
-with all its apps (details and open items in [docs/using.md](docs/using.md)). Its
-store path has been compared with the one before this layout: it differs only in the
-PuzzleScript engine, and in Redemption: Liar leaving (it lives in its own repository).
+Tested on one Brick, by its owner: the full configuration with Claude Code and the
+non-commercial cores added, with all its apps (details and open items in
+[docs/using.md](docs/using.md)). `brick-full` itself, without those, has not been
+booted as such.
 
 Built and evaluated, **never booted**: the bare system and its SD image. The
 fresh-card path as a whole (write an image, first boot, grow the root partition,

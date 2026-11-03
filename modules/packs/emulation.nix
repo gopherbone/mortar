@@ -16,10 +16,13 @@
 # mortar-shell (and a greeter session when the greeter is on; it then runs
 # on the PowerVR GPU through mortar-sdl-run).
 #
-# Several of the best cores for a 2 GHz A53 are "unfree redistributable"
-# (non-commercial licences): snes9x2005-plus, genesis-plus-gx, fbneo. They are
-# in `mortar.unfree` below (`mortar.play.unfreeCores` lists what is enabled);
-# changing a system's core may need another entry there.
+# Several of the best cores for a 2 GHz A53 have non-commercial licences:
+# snes9x2005-plus, genesis-plus-gx, fbneo. They stay out of anything public, so
+# their systems (SNES, Mega Drive, Master System, Game Gear, Arcade) are off until
+# your own configuration sets `mortar.play.nonCommercialCores = true`, which also
+# adds them to `mortar.unfree` (`mortar.play.unfreeCores` lists what is enabled).
+# A system with them on must not be published (modules/unfree.nix). Changing a
+# system's core may need another entry in `mortar.unfree`.
 {
   config,
   lib,
@@ -299,6 +302,9 @@ let
 
   enabled = lib.filterAttrs (_: s: s.enable) cfg.systems;
 
+  # The curated systems whose core has a non-commercial licence.
+  nonCommercialSystems = [ "snes" "md" "sms" "gg" "arcade" ];
+
   configJson = pkgs.writeText "mortar-play.json" (
     builtins.toJSON {
       romDirs = [ "${cfg.dataDir}/roms" ] ++ cfg.extraRomDirs;
@@ -341,6 +347,17 @@ in
       type = types.package;
       default = pkgs.callPackage ../../pkgs/mortar-play { };
       defaultText = lib.literalExpression "pkgs.callPackage ../../pkgs/mortar-play { }";
+    };
+
+    nonCommercialCores = mkOption {
+      type = types.bool;
+      default = false;
+      description = ''
+        Turn on the curated systems whose cores have non-commercial licences:
+        SNES (snes9x2005-plus), Mega Drive, Master System and Game Gear
+        (genesis-plus-gx), Arcade (fbneo). For a system you build for yourself:
+        one with this on must not go in a public image or cache.
+      '';
     };
 
     dataDir = mkOption {
@@ -425,8 +442,13 @@ in
   };
 
   config = lib.mkMerge [
-    { mortar.unfree = [ "libretro-snes9x2005-plus" "libretro-genesis-plus-gx" "libretro-fbneo" ]; }
-    { mortar.play.systems = lib.mapAttrs (_: s: lib.mapAttrs (_: lib.mkDefault) s) curated; }
+    { mortar.unfree = lib.optionals cfg.nonCommercialCores [ "libretro-snes9x2005-plus" "libretro-genesis-plus-gx" "libretro-fbneo" ]; }
+    {
+      mortar.play.systems = lib.mapAttrs (
+        n: s:
+        lib.mapAttrs (_: lib.mkDefault) (s // lib.optionalAttrs (lib.elem n nonCommercialSystems) { enable = cfg.nonCommercialCores; })
+      ) curated;
+    }
     (lib.mkIf cfg.enable (
       lib.mkMerge [
         {

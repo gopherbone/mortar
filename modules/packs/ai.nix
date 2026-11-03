@@ -1,8 +1,11 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 # Mortar AI: Claude Code on the Brick, inside the Mortar shell.
 #
-# Opt-in: importing this module turns it on. Claude Code is unfree, so this
-# adds it to `mortar.unfree`; it is never put in a cache of its own accord.
+# Opt-in, and not part of any configuration this repository builds or publishes:
+# add `nixosModules.pack-ai` to your own flake. Importing this module turns it
+# on. Claude Code is commercial software, so this adds it to `mortar.unfree`,
+# and a system with this pack must stay out of anything public
+# (modules/unfree.nix).
 #
 # Launcher entries (mortar.shell.apps):
 #   Claude Code     foot running claude in a persistent tmux session
@@ -172,6 +175,48 @@ in
     lib.mkMerge [
       {
         mortar.unfree = [ "claude-code" ];
+
+        # A Brick moved from root's session keeps its sign-in and history
+        # (modules/core/user.nix).
+        mortar.user.migrateFromRoot = [
+          ".claude"
+          ".claude.json"
+          ".claude.json.backup"
+          "ai"
+          ".local/share/mortar-ai"
+          ".local/state/mortar-ai"
+        ];
+        systemd.services.mortar-user-migrate.before = [ "mortar-claude-remote.service" ];
+        mortar.user.migrateHooks = ''
+          # Claude Code keys folder trust and history by absolute path.
+          cj=$home/.claude.json
+          if [ -f "$cj" ]; then
+            tmp=$(mktemp "$cj.XXXXXX")
+            if jq --arg h "$home" '
+              def fix: if . == "/root" then $h elif startswith("/root/") then $h + ltrimstr("/root") else . end;
+              walk(if type == "string" then fix else . end)
+              | if (.projects | type) == "object" then .projects |= with_entries(.key |= fix) else . end
+            ' "$cj" > "$tmp"; then
+              mv "$tmp" "$cj"
+            else
+              echo "could not rewrite paths in $cj"
+              rm -f "$tmp"
+            fi
+            chown "$user:$group" "$cj"
+            chmod 0600 "$cj"
+          fi
+          enc=$(printf %s "$home" | tr / -)
+          if [ -d "$home/.claude/projects" ]; then
+            for d in "$home"/.claude/projects/-root "$home"/.claude/projects/-root-*; do
+              [ -d "$d" ] || continue
+              new=$home/.claude/projects/$enc''${d#"$home"/.claude/projects/-root}
+              [ -e "$new" ] || mv -T "$d" "$new"
+            done
+            find "$home/.claude/projects" -name '*.jsonl' -type f -exec \
+              sed -i -e 's#"cwd":"/root/#"cwd":"'"$home"'/#g' -e 's#"cwd":"/root"#"cwd":"'"$home"'"#g' {} +
+          fi
+        '';
+
         environment.variables.MORTAR_AI_PAIR_PORT = toString cfg.pairPort;
         networking.firewall.interfaces.wlan0.allowedTCPPorts = [ cfg.pairPort ];
       }

@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 # The person holding the Brick: one normal account that runs the greeter
-# sessions (the shell, its apps, Claude Code, PipeWire). Root stays for the
+# sessions (the shell, its apps, PipeWire). Root stays for the
 # consoles that need physical access and for SSH administration (deploys).
 #
 #   - No password, like root (base.nix). The greeter logs in without
@@ -18,9 +18,9 @@
 #     (shell.nix).
 #
 # Moving from the root-session Brick: the first boot with this module copies
-# the session data root collected (`migrateFromRoot`: Claude Code's sign-in
-# and history, app data, PICO-8 carts, screenshots, ...) into the new home,
-# fixes Claude Code's project paths, and parks each original under
+# the session data root collected (`migrateFromRoot`: app data, PICO-8 carts,
+# screenshots, ...; packs add theirs) into the new home, and parks each
+# original under
 # /root/.pre-brick-<date>/ (nothing is deleted; remove that folder once the
 # new home is known good). Everything else stays in /root.
 { config, lib, pkgs, ... }:
@@ -57,7 +57,7 @@ let
       for rel in ${lib.escapeShellArgs cfg.migrateFromRoot}; do
         src=$from/$rel dst=$home/$rel
         [ -e "$src" ] || [ -L "$src" ] || continue
-        # tmpfiles may already have made an empty directory (~/.claude, ~/ai)
+        # tmpfiles may already have made an empty directory
         if [ -d "$dst" ] && [ ! -L "$dst" ] && [ -z "$(ls -A "$dst")" ]; then rmdir "$dst"; fi
         if [ -e "$dst" ] || [ -L "$dst" ]; then
           echo "keeping $src: $dst exists"
@@ -74,33 +74,7 @@ let
         moved=$((moved + 1))
       done
 
-      # Claude Code keys folder trust and history by absolute path.
-      cj=$home/.claude.json
-      if [ -f "$cj" ]; then
-        tmp=$(mktemp "$cj.XXXXXX")
-        if jq --arg h "$home" '
-          def fix: if . == "/root" then $h elif startswith("/root/") then $h + ltrimstr("/root") else . end;
-          walk(if type == "string" then fix else . end)
-          | if (.projects | type) == "object" then .projects |= with_entries(.key |= fix) else . end
-        ' "$cj" > "$tmp"; then
-          mv "$tmp" "$cj"
-        else
-          echo "could not rewrite paths in $cj"
-          rm -f "$tmp"
-        fi
-        chown "$user:$group" "$cj"
-        chmod 0600 "$cj"
-      fi
-      enc=$(printf %s "$home" | tr / -)
-      if [ -d "$home/.claude/projects" ]; then
-        for d in "$home"/.claude/projects/-root "$home"/.claude/projects/-root-*; do
-          [ -d "$d" ] || continue
-          new=$home/.claude/projects/$enc''${d#"$home"/.claude/projects/-root}
-          [ -e "$new" ] || mv -T "$d" "$new"
-        done
-        find "$home/.claude/projects" -name '*.jsonl' -type f -exec \
-          sed -i -e 's#"cwd":"/root/#"cwd":"'"$home"'/#g' -e 's#"cwd":"/root"#"cwd":"'"$home"'"#g' {} +
-      fi
+      ${cfg.migrateHooks}
 
       # emulator saves, states and recents written by the root session
       if [ -n "$play" ]; then
@@ -130,7 +104,7 @@ in
     name = mkOption {
       type = types.str;
       default = "brick";
-      description = "The session user: greeter profile, shell, apps, Claude Code.";
+      description = "The session user: greeter profile, shell, apps.";
     };
     home = mkOption {
       type = types.str;
@@ -150,36 +124,42 @@ in
     };
     migrateFromRoot = mkOption {
       type = types.listOf types.str;
-      default = [
-        ".claude"
-        ".claude.json"
-        ".claude.json.backup"
-        "ai"
-        ".lexaloffle"
-        ".local/share/m8c"
-        ".local/share/ChooChooTracker"
-        ".local/share/puzzlescript"
-        ".local/share/mortar-shell"
-        ".local/share/mortar-play"
-        ".local/share/mortar-ai"
-        ".local/state/mortar-shell"
-        ".local/state/mortar-ai"
-        ".config/foot"
-        "Pictures"
-        "Games"
-        ".bash_history"
-      ];
+      default = [ ];
       description = ''
         Paths under /root (the old session home) copied into the user's home
         on the first boot with this module; the originals are kept in
         /root/.pre-brick-<date>/. A path whose destination already holds
         something stays where it is. Remove
-        /var/lib/mortar-user/migrated-from-root to run it again.
+        /var/lib/mortar-user/migrated-from-root to run it again. Packs add
+        their own paths.
+      '';
+    };
+    migrateHooks = mkOption {
+      type = types.lines;
+      default = "";
+      internal = true;
+      description = ''
+        Shell run by the migration after the copies, with $home, $user and
+        $group set (a pack fixing paths its app stored).
       '';
     };
   };
 
   config = {
+    mortar.user.migrateFromRoot = [
+      ".lexaloffle"
+      ".local/share/m8c"
+      ".local/share/ChooChooTracker"
+      ".local/share/puzzlescript"
+      ".local/share/mortar-shell"
+      ".local/share/mortar-play"
+      ".local/state/mortar-shell"
+      ".config/foot"
+      "Pictures"
+      "Games"
+      ".bash_history"
+    ];
+
     users.users.${cfg.name} = {
       isNormalUser = true;
       inherit (cfg) uid home;
@@ -222,7 +202,7 @@ in
     systemd.services.mortar-user-migrate = {
       description = "Mortar: copy the root session's data to ${cfg.name}";
       wantedBy = [ "multi-user.target" ];
-      before = [ "greetd.service" "display-manager.service" "systemd-user-sessions.service" "mortar-claude-remote.service" ];
+      before = [ "greetd.service" "display-manager.service" "systemd-user-sessions.service" ];
       after = [ "local-fs.target" "systemd-tmpfiles-setup.service" ];
       unitConfig = {
         ConditionPathExists = "!${stamp}";

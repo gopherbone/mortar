@@ -8,7 +8,8 @@ harness, nothing on-device.
 
 ## What there is
 
-`modules/packs/ai.nix` (`mortar.ai.enable`, off by default) adds three
+`modules/packs/ai.nix` (`nixosModules.pack-ai`, in no configuration of this
+repository; importing it turns it on) adds three
 launcher entries to the shell and the plumbing behind them:
 
 | Entry | What it runs | For |

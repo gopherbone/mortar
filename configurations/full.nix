@@ -1,5 +1,8 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
-# The full configuration: every pack and port.
+# The full configuration: every pack and port this repository may publish.
+# Claude Code (`nixosModules.pack-ai`) and the non-commercial emulator cores
+# (`mortar.play.nonCommercialCores`) are not in it: they are opt-in, for your own
+# flake (modules/unfree.nix).
 #
 # The leaf modules are listed one by one, in this order, because module order
 # decides the order of merged lists (system packages, kernel parameters, ...;
@@ -22,7 +25,6 @@
     ../modules/ports/pico8.nix
     ../modules/core/greeter.nix
     ../modules/core/shell.nix
-    ../modules/packs/ai.nix
     ../modules/core/setup.nix
     ../modules/packs/emulation.nix
     ../modules/core/power.nix

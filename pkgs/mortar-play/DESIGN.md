@@ -275,6 +275,9 @@ lime selection, Instrument Serif titles), rendered on the CPU into a
 
 ## Systems (defaults in modules/packs/emulation.nix)
 
+The non-commercial cores' systems below are off unless the system sets
+`mortar.play.nonCommercialCores = true`, and such a system is not published.
+
 | System | Core (nixpkgs `libretro.*`) | Licence | Notes |
 |---|---|---|---|
 | Game Boy / Color | gambatte | GPL-2.0 | GBC palettes for DMG games ("auto") |

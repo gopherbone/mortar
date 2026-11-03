@@ -83,8 +83,7 @@
     ];
   };
 
-  # Compressed swap in RAM: 1 GB is tight for heavier tools (Claude Code
-  # alone uses ~200 MB at startup).
+  # Compressed swap in RAM: 1 GB is tight for heavier tools.
   zramSwap.enable = true;
   # Swap-in from zram is a decompression, not a disk seek: read one page,
   # not eight (the default page-cluster 3 decompresses 7 pages nobody

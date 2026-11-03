@@ -28,7 +28,7 @@
         # Importing a pack or a port turns it on.
         pack-emulation = ./modules/packs/emulation.nix; # mortar-play
         pack-music = ./modules/packs/music; # m8c, ChooChoo, Little XM
-        pack-ai = ./modules/packs/ai.nix; # Claude Code
+        pack-ai = ./modules/packs/ai.nix; # Claude Code; in no configuration here
         pack-terminal = ./modules/packs/terminal.nix; # zsh
 
         # Bring your own data: nothing of the game is ever in this repository.
@@ -41,7 +41,8 @@
       };
 
       nixosConfigurations = {
-        # Everything: what the owner's Brick runs.
+        # Every pack and port that may be published (no Claude Code, no
+        # non-commercial cores).
         brick-full = self.lib.mkSystem { modules = [ ./configurations/full.nix ]; };
         # The old name of brick-full.
         brick-mainline = self.nixosConfigurations.brick-full;
@@ -102,6 +103,14 @@
           # the engine without bundled games (pkgs/puzzlescript)
           puzzlescript = pkgs.callPackage ./pkgs/puzzlescript/check.nix {
             puzzlescript = pkgs.callPackage ./pkgs/puzzlescript { };
+          };
+        } // lib.optionalAttrs (system == "aarch64-linux") {
+          # the move from root's session, with and without the AI pack
+          user-migrate = self.nixosConfigurations.brick-bare.pkgs.callPackage ./tests/user-migrate.nix {
+            coreMigrate = bare.system.build.mortarUserMigrate;
+            aiMigrate = (self.lib.mkSystem {
+              modules = [ ./configurations/bare.nix self.nixosModules.pack-ai ];
+            }).config.system.build.mortarUserMigrate;
           };
         });
 
