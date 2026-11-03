@@ -51,7 +51,8 @@ let
   wpewebkit = if webkit != null then webkit else callPackage ./webkit.nix { inherit upstream; };
 
   # What upstream's scripts/package.sh bundles, with PulseAudio (PipeWire's, on Mortar)
-  # for ALSA. Copied, not linked, so the rest of gst-plugins-bad stays out of the closure.
+  # for ALSA. Only these are on the plugin path. gst-plugins-bad is still in the closure, all
+  # of it with its dependencies: WebKit and these plugins link its libraries.
   gstPlugins = stdenv.mkDerivation {
     name = "wpe-browser-gst-plugins";
     dontUnpack = true;

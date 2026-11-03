@@ -2,8 +2,8 @@
 # WPE WebKit for the Brick's browser, the WPEPlatform API only (no libwpe, no
 # Wayland or DRM platform: the app brings its own WPEPlatform, see default.nix),
 # with the options and patches of upstream wpe-tsp (scripts/build-webkit.sh).
-# nixpkgs has no wpewebkit, so nothing here comes from a cache: expect hours on the
-# aarch64 builder. Same compiler as nixpkgs' webkitgtk 2.54.1.
+# nixpkgs has no wpewebkit, so nothing here comes from a cache: about half an hour on a
+# Mac's 8-core aarch64 builder at 5 jobs. Same compiler as nixpkgs' webkitgtk 2.54.1.
 #
 # WebKit keeps its own licences (LGPL-2.1, BSD-style; ANGLE, Skia, ... BSD/MIT/Apache).
 #

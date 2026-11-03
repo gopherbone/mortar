@@ -80,7 +80,7 @@
           };
 
           # Another app with a manifest: pkgs/wpe-browser. Builds WPE WebKit (no
-          # cache has it), so hours on a builder, and in no image.
+          # cache has it), and is in no image.
           wpe-browser = self.nixosConfigurations.brick-full.pkgs.callPackage ./pkgs/wpe-browser/app.nix {
             inherit (self.lib) mkApp;
           };

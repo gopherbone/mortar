@@ -5,7 +5,7 @@
 # same uinput clone as on the Brick. Pages come from a server in the machine that logs
 # what they ask for, which is how the test sees the browser act.
 #
-#   nix build .#packages.aarch64-linux.wpe-browser-test    (hours the first time: WebKit)
+#   nix build .#packages.aarch64-linux.wpe-browser-test    (builds WebKit the first time)
 #
 # Screenshots land in the result.
 { pkgs, app }:
