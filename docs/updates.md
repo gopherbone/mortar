@@ -1,6 +1,6 @@
 # Over-the-air updates
 
-The Brick updates itself over Wi-Fi, without your computer:
+The Brick updates itself over Wi-Fi, without your computer or any account:
 
 ```
 git push (branch mortar)
@@ -8,16 +8,29 @@ git push (branch mortar)
        ├─ settings: can this publish? does everything evaluate? is it all allowed public?
        ├─ VM tests (x86 runner with KVM), the other checks (arm64 runner)
        ├─ nix build brick-bare, brick-full
-       ├─ nix copy --to s3://BUCKET (Cloudflare R2)            closures, signed with your Nix key
-       └─ channels/testing/<config>.json                       manifest, signed, written last
+       ├─ what cache.nixos.org doesn't have, to the R2 bucket   store paths, signed with your Nix key
+       ├─ channels/testing/<config>.json                        manifest, signed, written last
+       └─ images/testing/<config>-latest.img.zst                SD images, with sha256
 Actions > Promote to release (.github/workflows/promote.yml, by hand)
-       └─ channels/mortar/<config>.json                        same system, manifest signed for this channel
-Brick (mortar-update, daily or Settings > Updates > Check now)
-  ├─ reads channels/mortar/<config>.json with a read-only key  checks signature, channel, configuration, age
-  ├─ nix copy --from s3://BUCKET <toplevel>                    Nix checks every signature against the same keys
-  ├─ system profile + switch-to-configuration boot             a new boot entry; the old ones stay
+       ├─ channels/mortar/<config>.json                         same system, manifest signed for this channel
+       └─ images/mortar/<config>-latest.img.zst                 the image of that commit
+Cloudflare Worker (cloudflare/worker.js)                        read-only HTTPS in front of the bucket
+Brick (mortar-update: Settings > Updates > Check now, or daily)
+  ├─ curl <baseUrl>/channels/<channel>/<config>.json            checks signature, channel, configuration, age
+  ├─ nix-store --realise <toplevel>                             from <baseUrl> and cache.nixos.org; Nix checks
+  │                                                             every signature against the Brick's own keys
+  ├─ system profile + switch-to-configuration boot              a new boot entry; the old ones stay
   └─ toast "Update ready — restart to apply"
 ```
+
+No credentials are involved in reading. The connection isn't what's trusted either: a
+Brick believes a manifest because of its signature, and a store path because of its
+signature, whoever served them.
+
+**Not exercised yet.** All of this has run in VMs (`checks.*.mortar-update`, against
+`cloudflare/worker.js` and a stand-in for R2), with the worker's own tests. The Worker
+has not been deployed, nothing has been published to the public URL, and no Brick has
+updated from it. Take this page as how it's built until that has happened.
 
 `mortar publish` does the CI part from your computer when CI is not available.
 
@@ -43,36 +56,81 @@ It gives nobody rights in the files, it isn't TrimUI's permission, and it would 
 reversed if TrimUI objected. They are never committed to this repository. If you
 distribute them yourself, make your own decision.
 
-A flake of your own with Claude Code or those cores can use all of this with a
-**private** bucket: `mortar publish` signs and pushes what you tell it to, and doesn't
-apply these checks. Its bucket must stay private (no r2.dev URL, no custom domain).
-
-A Brick reads the bucket with credentials today, public cache or not
-(`mortar.update`; step 6): nothing here gives an anonymous Brick updates yet.
+A flake of your own with Claude Code can use all of this with a **private** bucket:
+[A flake of your own](#a-flake-of-your-own). `mortar publish` signs and pushes what you
+tell it to, and applies the checks by name only with `--upstream`. Its bucket must stay
+private (no r2.dev URL, no custom domain, no Worker), and it must not be this one.
 
 ## Channels
 
-`channels/<channel>/<config>.json`. Each push goes to `testing`. A Brick follows
-`mortar.update.channel`, by default the release channel `mortar`. To try builds on a
-Brick before they are released, set `mortar.update.channel = "testing"` on it.
+`channels/<channel>/<config>.json`. Each push goes to `testing`. A Brick follows the
+`mortar.update.channel` of the system it runs, and for the published systems that is one
+line: `channel` in `configurations/public.nix`, `testing` until the owner promotes a
+release.
 
-To release: **Actions > Promote to release > Run workflow**, with the commit
-(`rev` in `channels/testing/<config>.json`; it must match). It needs no build: the
-closure is in the bucket. The manifest is signed again, as the channel is part of what's
-signed. To require a reviewer, add one to the `release` environment
-(Settings > Environments). `mortar promote --from testing --rev COMMIT` does the same
-from a computer.
+To release:
+
+1. Set `channel = "mortar"` in `configurations/public.nix` and push. This is a step of its
+   own because a Brick keeps following what its system says: a system that says `testing`
+   would take its Brick back to `testing` the moment it was promoted, and
+   `promote.yml` refuses one. Bricks that are on `testing` take this system when they
+   check, and from then on follow the release channel.
+2. Try that build from `testing` on a Brick.
+3. **Actions > Promote to release > Run workflow**, with the commit (`rev` in
+   `channels/testing/<config>.json`; it must match). It needs no build: the closure is in
+   the bucket. The manifest is signed again, as the channel is part of what's signed, and
+   that commit's image is copied to `images/mortar/`. To require a reviewer, add one to the
+   `release` environment (Settings > Environments). `mortar promote --from testing --rev
+   COMMIT` does the same from a computer.
+4. Point the README and the Worker's index page (`IMAGE` in `cloudflare/worker.js`) at
+   `images/mortar/`.
+
+A Brick's floor is the newest manifest it has taken, on any channel. So one that has taken
+a build from `testing` refuses an older one promoted afterwards as a downgrade, until
+something newer is released. Promoting gives the manifest a new date, so this needs a
+Brick to have followed `testing` past what's being promoted and then changed channel.
 
 ## What is where
 
 | Thing | Where | Secret? |
 |---|---|---|
-| Bucket name, endpoint, public signing key | `mortar.update` in your configuration | no |
+| Public URL, channel, public signing key | `configurations/public.nix` | no |
+| Account the bucket is in | GitHub secret `R2_ACCOUNT_ID`; `CLOUDFLARE_ACCOUNT_ID` when deploying the Worker | not in the repository |
 | Signing key (secret half) | `~/.config/mortar/signing-key` on your computer; GitHub secret `NIX_SIGNING_KEY` | yes |
 | R2 write token | GitHub secrets `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`; `~/.config/mortar/r2-write` on your computer | yes |
-| R2 read-only token | the Brick: `/var/lib/mortar-update/credentials` (root, 0600, ext4 root fs) | yes |
+| A private bucket's read-only token | that Brick: `/var/lib/mortar-update/credentials` (root, 0600, ext4 root fs). A published Brick has none | yes |
 
 No secret is ever in the repository or the Nix store.
+
+## What's in the bucket
+
+| Key | What | Worker's `Cache-Control` |
+|---|---|---|
+| `nix-cache-info` | `WantMassQuery: 1`, `Priority: 41`: right after cache.nixos.org (40), so that's asked first and this cache isn't asked for what it doesn't hold. Written by `mortar publish`; Nix alone only ever writes `StoreDir` | 1 hour |
+| `<hash>.narinfo`, `nar/…` | store paths that aren't on cache.nixos.org | immutable |
+| `channels/<channel>/<config>.json` | the manifest, and `channels/<channel>/<config>/…` a copy of each | 60 s |
+| `images/<channel>/<config>-latest.img.zst`, `.sha256` | the name that stays | 60 s |
+| `images/<channel>/v/<config>-<rev>.img.zst`, `.sha256` | each commit's | immutable |
+
+Nothing else in the bucket is served, there is no listing, and nothing can be written
+through the Worker. What a first publish puts there, measured when this was written (a later
+one uploads only the store paths that changed):
+
+| | Closure | On cache.nixos.org | Uploaded | SD image |
+|---|---|---|---|---|
+| `brick-bare` | 2.85 GiB, 919 paths | 751 paths | 168 paths, 95 MiB, 30 MiB with zstd | 867 MiB |
+| `brick-full` | 3.38 GiB, 986 paths | 796 paths | 190 paths, 438 MiB, 110 MiB with zstd | 1003 MiB |
+
+A Brick downloads the rest of an update from cache.nixos.org. If cache.nixos.org ever
+drops an old path a published system needs, an update to that system fails: the fix is to
+publish without `--upstream`, which pushes everything.
+
+`nix copy --to` can't do this by itself: it refuses a path whose references aren't in the
+destination, and `nix copy --from` wants the whole closure in one place. So publishing
+copies to a local directory seeded with the narinfos of what's elsewhere, then uploads only
+what Nix added (`push_new_paths` in `pkgs/mortar-cli/src/publish.rs`); and a Brick
+substitutes, with both caches as substituters, instead of copying. Paths from the upstream
+are checked against the upstream's key, which counts for no manifest.
 
 ## Runners and cost
 
@@ -80,7 +138,9 @@ On a public repository GitHub's standard hosted runners are free and unlimited, 
 included: `ubuntu-24.04-arm` has 4 vCPUs, 16 GB RAM and 14 GB of SSD (the workflow frees
 space first). A job can run for 6 hours. (A fork set to private pays per minute against
 its plan and gets 2 vCPUs and 8 GB.) The first build compiles the kernel and the Rust
-apps; later builds take unchanged paths from the bucket and only rebuild what changed.
+apps; later builds take unchanged paths from the public cache and only rebuild what
+changed. The disk is the tight part: after publishing, the workflow collects garbage
+(keeping both systems) before each image.
 
 Sources: [GitHub-hosted runners](https://docs.github.com/en/actions/reference/runners/github-hosted-runners),
 [Actions billing](https://docs.github.com/en/billing/concepts/product-billing/github-actions),
@@ -103,68 +163,62 @@ Fallbacks (Actions > Build and publish > Run workflow > runner):
 - No CI at all: `nix run .#mortar -- publish` on your computer.
 
 R2 storage is $0.015/GB-month after a free 10 GB-month; downloads (egress)
-are free. See [Cleaning the bucket](#cleaning-the-bucket).
+are free. Each push adds about 1.9 GB of images, which is what to watch; see
+[Cleaning the bucket](#cleaning-the-bucket). A request through the Worker counts against
+the Workers plan's and R2's request allowances, and the Worker keeps no cache of its own.
 
 ## One-time setup
 
-Run the Mac commands in this repository. `mortar` below is
-`nix run .#mortar --`.
+This is the owner's, for the public cache. Run these from this repository; `wrangler` is
+`npx wrangler`, logged in with `npx wrangler login`. A flake of your own that isn't
+public wants [A flake of your own](#a-flake-of-your-own) instead.
 
-### 1. Bucket and tokens (Cloudflare dashboard)
-
-1. **R2 object storage > Create bucket**: name it, e.g. `mortar-cache`.
-   Leave public access off (no r2.dev URL, no custom domain).
-2. On the R2 **Overview** page note your **Account ID**. The endpoint is
-   `https://<ACCOUNT_ID>.r2.cloudflarestorage.com`.
-3. **Account Details > API Tokens > Manage > Create Account API token**,
-   twice:
-   - `mortar-ci`: **Object Read & Write**, applied to `mortar-cache` only.
-   - `mortar-brick`: **Object Read only**, applied to `mortar-cache` only.
-
-   Each shows an **Access Key ID** and a **Secret Access Key** once. Keep
-   them in your password manager.
-
-### 2. Signing key (Mac)
+### 1. Bucket and Worker (Cloudflare)
 
 ```sh
-mkdir -p ~/.config/mortar && chmod 700 ~/.config/mortar
-nix key generate-secret --key-name mortar-1 > ~/.config/mortar/signing-key
-chmod 600 ~/.config/mortar/signing-key
-nix key convert-secret-to-public < ~/.config/mortar/signing-key   # -> mortar-1:…=
+export CLOUDFLARE_ACCOUNT_ID=<ACCOUNT_ID>     # R2 > Overview; keep it out of the repository
+npx wrangler r2 bucket create mortar-cache
+cd cloudflare && npx wrangler deploy          # says https://mortar.<subdomain>.workers.dev
 ```
 
-### 3. Your configuration
+The subdomain has to be `angelfire` (Workers > Subdomain), or `baseUrl` in
+`configurations/public.nix` is wrong. Leave the bucket's public access off (no r2.dev URL,
+no custom domain): the Worker is the only way in.
 
-Set these in `modules/core/default.nix` for `brick-bare` and `brick-full`, or in a
-module of your own flake:
+Check it: `curl -s https://mortar.angelfire.workers.dev/` is the index page,
+`curl -sI https://mortar.angelfire.workers.dev/channels/` is a 404, and a `curl -X PUT` of
+anything is a 405.
 
-```nix
-mortar.update = {
-  enable = true;
-  bucket = "mortar-cache";
-  endpoint = "https://<ACCOUNT_ID>.r2.cloudflarestorage.com";
-  publicKey = "mortar-1:…=";   # the output of convert-secret-to-public
-  # configName: brick-bare and brick-full set theirs; a flake of your own sets
-  # it to the system's name under nixosConfigurations
-};
+### 2. Write token (Cloudflare dashboard, by hand)
+
+Wrangler can't make S3 tokens. **R2 > Overview > Account Details > API Tokens > Manage >
+Create Account API token**: name `mortar-ci`, permission **Object Read & Write**, applied
+to the bucket `mortar-cache` only. It shows an **Access Key ID** and a **Secret Access Key**
+once. No token is needed to read, and the Worker gets at the bucket through its binding.
+
+### 3. Old testing images expire
+
+Every push adds an image of each configuration under `images/testing/v/`. Promoting copies
+the one it needs, so these can go after a while. The name that stays is outside the prefix.
+(`--help` for the flags; the dashboard's bucket Settings has the same.)
+
+```sh
+npx wrangler r2 bucket lifecycle add mortar-cache testing-images images/testing/v/ --expire-days 30
 ```
 
-Commit it (pushing triggers the first build; that is fine once step 4 is done). In a
-public repository this makes the bucket's name and endpoint public, which is no secret
-but is an invitation; they aren't credentials.
-
-The `settings` step fails at once if this or a secret is missing.
-
-### 4. GitHub secrets
+### 4. GitHub
 
 ```sh
 gh secret set NIX_SIGNING_KEY -R gopherbone/mortar < ~/.config/mortar/signing-key
 gh secret set R2_ACCESS_KEY_ID -R gopherbone/mortar        # mortar-ci Access Key ID
 gh secret set R2_SECRET_ACCESS_KEY -R gopherbone/mortar    # mortar-ci Secret Access Key
+gh secret set R2_ACCOUNT_ID -R gopherbone/mortar           # the account ID
 ```
 
-(`gh secret set NAME` without `<` asks for the value.) Check that Actions
-is enabled for the repository.
+(`gh secret set NAME` without `<` asks for the value.) The `settings` step fails at once if
+one is missing, or if `NIX_SIGNING_KEY` isn't the secret half of `publicKey` in
+`configurations/public.nix`. Check that Actions is enabled for the repository, and make
+the `release` environment (Settings > Environments) that `promote.yml` runs in.
 
 Builds on push stay off until you turn them on, so pushes don't spend
 minutes or fail before the secrets exist:
@@ -181,50 +235,77 @@ access_key_id = "<mortar-ci Access Key ID>"
 secret_access_key = "<mortar-ci Secret Access Key>"
 EOF
 chmod 600 ~/.config/mortar/r2-write
-mortar publish            # build, push, publish; or --dry-run to see the manifest
+ENDPOINT=https://<ACCOUNT_ID>.r2.cloudflarestorage.com
+mortar publish --endpoint $ENDPOINT --bucket mortar-cache --upstream https://cache.nixos.org \
+  --channel testing --config brick-bare     # or --dry-run to see the manifest
 ```
 
-### 6. The Brick, once over USB
+### 6. Try it
 
-The Brick needs a system that has `mortar-update` and trusts your key, so
-deploy once from the Mac, and keep PICO-8 in its own profile:
+Push a commit and watch **Actions > Build and publish**. Then, with a Brick on the image from
+`images/testing/`: **MENU > Settings > Updates > A** (Check now). When the toast says
+**Update ready — restart to apply**, Settings > Updates says **Restart to update**; press A
+twice there (or restart any other way). Afterwards, update the note at the top of this page.
+
+## A flake of your own
+
+A system built on `nixosModules.full`, `nixosModules.core` or `lib.mkSystem` has updates
+**off**: nothing to do, and it follows nothing. The settings that follow the public channel
+are in `configurations/public.nix`, which is not a flake output. Don't import it: a Brick
+following the public channel replaces its whole system with the published one, and anything
+of your own is gone from the next boot. The check that a manifest is for this configuration
+wouldn't stop this, since `nixosModules.full` calls itself `brick-full` too
+(`tests/public-policy.nix` holds all of this in place).
+
+To update a Brick of your own over Wi-Fi, use a bucket of your own, private, and read it
+with credentials (S3 mode):
+
+```nix
+mortar.update = {
+  enable = true;
+  bucket = "my-brick-cache";
+  endpoint = "https://<ACCOUNT_ID>.r2.cloudflarestorage.com";
+  publicKey = "my-brick-1:…=";   # a key of your own: nix key generate-secret --key-name my-brick-1
+  configName = "my-brick";       # not brick-bare or brick-full
+  channel = "mortar";
+};
+```
+
+(`baseUrl` stays unset; setting it with a bucket is an evaluation error.) In a public
+repository this makes the bucket's name and endpoint public, which isn't a secret but is an
+invitation; they aren't credentials. So does keeping them out of the repository, in a
+module of your own.
 
 ```sh
-mortar deploy --reboot
-mortar pico8              # only if you use PICO-8 (needs your zip in the Mac's store)
+# Make two tokens: one Object Read & Write, one Object Read only, on that bucket only.
+mortar publish --flake . --config brick --key ~/.config/mortar/my-brick-key   # the whole closure
+mortar deploy --reboot            # once, over USB, so the Brick has this system
+mortar update-creds               # the read-only token; or [update] in mortar.toml below
 ```
 
-Then give it the read-only token, either way:
+On the card, in `NIXOS_BOOT/mortar.toml`:
 
-- **From the Mac**: `mortar update-creds` (asks for the `mortar-brick`
-  Access Key ID and Secret; sent over SSH on stdin, then checks the bucket).
-- **On the card**: open the `NIXOS_BOOT` partition and add to `mortar.toml`:
+```toml
+[update]
+access_key_id = "<read-only Access Key ID>"
+secret_access_key = "<read-only Secret Access Key>"
+```
 
-  ```toml
-  [update]
-  access_key_id = "<mortar-brick Access Key ID>"
-  secret_access_key = "<mortar-brick Secret Access Key>"
-  # auto_check = false     # Settings > Auto-check daily starts off
-  ```
-
-  At the next boot the Brick moves the secret to
-  `/var/lib/mortar-update/credentials` (root only) and blanks it in the file.
-
-### 7. Try it
-
-Push a commit, watch **Actions > Build and publish**, run **Promote to release**
-(or point the Brick at `testing`), then on the Brick **MENU > Settings > Updates > A**
-(Check now), or `mortar update` from your computer. When the toast says **Update ready — restart to apply**, Settings >
-Updates says **Restart to update**; press A twice there (or restart any
-other way).
+At the next boot the Brick moves the secret to `/var/lib/mortar-update/credentials` (root
+only) and blanks it in the file. S3 mode copies with `nix copy --from s3://…`, and checks
+only your keys, so the whole closure is in your bucket: `mortar publish` without
+`--upstream` pushes all of it.
 
 ## On the Brick
 
 - **Settings > Updates**: the status; **A** checks now, or, with an update
   staged, restarts into it (press twice).
-- **Settings > Auto-check daily**: on by default (`mortar.update.autoCheck`).
-  The daily check (`mortar-update-auto.timer`, also 20 minutes after boot)
-  downloads and stages an update by itself; it never restarts the Brick.
+- **Settings > Auto-check daily** (`mortar.update.autoCheck`; `[update] auto_check` in
+  `mortar.toml`). The daily check (`mortar-update-auto.timer`, also 20 minutes after boot)
+  downloads and stages an update by itself; it never restarts the Brick. On the published
+  systems it starts **off while they follow `testing`**, which takes every push that passes
+  CI with no one having run it on a Brick, and **on once they follow the release channel**,
+  which moves only by hand (`configurations/public.nix`). A flake of your own gets on.
 - No download while the battery is below 30% and not charging
   (`mortar.update.minBattery`); the row says "Charge to 30% first".
 - Offline: "Offline", and the next check tries again. Store paths arrive
@@ -246,9 +327,13 @@ other way).
     what this Brick has taken or found running from the channel: a fresh card
     has none until its first check, and a system you `mortar deploy` doesn't
     raise it, since it has no publication date.
-- The closure must be signed by the same keys. For that copy they replace what
-  `nix.settings.trusted-public-keys` lists, so a path with cache.nixos.org's
-  signature alone isn't accepted from the bucket.
+- Each path of the closure must be signed by those keys or, in HTTPS mode, an upstream's
+  (`mortar.update.upstreams`, by default cache.nixos.org's). For that download these replace
+  `nix.settings.trusted-public-keys` and the substituters in `nix.conf`, so another key
+  trusted on the Brick counts for nothing. In S3 mode there's no upstream, so a path with
+  cache.nixos.org's signature alone isn't accepted from the bucket.
+- The connection needs the clock to be about right, for TLS: a Brick that has never been
+  online since it lost its time says "Check failed" until it has synced.
 - On SSH: `mortar-update status`, `mortar-update check`,
   `journalctl -u mortar-update -u mortar-update-auto`.
 
@@ -264,32 +349,34 @@ Every update is a new system generation; the previous ones stay installed.
 - **On the Brick, in Settings**: Settings > Updates > Roll back (press A twice),
   then restart. Same as above.
 - **If the new system does not boot**: hold SELECT while powering on, until a
-  second buzz. That boots the previous generation, once; then roll back as above
-  to make it stick. This needs a card with a U-Boot from after the feature was
-  added (it isn't updated with the system: firmware/mainline/README.md).
+  second buzz. That boots the previous generation, once (tested on a real Brick); then
+  roll back as above to make it stick. This needs a card with a U-Boot from after the
+  feature was added (it isn't updated with the system: firmware/mainline/README.md). The
+  published images have it.
 - **If that doesn't help**: the U-Boot menu lists the last 5 generations, but only
   on the UART console. Without one, put the card in a computer, open
   `NIXOS_BOOT/extlinux/extlinux.conf` and change the `DEFAULT` line to the label of
   the previous entry (the `LABEL` lines below it, newest first), then boot and run
   `mortar-update rollback` to make it stick.
 - **The channel itself**: publish an older system again, e.g.
-  `mortar publish --path /nix/store/…-nixos-system-mortar-… --force` (the
-  `toplevel` of an older manifest; `channels/mortar/<config>/` in the bucket keeps a
-  copy of every manifest), or revert the commit and push. Publishing gives it a new
-  date, so Bricks take it.
+  `mortar publish --path /nix/store/…-nixos-system-mortar-… --force` with the arguments
+  of [step 5](#5-your-mac-as-a-fallback-publisher-optional) (the `toplevel` of an older
+  manifest; `channels/mortar/<config>/` in the bucket keeps a copy of every manifest), or
+  revert the commit and push. Publishing gives it a new date, so Bricks take it.
 
 ## Cleaning the bucket
 
-Each publish adds only the store paths that changed, but nothing is ever
-deleted. When the bucket grows too large, empty it (R2 dashboard > bucket >
-Settings > delete objects, or a lifecycle rule) and re-run the workflow: it
-pushes the whole current closure again. Bricks are unaffected: they already
-have the paths they run.
+Each publish adds only the store paths that changed, and old store paths and manifests are
+never deleted. Images are the larger part: `images/testing/v/` expires by the rule of step 3.
+When the bucket grows too large, empty it (R2 dashboard > bucket > Settings > delete objects,
+or a lifecycle rule) and re-run the workflow: it pushes what the current systems need again.
+Bricks are unaffected: they already have the paths they run. Don't expire narinfos alone,
+as a publish takes one to mean its path and all it needs are there.
 
 ## Rotating secrets
 
-- Read token leaked or Brick lost: create a new **Object Read only** token,
-  `mortar update-creds` on your Bricks, delete the old token.
+- A private bucket's read token leaked or Brick lost: create a new **Object Read only**
+  token, `mortar update-creds` on your Bricks, delete the old token.
 - Write token: create a new one, update the two GitHub secrets (and
   `~/.config/mortar/r2-write`), delete the old one.
 - Signing key: generate a new one (step 2). A Brick only trusts the keys of the
@@ -297,7 +384,9 @@ have the paths they run.
   `mortar.update.trustedKeys = [ "old:…" "new:…" ]`, still signed with the old
   key, and wait for your Bricks to take it (or `mortar deploy` them). Then update
   `NIX_SIGNING_KEY`, set `publicKey` to the new key and drop the old one from
-  `trustedKeys`, and empty the bucket so everything is re-signed.
+  `trustedKeys`, and empty the bucket so everything is re-signed. A narinfo is served as
+  immutable, so give caches a year or re-publish under new paths; Nix on a Brick doesn't
+  keep one across checks.
 
 ## Formats
 
@@ -329,9 +418,16 @@ The Brick's status, for the shell: `/run/mortar-update/status.json`
 (`state`: unconfigured, idle, checking, downloading, installing, ready,
 up-to-date, offline, low-battery, error).
 
-The end-to-end test (`nix build .#checks.aarch64-linux.mortar-update`) runs
-the whole path in VMs, with Garage as the S3 server: read key cannot write,
-credentials from the card, unsigned, tampered, wrong-key, wrong-channel,
-wrong-configuration and older manifests refused, unsigned closures and closures
-signed by a key only `nix.conf` trusts refused, low battery, publish, download and
-stage, offline, rollback, testing and promotion, auto-check.
+The end-to-end test (`nix build .#checks.aarch64-linux.mortar-update`) runs the whole path
+in VMs. With Garage as the S3 server: read key cannot write, credentials from the card,
+unsigned, tampered, wrong-key, wrong-channel, wrong-configuration and older manifests refused,
+unsigned closures and closures signed by a key only `nix.conf` trusts refused, low battery,
+publish, download and stage, offline, rollback, testing and promotion, auto-check. Over plain
+HTTP with no credentials, through `cloudflare/worker.js` in front of a directory holding what
+`mortar publish --upstream` put in the bucket, and a second cache standing in for
+cache.nixos.org: the same refusals, a manifest signed by the upstream's key, a closure served
+by the upstream under the wrong key, a corrupted NAR, only the upstream's path missing from
+the bucket, nothing uploaded on a second publish, each path from its own cache, offline,
+rollback, downgrade, and an image published, promoted and downloaded in two ranges.
+`checks.*.cloudflare-worker` is the Worker's own tests (`node --test
+cloudflare/test/worker.test.mjs`), against a stand-in for R2.

@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 # Put what's on the testing channel on the release channel, by hand, once a Brick on
 # testing has run it (docs/updates.md). Nothing is built: the closure is in the bucket
-# already, and the manifest is re-signed for the release channel.
+# already, the manifest is re-signed for the release channel, and the SD image is copied
+# to images/mortar/.
 #
 # The `release` environment is where required reviewers go (Settings > Environments).
 name: Promote to release
@@ -21,6 +22,9 @@ on:
 
 permissions:
   contents: read
+
+env:
+  BUCKET: mortar-cache
 
 jobs:
   promote:
@@ -42,13 +46,14 @@ jobs:
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           NIX_SIGNING_KEY: ${{ secrets.NIX_SIGNING_KEY }}
           MORTAR_PUBLISHER: github-actions
           REV: ${{ inputs.rev }}
           WHICH: ${{ inputs.config }}
         run: |
-          if [ -z "$AWS_ACCESS_KEY_ID" ] || [ -z "$NIX_SIGNING_KEY" ]; then
-            echo "::error::R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY / NIX_SIGNING_KEY secrets are missing (docs/updates.md)"
+          if [ -z "$AWS_ACCESS_KEY_ID" ] || [ -z "$R2_ACCOUNT_ID" ] || [ -z "$NIX_SIGNING_KEY" ]; then
+            echo "::error::R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY / R2_ACCOUNT_ID / NIX_SIGNING_KEY secrets are missing (docs/updates.md)"
             exit 1
           fi
           key="$RUNNER_TEMP/signing-key"
@@ -56,5 +61,15 @@ jobs:
           (umask 077; printf '%s\n' "$NIX_SIGNING_KEY" > "$key")
           case "$WHICH" in both) configs="brick-bare brick-full" ;; *) configs=$WHICH ;; esac
           for c in $configs; do
-            nix run ".#mortar" -- promote --from testing --config "$c" --rev "$REV" --key "$key"
+            # A Brick follows what the system it runs says. One that says `testing` would
+            # go back to that channel, and to every push, the moment it took this release.
+            follows=$(nix eval --raw "git+file://$PWD?rev=$REV#nixosConfigurations.$c.config.mortar.update.channel")
+            if [ "$follows" != mortar ]; then
+              echo "::error::$REV: $c follows '$follows', not 'mortar'. Set channel = \"mortar\" in configurations/public.nix, push, try that on testing and promote that."
+              exit 1
+            fi
+          done
+          for c in $configs; do
+            nix run ".#mortar" -- promote --endpoint "https://$R2_ACCOUNT_ID.r2.cloudflarestorage.com" --bucket "$BUCKET" \
+              --from testing --channel mortar --config "$c" --rev "$REV" --key "$key"
           done

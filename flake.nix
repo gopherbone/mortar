@@ -64,6 +64,7 @@
           linux-trimui-brick = full.boot.kernelPackages.kernel;
           u-boot-mainline = full.system.build.mortarBootloader;
 
+          mortar = pkgs.callPackage ./pkgs/mortar-cli { };
           mortar-toplevel = full.system.build.toplevel;
           bare-toplevel = bare.system.build.toplevel;
 
@@ -87,6 +88,7 @@
       apps = lib.genAttrs allSystems (system:
         let
           pkgs = nixpkgs.legacyPackages.${system};
+          mortar = pkgs.callPackage ./pkgs/mortar-cli { };
         in {
           mortar = { type = "app"; program = "${mortar}/bin/mortar"; };
           # tools/showcase: compose the showcase video from showcase-capture
