@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //! Shell configuration: the launcher entries and system actions, as JSON
-//! written by the NixOS module (modules/mortar-shell.nix) to
-//! /etc/mortar-shell/config.json.
+//! written by the NixOS module (modules/core/shell.nix) to
+//! /etc/mortar-shell/config.json. Apps with a manifest in their own profile
+//! join the same list at runtime (discover.rs).
 
 use mortar_ui::icons::Icon;
 use serde::Deserialize;
@@ -23,7 +24,7 @@ pub enum GamepadMode {
     None,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AppEntry {
     pub id: String,
@@ -48,16 +49,33 @@ pub struct AppEntry {
     /// from the illustration and name).
     #[serde(default)]
     pub category: Option<Category>,
-    /// Only offered while this path exists (e.g. PICO-8 in its own Nix
-    /// profile, installed by `mortar pico8`).
-    #[serde(default)]
-    pub requires: Option<std::path::PathBuf>,
+    /// Only offered while these paths exist (e.g. PICO-8 in its own Nix
+    /// profile, installed by `mortar pico8`). The config gives one path, a
+    /// manifest a list.
+    #[serde(default, deserialize_with = "one_or_many")]
+    pub requires: Vec<std::path::PathBuf>,
+    /// The profile it was discovered in (discover.rs); None: from the config.
+    #[serde(skip)]
+    pub profile: Option<std::path::PathBuf>,
 }
 
 impl AppEntry {
     pub fn available(&self) -> bool {
-        self.requires.as_ref().is_none_or(|p| p.exists())
+        self.requires.iter().all(|p| p.exists())
     }
+}
+
+fn one_or_many<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<std::path::PathBuf>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Paths {
+        One(std::path::PathBuf),
+        Many(Vec<std::path::PathBuf>),
+    }
+    Ok(match Paths::deserialize(d)? {
+        Paths::One(p) => vec![p],
+        Paths::Many(v) => v,
+    })
 }
 
 /// A launcher entry's place in the MENU: every entry is under Apps; games
@@ -185,6 +203,14 @@ impl Default for Actions {
 pub struct Config {
     #[serde(default)]
     pub apps: Vec<AppEntry>,
+    /// Where apps keep their own profiles: `<dir>/<id>/share/mortar/app.json`
+    /// (discover.rs). Unset: no discovery.
+    #[serde(default)]
+    pub app_profiles: Option<std::path::PathBuf>,
+    /// The device's mortar-sdl-run, for discovered apps with `gpu` (unset:
+    /// they run as they are).
+    #[serde(default)]
+    pub sdl_run: Option<String>,
     #[serde(default)]
     pub actions: Actions,
     /// Frame callbacks per second for apps that are running but not shown.
@@ -592,6 +618,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(c.update.unwrap().auto[1], "{on}");
+        assert!(!c.apps[0].available());
+        assert!(c.apps[1].available());
+        // the list form (what a manifest gives): every path has to exist
+        let c: Config = serde_json::from_str(r#"{"apps":[{"id":"a","name":"A","command":["a"],"requires":["/","/nonexistent/a"]},{"id":"b","name":"B","command":["b"],"requires":["/"]}]}"#).unwrap();
         assert!(!c.apps[0].available());
         assert!(c.apps[1].available());
         let st = UpdateStatus::parse(

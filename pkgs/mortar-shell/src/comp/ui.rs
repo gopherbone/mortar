@@ -252,7 +252,7 @@ impl Shell {
     /// The launcher entries: made again when one starts or stops running,
     /// and every few seconds (an entry's required file may come or go);
     /// otherwise the same list (this runs several times a frame).
-    fn launcher_view(&self) -> std::rc::Rc<[LauncherInfo]> {
+    pub fn launcher_view(&self) -> std::rc::Rc<[LauncherInfo]> {
         let running: Vec<bool> = self.cfg.apps.iter().map(|e| self.apps.by_entry(&e.id).is_some()).collect();
         if let Some((at, r, l)) = self.launcher_cache.borrow().as_ref()
             && *r == running
@@ -422,7 +422,14 @@ impl Shell {
                 Out::GameCtl(uid, cmd) => self.game_ctl(uid, cmd),
                 Out::Close(uid) => self.close_app(uid),
                 Out::Restart(uid) => {
-                    if let Some(id) = self.apps.get(uid).and_then(|a| a.entry_id.clone()) {
+                    // its profile went while it ran: it can keep running, but
+                    // not start again
+                    if let Some(a) = self.apps.get(uid)
+                        && a.spec.as_ref().is_some_and(|s| s.profile.is_some() && self.cfg.app(&s.id).is_none())
+                    {
+                        let msg = format!("{} is no longer installed", a.name);
+                        self.sui.launch_failed(&msg);
+                    } else if let Some(id) = self.apps.get(uid).and_then(|a| a.entry_id.clone()) {
                         self.restarts.push((uid, id));
                         self.close_app(uid);
                     }

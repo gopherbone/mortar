@@ -204,7 +204,8 @@ impl Shell {
             single_instance: true,
             art: Some(crate::art::Art::Games),
             category: Some(Category::Games),
-            requires: None,
+            requires: Vec::new(),
+            profile: None,
         };
         self.launch_entry(e)
     }

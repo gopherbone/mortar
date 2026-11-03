@@ -614,6 +614,12 @@ impl ShellUi {
     }
 
     /// Keep the pages in step with the apps (one closed, one started).
+    /// Which slot of the category strip is in the middle.
+    #[cfg(test)]
+    pub(super) fn cat_strip_slot(&self) -> i32 {
+        self.menu.as_ref().map_or(0, |m| (-m.cat_x.t / CATW).round() as i32)
+    }
+
     pub(super) fn sync_menu(&mut self, v: &View) {
         let Some(m) = &mut self.menu else { return };
         if m.gone() {
@@ -641,9 +647,19 @@ impl ShellUi {
             m.run_scroll.set(m.run_sel as f32);
             self.dirty = true;
         }
-        if !cats(v).contains(&m.cat) {
+        let list = cats(v);
+        if !list.contains(&m.cat) {
             m.cat = Cat::Apps;
         }
+        // Games came or went (an app installed or removed just now): the
+        // strip and the raised tile follow
+        let idx = list.iter().position(|c| *c == m.cat).unwrap_or(0);
+        if m.cat_x.t != -(idx as f32) * CATW {
+            let cat = m.cat;
+            self.set_cat(cat, v, false);
+            self.dirty = true;
+        }
+        let Some(m) = self.menu.as_mut() else { return };
         let keys = rows(m.cat, v);
         if keys.len() != m.rows.len() || keys.iter().zip(&m.rows).any(|(k, r)| *k != r.key) {
             let ci = m.cat.i();

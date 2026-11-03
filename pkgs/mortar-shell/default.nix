@@ -7,6 +7,7 @@
 #   nix build ... pkgs.callPackage ./pkgs/mortar-shell { }
 #   passthru.tests.headless   compositor on the headless backend with real
 #                             clients; screenshots in $out/*.png
+#   passthru.tests.discovery  apps appearing and leaving in a running shell
 {
   lib,
   rustPlatform,
@@ -56,6 +57,7 @@ let
     passthru = {
       inherit fonts;
       tests.headless-run = callPackage ./test.nix { mortar-shell = shell; };
+      tests.discovery = callPackage ./test-discovery.nix { mortar-shell = shell; };
       tests.headless = runCommand "mortar-shell-headless-check" { } ''
         r=${shell.tests.headless-run}
         cat $r/result

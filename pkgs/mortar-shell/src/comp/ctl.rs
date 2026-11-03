@@ -311,6 +311,7 @@ fn state(shell: &Shell) -> String {
         "timezone": shell.timezone,
         "held": shell.router.held(),
         "apps": apps,
+        "launcher": shell.launcher_view().iter().map(|l| json!({"id": l.id, "name": l.name, "running": l.running})).collect::<Vec<_>>(),
         "frames": shell.backend.frames(),
         "gpu_frames": shell.backend.gpu_frames(),
         "gpu_ms": shell.backend.gpu_stats().map(|(last, avg, blur, n, damage)| json!({"last": last, "avg": avg, "blur": blur, "blurs": n, "damage": damage})),
