@@ -9,6 +9,35 @@ What's on it is up to you. The hardware, the shell and each kind of app are sepa
 layers, and a flake of your own picks the ones it wants. What the shell does and how
 it's used: [docs/using.md](docs/using.md).
 
+<table>
+  <tr>
+    <td width="50%"><img src="docs/images/home-sun.png" alt="Home: a large clock, a sun made of mosaic tiles, and widgets for what's playing and the last game closed"></td>
+    <td width="50%"><img src="docs/images/cross-games.png" alt="The Games category: a resumable game highlighted in a list, with a preview beside it"></td>
+  </tr>
+  <tr>
+    <td><b>Home</b>: a dashboard above your running apps, with widgets you can extend.</td>
+    <td><b>Games</b>: every game is its own app, so switching and resuming work like anything else.</td>
+  </tr>
+  <tr>
+    <td><img src="docs/images/game-panel.png" alt="A game's menu over the running game: save and load state slots with thumbnails, reset, fast-forward and quit"></td>
+    <td><img src="docs/images/page-mixer.png" alt="The mixer: a vertical level slider for each running app and the master"></td>
+  </tr>
+  <tr>
+    <td><b>In-game menu</b>: save states with thumbnails, one press of MENU away.</td>
+    <td><b>Mixer</b>: a level for each app, so a tracker can play under a game.</td>
+  </tr>
+  <tr>
+    <td><img src="docs/images/cross-settings.png" alt="The Settings category with brightness and volume, beside a pink and purple woven pattern"></td>
+    <td><img src="docs/images/saver-music.png" alt="The Music category with an animated orange and purple mosaic growing up the side of the screen"></td>
+  </tr>
+  <tr>
+    <td><b>Settings</b>: everything is reachable from the buttons.</td>
+    <td><b>Patterns</b>: each category has its own, and it grows into a screensaver when idle.</td>
+  </tr>
+</table>
+
+These are the shell's own preview renderer with sample data, at the panel's 1024×768.
+
 ## Layers
 
 | Layer | Where | Flake output | What |
