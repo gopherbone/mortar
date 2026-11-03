@@ -1,0 +1,32 @@
+[package]
+name = "mortar-files"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-2.0-or-later"
+description = "A file manager for Mortar on the TrimUI Brick, driven with the buttons"
+publish = false
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+
+[lib]
+name = "mortar_files"
+path = "src/lib.rs"
+
+[[bin]]
+name = "mortar-files"
+path = "src/main.rs"
+
+[dependencies]
+mortar-ui = { path = "../mortar-ui", default-features = false }
+libc = "0.2.191"
+resvg = { version = "0.49.0", default-features = false }
+serde_json = "1.0.154"
+jpeg-decoder = { version = "0.3", default-features = false }
+
+# The Wayland window is Linux-only; the operations, the model and the preview
+# build (and unit-test) on macOS too.
+[target.'cfg(target_os = "linux")'.dependencies]
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client"] }
