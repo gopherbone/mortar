@@ -68,7 +68,7 @@ Screenshots and animations come from the shell's own preview renderer with sampl
 | Core | `modules/core/`, `pkgs/mortar-*` | `nixosModules.core` | Shell, greeter, setup, pairing, power, updates, the session user, the `mortar` command. |
 | Packs | `modules/packs/` | `nixosModules.pack-emulation`, `pack-music`, `pack-terminal`, `pack-ai` | mortar-play; m8c, ChooChoo, Little XM; zsh; Claude Code (optional, in no configuration here). Importing one turns it on. |
 | Ports | `modules/ports/` | `nixosModules.port-pico8`, `port-acgc`, `port-puzzlescript` | Apps that need your own data. Each entry waits for it, or says where it goes. |
-| Apps | `lib/mk-app.nix`, `pkgs/openxcom/app.nix` | `lib.mkApp`, `packages.*.openxcom` | A package with a manifest, in its own profile on the device: no system rebuild. |
+| Apps | `lib/mk-app.nix`, `pkgs/openxcom/app.nix`, `pkgs/mortar-files/app.nix` | `lib.mkApp`, `packages.*.openxcom`, `packages.*.mortar-files` | A package with a manifest, in its own profile on the device: no system rebuild. |
 | Systems | `configurations/` | `nixosConfigurations.brick-bare`, `brick-full` | Device + core only, or every pack and port that may be published. |
 
 `modules/device.nix` is what the layers above ask of a device (`mortar.device`).
@@ -228,6 +228,9 @@ Keep saves and data outside the profile, as `requires` above does, and removing 
 leaves them alone. The manifest format and the rules are in
 `pkgs/mortar-shell/DESIGN.md`, "Apps in their own profiles". `pkgs/openxcom/app.nix` is
 a real example; an entry in `mortar.shell.apps` with the same id wins over a manifest.
+
+`mortar files` installs Files, the file manager, this way (`pkgs/mortar-files`; it has
+run on the shell's headless backend and not yet on a Brick).
 
 ## Game data never goes in the repository
 
