@@ -303,6 +303,15 @@ let
 
   enabled = lib.filterAttrs (_: s: s.enable) cfg.systems;
 
+  # Just the licence texts: pointing at a file in a source tree would pull the whole
+  # tree into the system.
+  coreLicences = pkgs.runCommand "mortar-play-core-licences" { } ''
+    mkdir $out
+    cp ${lr.snes9x2005-plus.src}/copyright $out/snes9x2005
+    cp ${lr.genesis-plus-gx.src}/LICENSE.txt $out/genesis-plus-gx
+    cp ${lr.fbneo.src}/src/license.txt $out/fbneo
+  '';
+
   # The curated systems whose core has a non-commercial licence.
   nonCommercialSystems = [ "snes" "md" "sms" "gg" "arcade" ];
 
@@ -456,9 +465,9 @@ in
         {
           environment.etc."mortar-play/config.json".source = configFile;
           # Their licences require shipping these texts.
-          environment.etc."mortar-play/licenses/snes9x2005" = lib.mkIf cfg.nonCommercialCores { source = "${lr.snes9x2005-plus.src}/copyright"; };
-          environment.etc."mortar-play/licenses/genesis-plus-gx" = lib.mkIf cfg.nonCommercialCores { source = "${lr.genesis-plus-gx.src}/LICENSE.txt"; };
-          environment.etc."mortar-play/licenses/fbneo" = lib.mkIf cfg.nonCommercialCores { source = "${lr.fbneo.src}/src/license.txt"; };
+          environment.etc."mortar-play/licenses/snes9x2005" = lib.mkIf cfg.nonCommercialCores { source = "${coreLicences}/snes9x2005"; };
+          environment.etc."mortar-play/licenses/genesis-plus-gx" = lib.mkIf cfg.nonCommercialCores { source = "${coreLicences}/genesis-plus-gx"; };
+          environment.etc."mortar-play/licenses/fbneo" = lib.mkIf cfg.nonCommercialCores { source = "${coreLicences}/fbneo"; };
           environment.systemPackages = [ cfg.package launcher ];
 
           systemd.tmpfiles.rules =

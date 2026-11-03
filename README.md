@@ -251,10 +251,9 @@ with all its apps (details and open items in
 [docs/using.md](docs/using.md)). `brick-full` itself, without those, has not been
 booted as such.
 
-Built and evaluated, **never booted**: the bare system and its SD image. The
-fresh-card path as a whole (write an image, first boot, grow the root partition,
-setup, pair) has not been retested since the system stopped using an initrd, so treat
-it as unproven. Keep your data elsewhere and expect to debug over the serial console.
+A bare image has been written to a card and booted on one Brick: it grew its root
+partition to fill the card and reached first-run setup. Setup itself and pairing haven't
+been finished on a fresh card yet, so keep your data elsewhere.
 
 Evaluated only: each pack and port on its own, a flake outside this repository using
 `mkSystem`, and core with no device module.
