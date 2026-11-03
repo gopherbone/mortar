@@ -41,11 +41,11 @@
 
       nixosConfigurations = {
         # Every pack and port that may be published (no Claude Code).
-        brick-full = self.lib.mkSystem { modules = [ ./configurations/full.nix ]; };
+        brick-full = self.lib.mkSystem { modules = [ ./configurations/full.nix ./configurations/public.nix ]; };
         # The old name of brick-full.
         brick-mainline = self.nixosConfigurations.brick-full;
         # Boot, setup, Wi-Fi, updates and the shell, no packs or ports.
-        brick-bare = self.lib.mkSystem { modules = [ ./configurations/bare.nix ]; };
+        brick-bare = self.lib.mkSystem { modules = [ ./configurations/bare.nix ./configurations/public.nix ]; };
       };
 
       packages = lib.genAttrs allSystems (system:
