@@ -99,6 +99,10 @@
         in {
           # over-the-air updates end to end (MinIO as the bucket)
           mortar-update = import ./tests/mortar-update.nix { inherit pkgs; };
+          # apps in their own profiles on a real Nix store
+          app-profiles = import ./tests/app-profiles.nix { inherit pkgs; inherit (self.lib) mkApp; };
+          # apps appearing and leaving in a running shell (pkgs/mortar-shell)
+          mortar-shell-discovery = (pkgs.callPackage ./pkgs/mortar-shell { }).tests.discovery;
           # the engine without bundled games (pkgs/puzzlescript)
           puzzlescript = pkgs.callPackage ./pkgs/puzzlescript/check.nix {
             puzzlescript = pkgs.callPackage ./pkgs/puzzlescript { };

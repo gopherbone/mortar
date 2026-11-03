@@ -33,7 +33,7 @@ let
   cfg = config.mortar.shell;
   greeter = config.mortar.greeter;
 
-  icons = [ "wifi" "bat" "usb" "cable" "file" "skip" "term" "folder" "pad" "gear" "link" "check" "lock" "power" "claude" ];
+  icons = import ../../lib/app-icons.nix;
 
   appType = types.submodule (
     { name, ... }:
@@ -307,6 +307,9 @@ let
         // lib.optionalAttrs (category != null) { inherit category; }
         // lib.optionalAttrs (a.requires or null != null) { inherit (a) requires; }
       ) sorted;
+      # Apps in their own profiles (lib.mkApp), and what starts those that want the GPU
+      appProfiles = cfg.appProfiles;
+      sdlRun = "${config.mortar.device.sdlRun}/bin/mortar-sdl-run";
       ui = {
         inherit (cfg.ui) renderer motion reduceMotion sounds soundVolume haptics bootAnimation screenshotDir cardFps msaa audioDevice suspend suspendGraceMs idleMinutes;
         hapticMs = cfg.ui.hapticMs;
@@ -434,6 +437,18 @@ in
         }
       '';
       description = "Launcher entries, keyed by id (added to the imported greeter sessions and the terminal).";
+    };
+
+    appProfiles = mkOption {
+      type = types.nullOr types.str;
+      default = "/nix/var/nix/profiles/apps";
+      description = ''
+        Where apps keep their own Nix profiles. The shell lists every
+        `<dir>/<id>` with a manifest (`share/mortar/app.json`, see
+        `lib.mkApp`) and follows the directory: installing or removing a
+        profile takes effect at once, with no rebuild. An entry in
+        `apps` with the same id wins. `null`: no discovery.
+      '';
     };
 
     categories = mkOption {
