@@ -136,8 +136,8 @@ in {
       device = "/dev/disk/by-label/NIXOS_ROOT";
       fsType = "ext4";
       # commit=120: flush journal every 2 minutes instead of every 5 seconds
-      # barrier=0: disable write barriers (we accept crash-risk for SD stability)
-      options = [ "noatime" "nodiratime" "commit=120" "barrier=0" ];
+      # Write barriers stay on: this runs on a battery, and power loss is normal.
+      options = [ "noatime" "nodiratime" "commit=120" ];
     };
 
     fileSystems."/boot" = {
