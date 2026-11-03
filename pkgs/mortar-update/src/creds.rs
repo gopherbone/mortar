@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-//! The Brick's read-only bucket credentials: `<stateDir>/credentials`
+//! S3 mode's read-only bucket credentials (HTTPS mode has none):
+//! `<stateDir>/credentials`
 //! (root, 0600, on the ext4 root file system; never in the Nix store or the
 //! repository). They arrive through the `[update]` section of `mortar.toml`
 //! on the card (moved here at boot, then blanked in the file) or through
@@ -39,7 +40,7 @@ pub fn save(path: &Path, c: &Credentials) -> std::io::Result<()> {
     write_atomic(path, to_text(c).as_bytes(), 0o600)
 }
 
-/// What the card's `[update]` section asks for.
+/// What the card's `[update]` section asks for. All of it is optional.
 #[derive(Debug, Default, PartialEq)]
 pub struct CardUpdate {
     pub credentials: Option<Credentials>,
@@ -109,6 +110,9 @@ auto_check = false
         assert!(scrub_card(&scrubbed).is_none());
         assert_eq!(parse_card("hostname = \"x\"\n").unwrap(), CardUpdate::default());
         assert!(parse_card("[update]\nsecret_access_key = \"x\"\n").unwrap().warnings.len() == 1);
+        // HTTPS mode: no credentials, and nothing to warn about
+        let u = parse_card("[update]\nauto_check = true\n").unwrap();
+        assert_eq!((u.credentials, u.auto_check, u.warnings.len()), (None, Some(true), 0));
     }
 
     #[test]

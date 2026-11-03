@@ -35,15 +35,8 @@
     command = "exec ${pkgs.bashInteractive}/bin/bash --login";
   };
 
-  # Over-the-air updates from a binary cache (docs/updates.md). Nothing
-  # here is secret: bucket, endpoint, the public signing key. Set these in your
-  # configuration with enable = true and `mortar deploy` once; after that CI (or
-  # `mortar publish`) updates the Brick over Wi-Fi. `mortar publish` reads these
-  # values too.
-  mortar.update = {
-    enable = lib.mkDefault false;
-    bucket = lib.mkDefault "mortar-cache";
-    endpoint = lib.mkDefault "https://ACCOUNT_ID.r2.cloudflarestorage.com";
-    publicKey = lib.mkDefault "mortar-1:REPLACE_WITH_PUBLIC_KEY";
-  };
+  # Over-the-air updates (docs/updates.md). Off here, with nothing to follow: a flake
+  # of your own says what it follows. The published systems' settings are in
+  # configurations/public.nix.
+  mortar.update.enable = lib.mkDefault false;
 }

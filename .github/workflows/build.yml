@@ -6,8 +6,9 @@
 #              Every pack and port evaluates, what's published holds only what may
 #              be public.
 #   vm-tests   the NixOS VM tests, on an x86 runner with KVM
-#   build      arm64: the other checks, brick-bare and brick-full; then their
-#              closures, signed, to the bucket and channels/testing/<config>.json
+#   build      arm64: the other checks, brick-bare and brick-full; then what of their
+#              closures isn't on cache.nixos.org, signed, to the bucket,
+#              channels/testing/<config>.json, and their SD images to images/testing/
 #
 # What must never be in anything public: Claude Code, PICO-8 and game data. None is in brick-bare or brick-full; `settings` and
 # `build` check, and fail the run if that changes (modules/unfree.nix). TrimUI's
@@ -17,8 +18,10 @@
 #
 # Secrets (Settings > Secrets and variables > Actions):
 #   R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY  R2 token with write access to the bucket
+#   R2_ACCOUNT_ID                           the Cloudflare account the bucket is in
 #   NIX_SIGNING_KEY                         `nix key generate-secret` output
-# Bucket, endpoint and public key come from mortar.update in the configuration.
+# The public URL and key come from mortar.update in the configuration. The workflow
+# reads the cache like anyone, through that URL, and only writes with these.
 #
 # Runners: GitHub's standard runners are free and unlimited on a public repository,
 # arm64 (ubuntu-24.04-arm) included. Fallbacks (Run workflow > runner): `x86-qemu`
@@ -54,6 +57,8 @@ permissions:
 
 env:
   CONFIGS: brick-bare brick-full
+  BUCKET: mortar-cache
+  UPSTREAM: https://cache.nixos.org
 
 jobs:
   settings:
@@ -64,7 +69,7 @@ jobs:
     timeout-minutes: 30
     outputs:
       publish: ${{ steps.publish.outputs.publish }}
-      stores: ${{ steps.bucket.outputs.stores }}
+      base_url: ${{ steps.bucket.outputs.base_url }}
       public_key: ${{ steps.bucket.outputs.public_key }}
     steps:
       - uses: actions/checkout@v4
@@ -103,27 +108,31 @@ jobs:
         env:
           HAVE_ID: ${{ secrets.R2_ACCESS_KEY_ID != '' }}
           HAVE_SECRET: ${{ secrets.R2_SECRET_ACCESS_KEY != '' }}
-          HAVE_KEY: ${{ secrets.NIX_SIGNING_KEY != '' }}
+          HAVE_ACCOUNT: ${{ secrets.R2_ACCOUNT_ID != '' }}
+          NIX_SIGNING_KEY: ${{ secrets.NIX_SIGNING_KEY }}
         run: |
           fail=0
           err() { echo "::error::$1"; fail=1; }
-          [ "$HAVE_ID" = true ] && [ "$HAVE_SECRET" = true ] && [ "$HAVE_KEY" = true ] ||
-            err "the R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY and NIX_SIGNING_KEY secrets aren't all set (docs/updates.md)"
+          [ "$HAVE_ID" = true ] && [ "$HAVE_SECRET" = true ] && [ "$HAVE_ACCOUNT" = true ] && [ -n "$NIX_SIGNING_KEY" ] ||
+            err "the R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_ACCOUNT_ID and NIX_SIGNING_KEY secrets aren't all set (docs/updates.md)"
+          signs_as=$(printf '%s\n' "$NIX_SIGNING_KEY" | nix key convert-secret-to-public 2>/dev/null || true)
           for c in $CONFIGS; do
             nix eval --json ".#nixosConfigurations.$c.config.mortar" \
-              --apply 'm: { inherit (m.update) enable bucket endpoint region publicKey configName channel; inherit (m.usb) trustHost; }' > "$RUNNER_TEMP/$c.json"
+              --apply 'm: { inherit (m.update) enable baseUrl bucket endpoint publicKey configName channel; upstreams = map (u: u.url) m.update.upstreams; inherit (m.usb) trustHost; }' > "$RUNNER_TEMP/$c.json"
             j() { jq -r "$1" "$RUNNER_TEMP/$c.json"; }
-            [ "$(j .enable)" = true ] || err "$c: mortar.update.enable is off: fill in mortar.update (docs/updates.md)"
-            case "$(j .endpoint)" in *ACCOUNT_ID*) err "$c: mortar.update.endpoint is still the placeholder" ;; esac
-            case "$(j .publicKey)" in *REPLACE_WITH*) err "$c: mortar.update.publicKey is still the placeholder" ;; esac
+            [ "$(j .enable)" = true ] || err "$c: mortar.update.enable is off (configurations/public.nix)"
+            case "$(j .baseUrl)" in https://*) ;; *) err "$c: mortar.update.baseUrl isn't an https:// URL: $(j .baseUrl)" ;; esac
+            [ "$(j .bucket)" = null ] && [ "$(j .endpoint)" = null ] || err "$c: a published system must not name a bucket"
+            [ "$(j .publicKey)" = "$signs_as" ] || err "$c: NIX_SIGNING_KEY isn't the secret half of mortar.update.publicKey ($(j .publicKey))"
             [ "$(j .configName)" = "$c" ] || err "$c: mortar.update.configName is $(j .configName)"
-            [ "$(j .channel)" != testing ] || err "$c: mortar.update.channel must be the release channel, not testing"
+            [ "$(j .channel)" != null ] && [ -n "$(j .channel)" ] || err "$c: mortar.update.channel isn't set"
+            jq -e --arg u "$UPSTREAM" '.upstreams | index($u)' "$RUNNER_TEMP/$c.json" > /dev/null ||
+              err "$c: Bricks don't read $UPSTREAM, and what's on it won't be uploaded"
             [ "$(j .trustHost)" = false ] || err "$c: mortar.usb.trustHost is on"
           done
           [ "$fail" = 0 ] || exit 1
           c=${CONFIGS%% *}
-          jq -r '"store=s3://\(.bucket)?endpoint=\(.endpoint | sub("/+$"; ""))&region=\(.region)",
-                 "public_key=\(.publicKey)"' "$RUNNER_TEMP/$c.json" | sed 's/^store=/stores=/' >> "$GITHUB_OUTPUT"
+          jq -r '"base_url=\(.baseUrl)", "public_key=\(.publicKey)"' "$RUNNER_TEMP/$c.json" >> "$GITHUB_OUTPUT"
 
   # KVM: x86 runners have it once the device is opened up. GitHub's documentation
   # doesn't promise it on the arm64 ones, so VM tests aren't run there.
@@ -190,28 +199,20 @@ jobs:
             cores = 0
             fallback = true
 
-      # The bucket is also a substituter, so unchanged paths (the kernel,
-      # GPU userspace, Rust apps) are downloaded instead of rebuilt. The
-      # daemon does the substituting, so it gets the credentials.
+      # The public cache is also a substituter, so unchanged paths (the kernel, GPU
+      # userspace, Rust apps) are downloaded instead of rebuilt. It takes no credentials.
       - name: Configure Nix
         if: runner.environment == 'github-hosted'
         env:
-          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          STORE: ${{ needs.settings.outputs.stores }}
+          BASE_URL: ${{ needs.settings.outputs.base_url }}
           PUBLIC_KEY: ${{ needs.settings.outputs.public_key }}
           QEMU: ${{ inputs.runner == 'x86-qemu' }}
         run: |
           if [ "$QEMU" = true ]; then
             echo "extra-platforms = aarch64-linux" | sudo tee -a /etc/nix/nix.conf
           fi
-          if [ -n "$STORE" ] && [ -n "$R2_ACCESS_KEY_ID" ]; then
-            printf 'AWS_ACCESS_KEY_ID=%s\nAWS_SECRET_ACCESS_KEY=%s\n' "$R2_ACCESS_KEY_ID" "$R2_SECRET_ACCESS_KEY" \
-              | sudo install -m 600 /dev/stdin /etc/nix/r2.env
-            sudo mkdir -p /etc/systemd/system/nix-daemon.service.d
-            printf '[Service]\nEnvironmentFile=/etc/nix/r2.env\n' \
-              | sudo tee /etc/systemd/system/nix-daemon.service.d/r2.conf > /dev/null
-            { echo "extra-substituters = $STORE"; echo "extra-trusted-public-keys = $PUBLIC_KEY"; } \
+          if [ -n "$BASE_URL" ]; then
+            { echo "extra-substituters = $BASE_URL"; echo "extra-trusted-public-keys = $PUBLIC_KEY"; } \
               | sudo tee -a /etc/nix/nix.conf
           fi
           sudo systemctl daemon-reload
@@ -224,22 +225,28 @@ jobs:
             | jq -r '.[] | select(. != "mortar-update" and . != "usb-pairing") | ".#checks.aarch64-linux." + .' \
             | xargs nix build --no-link --print-build-logs
 
+      # Rooted, because the disk is short (14 GB): garbage collection makes room for the
+      # images, keeping these.
       - name: Build
         id: build
         run: |
           : > "$RUNNER_TEMP/built"
           for c in $CONFIGS; do
-            top=$(nix build --no-link --print-out-paths ".#nixosConfigurations.$c.config.system.build.toplevel")
+            top=$(nix build --print-out-paths --out-link "$RUNNER_TEMP/roots/$c" ".#nixosConfigurations.$c.config.system.build.toplevel")
             echo "$c $top" | tee -a "$RUNNER_TEMP/built"
             bash scripts/check-public-closure.sh "$top"
             du -sh $(nix-store --query --requisites "$top") 2>/dev/null | sort -h | tail -5 || true
           done
+          nix build --out-link "$RUNNER_TEMP/roots/mortar" .#mortar
+          nix build --out-link "$RUNNER_TEMP/roots/u-boot" .#u-boot-mainline
+          df -h /
 
       - name: Publish to testing
         if: needs.settings.outputs.publish == 'true'
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           NIX_SIGNING_KEY: ${{ secrets.NIX_SIGNING_KEY }}
           MORTAR_PUBLISHER: github-actions
         run: |
@@ -247,5 +254,29 @@ jobs:
           trap 'rm -f "$key"' EXIT
           (umask 077; printf '%s\n' "$NIX_SIGNING_KEY" > "$key")
           while read -r c top; do
-            nix run ".#mortar" -- publish --channel testing --config "$c" --path "$top" --key "$key"
+            "$RUNNER_TEMP/roots/mortar/bin/mortar" publish \
+              --endpoint "https://$R2_ACCOUNT_ID.r2.cloudflarestorage.com" --bucket "$BUCKET" --upstream "$UPSTREAM" \
+              --channel testing --config "$c" --path "$top" --key "$key"
           done < "$RUNNER_TEMP/built"
+
+      # Each image is built, uploaded and collected in turn. They hold the closures just
+      # published and the boot chain: nothing check-public-closure.sh hasn't seen but
+      # U-Boot and TrimUI's SCP, which are published by decision (docs/updates.md).
+      - name: Publish SD images to testing
+        if: needs.settings.outputs.publish == 'true'
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+        run: |
+          # not on a self-hosted runner: that store is someone's
+          make_room() { if [ "$RUNNER_ENVIRONMENT" = github-hosted ]; then nix-collect-garbage; fi; df -h /; }
+          make_room
+          for pair in brick-bare:sd-image brick-full:sd-image-full; do
+            c=${pair%%:*} attr=${pair##*:}
+            image=$(nix build --no-link --print-out-paths ".#$attr")
+            "$RUNNER_TEMP/roots/mortar/bin/mortar" publish-image \
+              --endpoint "https://$R2_ACCOUNT_ID.r2.cloudflarestorage.com" --bucket "$BUCKET" \
+              --channel testing --config "$c" --image "$(echo "$image"/sd-image/*.img.zst)"
+            make_room
+          done

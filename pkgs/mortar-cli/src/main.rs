@@ -45,19 +45,25 @@ mortar xcom [--data PATH] [--host HOST] [--remove]
     your game files and saves.
 mortar publish [--config NAME] [--path STORE_PATH] [--channel C] [--key FILE]
                [--credentials FILE] [--force] [--dry-run]
-               [--endpoint URL --bucket NAME [--region R]]
+               [--endpoint URL --bucket NAME [--region R]] [--upstream URL]...
     Over-the-air updates without CI: build, push the closure signed to the
     bucket (mortar.update in the flake, or --endpoint/--bucket), then write
-    the signed channel manifest (docs/updates.md). Key:
+    the signed channel manifest (docs/updates.md). --upstream: a cache the
+    Brick also reads; what it holds isn't uploaded. Key:
     ~/.config/mortar/signing-key; bucket credentials:
     $AWS_ACCESS_KEY_ID/$AWS_SECRET_ACCESS_KEY or ~/.config/mortar/r2-write.
+mortar publish-image --image FILE [--config NAME] [--channel C]
+               [--endpoint URL --bucket NAME [--region R]]
+    Put an SD image at images/<channel>/<config>-latest.img.zst, and under this
+    commit's name, each with a sha256.
 mortar promote [--config NAME] [--from testing] [--channel C] [--rev COMMIT] [--key FILE]
     Put what's on one channel on another, for Bricks following the release
-    channel: re-signs the manifest. --rev: refuse unless it is that commit.
+    channel: re-signs the manifest, and copies the image if there is one.
+    --rev: refuse unless it is that commit.
 mortar update [--host HOST]       check for an update on the Brick now
 mortar update-creds [--host HOST] [--key-id ID]
-    Give the Brick its read-only bucket credentials (asks for the secret,
-    or $MORTAR_UPDATE_SECRET), over SSH.
+    S3 mode: give the Brick its read-only bucket credentials (asks for the
+    secret, or $MORTAR_UPDATE_SECRET), over SSH.
 mortar pair [--host HOST] [--key FILE.pub] [--name ALIAS] [--code CODE] [--no-ssh-config]
     Put this computer's SSH key on a Brick using the code on its screen
     (over the USB cable), check its host key, and add `Host ALIAS`
@@ -234,6 +240,8 @@ fn parse_publish(args: &[String]) -> publish::Opts {
         endpoint: None,
         bucket: None,
         region: None,
+        upstream: Vec::new(),
+        image: None,
         key: None,
         creds: None,
         publisher: env::var("MORTAR_PUBLISHER").unwrap_or_else(|_| "mortar publish".into()),
@@ -253,6 +261,8 @@ fn parse_publish(args: &[String]) -> publish::Opts {
             "--endpoint" => o.endpoint = Some(val(&mut it, a)),
             "--bucket" => o.bucket = Some(val(&mut it, a)),
             "--region" => o.region = Some(val(&mut it, a)),
+            "--upstream" => o.upstream.push(val(&mut it, a)),
+            "--image" => o.image = Some(val(&mut it, a).into()),
             "--key" => o.key = Some(val(&mut it, a).into()),
             "--credentials" => o.creds = Some(val(&mut it, a).into()),
             "--publisher" => o.publisher = val(&mut it, a),
@@ -370,6 +380,10 @@ fn main() {
     }
     if cmd == "publish" {
         publish::publish(&parse_publish(rest));
+        return;
+    }
+    if cmd == "publish-image" {
+        publish::publish_image(&parse_publish(rest));
         return;
     }
     if cmd == "promote" {

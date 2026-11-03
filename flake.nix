@@ -41,11 +41,11 @@
 
       nixosConfigurations = {
         # Every pack and port that may be published (no Claude Code).
-        brick-full = self.lib.mkSystem { modules = [ ./configurations/full.nix ]; };
+        brick-full = self.lib.mkSystem { modules = [ ./configurations/full.nix ./configurations/public.nix ]; };
         # The old name of brick-full.
         brick-mainline = self.nixosConfigurations.brick-full;
         # Boot, setup, Wi-Fi, updates and the shell, no packs or ports.
-        brick-bare = self.lib.mkSystem { modules = [ ./configurations/bare.nix ]; };
+        brick-bare = self.lib.mkSystem { modules = [ ./configurations/bare.nix ./configurations/public.nix ]; };
       };
 
       packages = lib.genAttrs allSystems (system:
@@ -64,6 +64,7 @@
           linux-trimui-brick = full.boot.kernelPackages.kernel;
           u-boot-mainline = full.system.build.mortarBootloader;
 
+          mortar = pkgs.callPackage ./pkgs/mortar-cli { };
           mortar-toplevel = full.system.build.toplevel;
           bare-toplevel = bare.system.build.toplevel;
 
@@ -133,6 +134,12 @@
           eval-matrix = pkgs.writeText "mortar-eval-matrix"
             (builtins.unsafeDiscardStringContext (builtins.toJSON self.lib.evalMatrix));
           public-policy = pkgs.callPackage ./tests/public-policy.nix { inherit self; };
+          # the Worker in front of the public cache, against a stand-in for R2
+          cloudflare-worker = pkgs.runCommand "mortar-cloudflare-worker-test" { nativeBuildInputs = [ pkgs.nodejs ]; } ''
+            cd ${./cloudflare}
+            node --test test/worker.test.mjs
+            touch $out
+          '';
         } // lib.optionalAttrs (system == "aarch64-linux") {
           # which generation U-Boot's rollback key boots (devices/brick/rollback.nix)
           previous-conf = self.nixosConfigurations.brick-bare.pkgs.callPackage ./tests/previous-conf.nix {

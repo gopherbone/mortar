@@ -80,6 +80,41 @@ computer on the USB cable can pair (with the code on the screen) and use SSH wit
 key, and has no console; `mortar.usb.trustHost = true` opens that up for development
 ([docs/pairing.md](docs/pairing.md#what-a-usb-host-can-do)).
 
+## Install
+
+Mortar boots from a microSD card and leaves the stock OS alone. The images are published
+here, one with the device and the shell (`brick-bare`) and one with every pack and port that
+may be published (`brick-full`):
+
+```sh
+curl -fLO https://mortar.angelfire.workers.dev/images/testing/brick-bare-latest.img.zst
+curl -fLO https://mortar.angelfire.workers.dev/images/testing/brick-bare-latest.img.zst.sha256
+sha256sum -c brick-bare-latest.img.zst.sha256    # macOS: shasum -a 256 -c
+zstd -d brick-bare-latest.img.zst -o mortar.img
+# write mortar.img to the card with Raspberry Pi Imager or balenaEtcher, or dd it
+# (macOS helper, which refuses anything but the card: scripts/flash-mac.sh)
+```
+
+Put the card in the Brick and power it on. The first boot grows the root partition and
+walks you through setup; `docs/setup-file.md` is how to set it up beforehand, from the card.
+
+**Updates** come over Wi-Fi from that same address, with no account or credentials: Settings
+> Updates > Check now. An update is signed (`docs/updates.md`), downloads in the background
+and becomes the next boot entry; it never restarts the Brick. These images follow the
+`testing` channel, every push that passes CI, so the daily check starts off until there is
+a release channel to follow. Turn it on in Settings if you like.
+
+**If an update goes wrong**, hold SELECT while powering on: two buzzes, and the Brick boots
+the previous generation. That lasts one boot; Settings > Updates > Roll back makes it stick.
+This has been tested on a real Brick.
+
+**Not exercised yet:** nothing has been downloaded from that address or updated from it on a
+real Brick, and until the first build is published the links above are 404s. The update path
+has only run in VMs. See [What has and hasn't been tested](#what-has-and-hasnt-been-tested).
+Keep your data elsewhere.
+
+Mortar can't be sold and doesn't take donations (below, and `LICENSE`).
+
 ## Build a bare image
 
 You need [Nix](https://nixos.org/download) with flakes and a way to build
@@ -131,6 +166,10 @@ modules = [
   mortar.nixosModules.pack-ai
 ];
 ```
+
+A system of your own has over-the-air updates off, and doesn't follow the public channel,
+which would replace it with the published one. To update it over Wi-Fi, use a private bucket
+of your own: [docs/updates.md](docs/updates.md#a-flake-of-your-own).
 
 ### Add a pack
 
@@ -218,8 +257,13 @@ setup, pair) has not been retested since the system stopped using an initrd, so 
 it as unproven. Keep your data elsewhere and expect to debug over the serial console.
 
 Evaluated only: each pack and port on its own, a flake outside this repository using
-`mkSystem`, and core with no device module. Over-the-air updates have a VM test
-(`checks.*.mortar-update`) but have not been run on a device.
+`mkSystem`, and core with no device module.
+
+Over-the-air updates, both from the public cache and a private bucket, have a VM test
+(`checks.*.mortar-update`) and have not been run on a device. The Worker in front of the
+public cache (`cloudflare/`) has tests against a stand-in for R2, and has served real Nix in
+those VMs, but hasn't been deployed. The rollback at power-on (hold SELECT) has been tested on
+a real Brick.
 
 Apps in their own profiles (`lib.mkApp`, `mortar xcom`): unit tests, the shell's
 headless backend in the build sandbox, and a VM with real profiles and garbage

@@ -25,6 +25,8 @@ password_login = true            # see below
 network = true                   # the Brick is a USB network adapter
 
 [update]                         # over-the-air updates (docs/updates.md)
+auto_check = true                # Settings > Auto-check daily
+# Only for a private bucket (S3 mode). The published images need no credentials.
 access_key_id = "…"              # the read-only R2 token
 secret_access_key = "…"          # stored on the Brick, then blanked here
 ```
@@ -43,8 +45,8 @@ screen.
 | `ssh-keys/*.pub` | Any `.pub` file in the `ssh-keys/` folder next to `mortar.toml` is added the same way. `ssh-keys/root` itself is the file sshd reads. |
 | `ssh.password_login` | `true` (default): while the pairing code is on the Brick's screen it is also root's SSH password over the USB cable (only), so plain `ssh root@mortar.local` or `ssh-copy-id` work. It turns itself off when the first key arrives. `false`: only keys and `mortar pair`. |
 | `usb.network` | `false` turns the USB network off. |
-| `update.access_key_id`, `update.secret_access_key` | Read-only bucket credentials for over-the-air updates (needs `mortar.update.enable`). `mortar-update-init` moves them to `/var/lib/mortar-update/credentials` (root only) at boot, before `mortar-setup-apply` runs, and blanks the secret in the file. |
-| `update.auto_check` | `false`: Settings > Auto-check daily starts off. |
+| `update.access_key_id`, `update.secret_access_key` | Only for a private bucket (S3 mode, `mortar.update.bucket`): read-only credentials for over-the-air updates. The published images read a public cache and need neither. `mortar-update-init` moves them to `/var/lib/mortar-update/credentials` (root only) at boot, before `mortar-setup-apply` runs, and blanks the secret in the file. |
+| `update.auto_check` | `true` or `false`: Settings > Auto-check daily, on this Brick. |
 
 ## What happens at boot
 

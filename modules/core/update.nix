@@ -4,15 +4,20 @@
 # CI (.github/workflows/build.yml) or `mortar publish` builds the system,
 # pushes the closure, signed, to an S3-compatible bucket (Cloudflare R2) used
 # as a Nix binary cache, and then writes channels/<channel>/<configName>.json.
-# The Brick:
 #
-#   mortar-update-init        boot: moves `[update]` credentials from the
-#                             card's mortar.toml to /var/lib/mortar-update
+# A Brick reads that in one of two ways. `baseUrl` is the public cache, over
+# HTTPS with no credentials (configurations/public.nix, the published systems);
+# `bucket` and `endpoint` are a private bucket, with read-only credentials. Off
+# unless a configuration turns it on, so a flake of your own follows nothing
+# until it says what.
+#
+#   mortar-update-init        boot: moves `[update]` credentials, if any, from
+#                             the card's mortar.toml to /var/lib/mortar-update
 #                             (root, 0600), writes the first status
 #   mortar-update             `mortar-update check`: manifest (signature,
-#                             channel, configuration and age checked) ->
-#                             `nix copy --from s3://…` (signatures checked
-#                             against trustedKeys) -> system profile ->
+#                             channel, configuration and age checked) -> the
+#                             closure (signatures checked against this module's
+#                             keys, not nix.conf's) -> system profile ->
 #                             `switch-to-configuration boot`
 #   mortar-update-auto.timer  the same once a day, while Auto-check daily
 #                             is on (Settings > Auto-check daily)
@@ -21,8 +26,8 @@
 # and toasts "Update ready" when one is staged. Older generations stay in
 # the boot menu (rollback: docs/updates.md).
 #
-# No secrets here: bucket name, endpoint and the public key only. The read
-# credentials never enter the Nix store.
+# No secrets here: URLs and the public key only. Read credentials, where there
+# are any, never enter the Nix store.
 {
   config,
   lib,
@@ -38,19 +43,27 @@ let
 
   configFile = pkgs.writeText "mortar-update.json" (
     builtins.toJSON {
-      inherit (cfg) bucket endpoint region channel configName trustedKeys autoCheck minBattery keepGenerations;
+      inherit (cfg) baseUrl bucket endpoint region channel configName trustedKeys autoCheck minBattery keepGenerations;
+      upstreams = map (u: { inherit (u) url publicKey; }) cfg.upstreams;
       system = pkgs.stdenv.hostPlatform.system;
       minFreeMib = cfg.minFreeMiB;
       cardFile = cfg.cardFile;
       curl = "${pkgs.curl}/bin/curl";
       nix = "${config.nix.package}/bin/nix";
       nixEnv = "${config.nix.package}/bin/nix-env";
+      nixStore = "${config.nix.package}/bin/nix-store";
       nixCollectGarbage = "${config.nix.package}/bin/nix-collect-garbage";
     }
   );
 
   service = args: {
     path = [ config.nix.package pkgs.coreutils config.systemd.package ];
+    # A unit's environment has none of these, and both curl and Nix check TLS.
+    environment = {
+      CURL_CA_BUNDLE = config.security.pki.caBundle;
+      NIX_SSL_CERT_FILE = config.security.pki.caBundle;
+      SSL_CERT_FILE = config.security.pki.caBundle;
+    };
     serviceConfig = {
       Type = "oneshot";
       ExecStart = "${exe} ${args}";
@@ -72,32 +85,68 @@ in
       description = "The mortar-update package.";
     };
 
+    baseUrl = mkOption {
+      type = types.nullOr types.str;
+      default = null;
+      example = "https://mortar.angelfire.workers.dev";
+      description = ''
+        HTTPS mode: a public binary cache, read with no credentials. The manifest
+        is <baseUrl>/channels/<channel>/<configName>.json; the manifest's signature
+        and the keys here are what make it trustworthy, not the connection. Set this,
+        or `bucket` and `endpoint`.
+      '';
+    };
+
+    upstreams = mkOption {
+      type = types.listOf (types.submodule {
+        options = {
+          url = mkOption { type = types.str; description = "The binary cache."; };
+          publicKey = mkOption { type = types.str; description = "The key its paths are signed with."; };
+        };
+      });
+      default = [
+        {
+          url = "https://cache.nixos.org";
+          publicKey = "cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY=";
+        }
+      ];
+      defaultText = "cache.nixos.org";
+      description = ''
+        HTTPS mode: where the rest of a closure comes from, so that the public cache
+        holds only what these don't. Their keys count for the paths of a closure
+        named by a signed manifest, never for a manifest.
+      '';
+    };
+
     bucket = mkOption {
-      type = types.str;
+      type = types.nullOr types.str;
+      default = null;
       example = "mortar-cache";
-      description = "Bucket name.";
+      description = "S3 mode: bucket name. Reading it takes credentials on the Brick.";
     };
 
     endpoint = mkOption {
-      type = types.str;
+      type = types.nullOr types.str;
+      default = null;
       example = "https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com";
-      description = "S3 endpoint (R2: https://<ACCOUNT_ID>.r2.cloudflarestorage.com).";
+      description = "S3 mode: the endpoint (R2: https://<ACCOUNT_ID>.r2.cloudflarestorage.com).";
     };
 
     region = mkOption {
       type = types.str;
       default = "auto";
-      description = "S3 region (`auto` for R2).";
+      description = "S3 mode: the region (`auto` for R2).";
     };
 
     channel = mkOption {
       type = types.str;
       default = "mortar";
-      description = "The release channel: the manifest is channels/<channel>/<configName>.json in the bucket.";
+      description = "The channel this Brick follows: the manifest is channels/<channel>/<configName>.json.";
     };
 
     publicKey = mkOption {
-      type = types.str;
+      type = types.nullOr types.str;
+      default = null;
       example = "mortar-1:3l5X0L…=";
       description = ''
         Public half of the publisher's Nix signing key (`nix key
@@ -107,11 +156,11 @@ in
 
     trustedKeys = mkOption {
       type = types.listOf types.str;
-      default = [ cfg.publicKey ];
+      default = lib.optional (cfg.publicKey != null) cfg.publicKey;
       defaultText = lib.literalExpression "[ config.mortar.update.publicKey ]";
       description = ''
         The keys an update must be signed with: the channel manifest, and the
-        closure copied from the bucket (for that copy these replace
+        closure (for that download these and the upstreams' keys replace
         nix.settings.trusted-public-keys, so a key trusted for other caches
         counts for nothing here). List two while moving to a new key.
       '';
@@ -156,7 +205,7 @@ in
     cardFile = mkOption {
       type = types.str;
       default = "/boot/mortar.toml";
-      description = "The setup file on the card (its `[update]` section carries the read credentials).";
+      description = "The setup file on the card (its `[update]` section: auto_check, and in S3 mode the read credentials).";
     };
 
     configFile = mkOption {
@@ -177,8 +226,16 @@ in
   config = mkIf cfg.enable {
     assertions = [
       {
-        assertion = builtins.match "[^:]+:[A-Za-z0-9+/=]+" cfg.publicKey != null;
+        assertion = cfg.publicKey != null && builtins.match "[^:]+:[A-Za-z0-9+/=]+" cfg.publicKey != null;
         message = "mortar.update.publicKey: want `name:base64` (nix key convert-secret-to-public).";
+      }
+      {
+        assertion = (cfg.baseUrl != null) != (cfg.bucket != null || cfg.endpoint != null);
+        message = "mortar.update: set baseUrl (a public cache) or bucket and endpoint (a private one), not both.";
+      }
+      {
+        assertion = cfg.baseUrl != null || (cfg.bucket != null && cfg.endpoint != null);
+        message = "mortar.update: S3 mode needs both bucket and endpoint.";
       }
       {
         assertion = cfg.configName != null;
@@ -200,7 +257,7 @@ in
     # Before mortar-setup-apply: it hashes mortar.toml, and the secret is
     # blanked here first (so setup sees the file once, as it stays).
     systemd.services.mortar-update-init = {
-      description = "Mortar updates: credentials from the card, first status";
+      description = "Mortar updates: settings from the card, first status";
       wantedBy = [ "multi-user.target" ];
       before = [ "mortar-setup-apply.service" ];
       after = [ "local-fs.target" ];

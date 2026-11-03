@@ -2,13 +2,13 @@
 //! mortar-update: over-the-air updates on the Brick.
 //!
 //!   check     read the channel manifest and check its signature, channel,
-//!             configuration and age, download the system closure from the
-//!             bucket (`nix copy --from s3://…`, signatures checked by Nix
-//!             against the same keys), make it the next boot entry, tell the
-//!             shell
-//!   init      boot: take credentials from the card's mortar.toml, write
-//!             the first status
-//!   provision credentials from stdin (`mortar update-creds`)
+//!             configuration and age, download the system closure (HTTPS mode:
+//!             `nix-store --realise`, from the public cache and its upstreams;
+//!             S3 mode: `nix copy --from s3://…`; signatures checked by Nix),
+//!             make it the next boot entry, tell the shell
+//!   init      boot: take settings and any credentials from the card's
+//!             mortar.toml, write the first status
+//!   provision S3 mode: credentials from stdin (`mortar update-creds`)
 //!   auto      Auto-check daily on/off
 //!   rollback  make the previous generation the next boot entry
 //!   status    print the status
@@ -21,8 +21,8 @@ mod fsutil;
 mod power;
 mod status;
 
-use config::Config;
-use mortar_update::{Bucket, Credentials, FetchError, Manifest};
+use config::{Config, Source};
+use mortar_update::{Credentials, FetchError, Manifest};
 use status::{plan, Allow, Phase, Plan, State, Status};
 use std::fs;
 use std::io::{BufRead, BufReader, Read};
@@ -41,9 +41,9 @@ usage: mortar-update [--config FILE] <command>
                              configuration, e.g. bare to full)
   status [--json]            what the last check found
   auto on|off                Auto-check daily
-  provision --stdin          store bucket credentials read from stdin
+  provision --stdin          S3 mode: store bucket credentials read from stdin
                              (access_key_id = \"…\" / secret_access_key = \"…\")
-  init                       boot: take [update] credentials from the card's
+  init                       boot: take the [update] section of the card's
                              mortar.toml, write the first status
   rollback                   make the previous system the next boot entry
 
@@ -195,7 +195,8 @@ fn init(cx: &mut Ctx) -> Result<(), String> {
             Err(e) => eprintln!("mortar-update: {}: {}", card.display(), e.lines().next().unwrap_or(&e)),
         }
     }
-    let s = if creds::load(&cx.cfg.credentials_file()).is_some() {
+    // HTTPS mode needs no credentials, so it is set up as it stands.
+    let s = if !matches!(cx.cfg.source(), Ok(Source::S3(_))) || creds::load(&cx.cfg.credentials_file()).is_some() {
         cx.status(Phase::Idle, "Check now")
     } else {
         cx.status(Phase::Unconfigured, "Not set up").detail("no bucket credentials (docs/updates.md)")
@@ -205,13 +206,15 @@ fn init(cx: &mut Ctx) -> Result<(), String> {
 }
 
 fn provision_stdin(cx: &mut Ctx) -> Result<(), String> {
+    let Source::S3(b) = cx.cfg.source()? else {
+        return Err("this Brick reads a public cache and needs no credentials".into());
+    };
     let mut text = String::new();
     std::io::stdin().read_to_string(&mut text).map_err(|e| e.to_string())?;
     let c = creds::parse(&text)?;
     creds::save(&cx.cfg.credentials_file(), &c).map_err(|e| e.to_string())?;
     println!("stored credentials (key {}) in {}", c.access_key_id, cx.cfg.credentials_file().display());
     // try them
-    let b = cx.cfg.bucket()?;
     match b.get(&c, &cx.cfg.manifest_key(), &cx.cfg.curl) {
         Ok(bytes) => match Manifest::parse(&bytes).and_then(|m| m.verify(&cx.cfg.trusted_keys).map(|()| m)) {
             Ok(m) => println!("bucket ok: {} has {}", cx.cfg.manifest_key(), m.short()),
@@ -302,17 +305,22 @@ fn refuse(cfg: &Config, m: &Manifest, allow: Allow) -> Option<(&'static str, Str
 }
 
 fn do_check(cx: &mut Ctx, allow: Allow) -> Status {
-    let Some(creds) = creds::load(&cx.cfg.credentials_file()) else {
-        return cx.status(Phase::Unconfigured, "Not set up").detail("no bucket credentials (docs/updates.md)");
-    };
-    let bucket = match cx.cfg.bucket() {
-        Ok(b) => b,
+    let source = match cx.cfg.source() {
+        Ok(s) => s,
         Err(e) => return cx.status(Phase::Error, "Bad configuration").detail(e),
     };
+    let creds = creds::load(&cx.cfg.credentials_file());
+    if matches!(source, Source::S3(_)) && creds.is_none() {
+        return cx.status(Phase::Unconfigured, "Not set up").detail("no bucket credentials (docs/updates.md)");
+    }
     cx.write(&cx.status(Phase::Checking, "Checking…"));
 
     let key = cx.cfg.manifest_key();
-    let m = match bucket.get(&creds, &key, &cx.cfg.curl) {
+    let fetched = match &source {
+        Source::Https(base) => mortar_update::get_public(&format!("{base}/{key}"), &cx.cfg.curl),
+        Source::S3(bucket) => bucket.get(creds.as_ref().expect("checked above"), &key, &cx.cfg.curl),
+    };
+    let m = match fetched {
         Ok(b) => match Manifest::parse(&b) {
             Ok(m) => m,
             Err(e) => return cx.status(Phase::Error, "Bad update manifest").detail(e),
@@ -378,7 +386,7 @@ fn do_check(cx: &mut Ctx, allow: Allow) -> Status {
     s.detail = m.short();
     s.available = Some(m.clone());
     cx.write(&s);
-    if let Err((offline, e)) = download(&cx.cfg, &bucket, &creds, &m.toplevel) {
+    if let Err((offline, e)) = download(&cx.cfg, &source, creds.as_ref(), &m.toplevel) {
         let (phase, msg) = if offline { (Phase::Offline, "Download paused") } else { (Phase::Error, "Download failed") };
         let mut s = cx.status(phase, msg).detail(e);
         s.available = Some(m);
@@ -423,24 +431,49 @@ fn ensure_space(cfg: &Config) -> Result<(), String> {
     }
 }
 
-/// `nix copy --from s3://…` into the local store. Every store path arrives
-/// whole or not at all, so an interrupted download resumes where it
-/// stopped. Err((offline, message)).
-fn download(cfg: &Config, bucket: &Bucket, creds: &Credentials, toplevel: &str) -> Result<(), (bool, String)> {
-    let url = bucket.store_url(&[]);
-    eprintln!("mortar-update: nix copy --from {url} {toplevel}");
-    let mut c = Command::new(&cfg.nix);
-    c.args(["--extra-experimental-features", "nix-command", "copy", "--from", &url])
-        // For this copy only the publisher's keys count, not what nix.conf
-        // trusts for other caches (cache.nixos.org): a path in the bucket with
-        // someone else's signature isn't part of a published system.
-        .args(["--option", "trusted-public-keys", &cfg.trusted_keys.join(" ")])
-        .args(["--option", "connect-timeout", "20", "--option", "stalled-download-timeout", "120"])
-        .args(["--option", "download-attempts", "3"])
-        .arg(toplevel)
-        .envs(creds.env())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped());
+/// How the closure reaches the local store. In both, only the keys named here
+/// count, not what nix.conf trusts for other caches: a path signed by someone
+/// else isn't part of a published system.
+fn download_command(cfg: &Config, source: &Source, creds: Option<&Credentials>, toplevel: &str) -> Command {
+    let timeouts = ["--option", "connect-timeout", "20", "--option", "stalled-download-timeout", "120", "--option", "download-attempts", "3"];
+    match source {
+        // `nix copy --from` wants the whole closure in one store, which the
+        // public cache doesn't have: substituting walks the closure and takes
+        // each path from whichever cache holds it.
+        Source::Https(base) => {
+            let mut substituters = vec![base.clone()];
+            substituters.extend(cfg.upstreams.iter().map(|u| u.url.clone()));
+            let mut c = Command::new(&cfg.nix_store);
+            c.args(["--realise", toplevel])
+                .args(["--option", "substituters", &substituters.join(" ")])
+                .args(["--option", "trusted-public-keys", &cfg.closure_keys().join(" ")])
+                .args(["--option", "require-sigs", "true", "--option", "max-jobs", "0", "--option", "builders", ""])
+                // a repaired cache counts at once, not when Nix's memory of it expires
+                .args(["--option", "narinfo-cache-negative-ttl", "0", "--option", "narinfo-cache-positive-ttl", "0"])
+                .args(timeouts);
+            c
+        }
+        Source::S3(bucket) => {
+            let url = bucket.store_url(&[]);
+            let mut c = Command::new(&cfg.nix);
+            c.args(["--extra-experimental-features", "nix-command", "copy", "--from", &url])
+                .args(["--option", "trusted-public-keys", &cfg.trusted_keys.join(" ")])
+                .args(timeouts)
+                .arg(toplevel);
+            if let Some(creds) = creds {
+                c.envs(creds.env());
+            }
+            c
+        }
+    }
+}
+
+/// Download into the local store. Every store path arrives whole or not at all,
+/// so an interrupted download resumes where it stopped. Err((offline, message)).
+fn download(cfg: &Config, source: &Source, creds: Option<&Credentials>, toplevel: &str) -> Result<(), (bool, String)> {
+    let mut c = download_command(cfg, source, creds, toplevel);
+    eprintln!("mortar-update: {:?}", c.get_args().collect::<Vec<_>>());
+    c.stdout(Stdio::null()).stderr(Stdio::piped());
     let mut child = c.spawn().map_err(|e| (false, format!("{}: {e}", cfg.nix)))?;
     // pass the log through to the journal, keep the tail for the status
     let mut tail: Vec<String> = Vec::new();
@@ -461,10 +494,10 @@ fn download(cfg: &Config, bucket: &Bucket, creds: &Credentials, toplevel: &str) 
     let all = tail.join("\n");
     let err = tail.iter().rev().find(|l| l.contains("error")).cloned().unwrap_or_else(|| tail.last().cloned().unwrap_or_default());
     let low = all.to_ascii_lowercase();
-    if low.contains("signature") {
+    if low.contains("signature") || low.contains("not signed") {
         return Err((false, "not signed by a trusted key (mortar.update.trustedKeys)".into()));
     }
-    let offline = ["could not resolve", "couldn't resolve", "couldn't connect", "could not connect", "timeout", "timed out", "network is unreachable", "connection reset"]
+    let offline = ["could not resolve", "couldn't resolve", "couldn't connect", "could not connect", "failed to connect", "unable to download", "timeout", "timed out", "network is unreachable", "connection reset"]
         .iter()
         .any(|k| low.contains(k));
     Err((offline, err.trim().trim_start_matches("error:").trim().to_string()))
@@ -546,6 +579,25 @@ mod tests {
         m
     }
 
+    /// HTTPS mode: every path is checked against the publisher's and the
+    /// upstreams' keys and nothing else, from these caches and no others.
+    #[test]
+    fn https_download_trusts_only_the_named_keys() {
+        let cfg: Config = serde_json::from_str(
+            r#"{"baseUrl":"https://cache.example","configName":"brick-bare","trustedKeys":["mine:AA=="],
+                "upstreams":[{"url":"https://up.example","publicKey":"up:BB=="}]}"#,
+        )
+        .unwrap();
+        let c = download_command(&cfg, &cfg.source().unwrap(), None, "/nix/store/x-y");
+        let args: Vec<String> = c.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+        let opt = |name: &str| args.iter().position(|a| a == name).map(|i| args[i + 1].as_str());
+        assert_eq!(opt("trusted-public-keys"), Some("mine:AA== up:BB=="));
+        assert_eq!(opt("substituters"), Some("https://cache.example https://up.example"));
+        assert_eq!(opt("require-sigs"), Some("true"));
+        assert_eq!(opt("--realise"), Some("/nix/store/x-y"));
+        assert_eq!(c.get_envs().count(), 0);
+    }
+
     #[test]
     fn refusals() {
         let (cfg, m, no) = (config(), manifest(), Allow::default());
@@ -577,5 +629,11 @@ mod tests {
         let mut empty = config();
         empty.trusted_keys.clear();
         assert_eq!(refuse(&empty, &m, no).unwrap().0, "Update not trusted");
+
+        // an upstream's key counts for closures, never for a manifest
+        let mut only_upstream = config();
+        only_upstream.upstreams = vec![config::Upstream { url: "https://u".into(), public_key: only_upstream.trusted_keys[0].clone() }];
+        only_upstream.trusted_keys.clear();
+        assert_eq!(refuse(&only_upstream, &m, no).unwrap().0, "Update not trusted");
     }
 }
