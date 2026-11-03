@@ -48,7 +48,7 @@
 # Screen: 40x20 text cells; at 1024x768 the 24x36 font gives a 960x720 grid
 # centred with a 32/24 px border, integer pixels, no scaling.
 #
-# Audio: SDL picks PipeWire (the session's sound server, mortar-apps.nix);
+# Audio: SDL picks PipeWire (the session's sound server, modules/core/audio.nix);
 # 44.1 kHz, 512 frames (11.6 ms) by default, both changeable in Settings >
 # Audio. USB audio interfaces and Bluetooth headphones appear as output
 # devices there too. SDL_AUDIO_DRIVER=alsa still works (through

@@ -73,12 +73,12 @@ pub fn demo(screen: &str) -> Result<Model, String> {
         "edit" => {
             ask(&mut m, "Make the terminal font a bit bigger");
             feed(&mut m, vec![
-                tool("t3", "Read", json!({"file_path":"/root/mortar/modules/mortar-shell.nix"})),
+                tool("t3", "Read", json!({"file_path":"/root/mortar/modules/core/shell.nix"})),
                 result("t3", "(412 lines)", false),
-                tool("t4", "Edit", json!({"file_path":"/root/mortar/modules/mortar-shell.nix","old_string":"default = 13;","new_string":"default = 15;"})),
+                tool("t4", "Edit", json!({"file_path":"/root/mortar/modules/core/shell.nix","old_string":"default = 13;","new_string":"default = 15;"})),
                 json!({"type":"control_request","request_id":"r2","request":{
                     "subtype":"can_use_tool","tool_name":"Edit","tool_use_id":"t4",
-                    "input":{"file_path":"/root/mortar/modules/mortar-shell.nix","old_string":"        default = 13;","new_string":"        default = 15;"},
+                    "input":{"file_path":"/root/mortar/modules/core/shell.nix","old_string":"        default = 13;","new_string":"        default = 15;"},
                     "permission_suggestions":[{"type":"setMode","mode":"acceptEdits","destination":"session"}]}}),
                 json!({"type":"control_request","request_id":"r3","request":{
                     "subtype":"can_use_tool","tool_name":"Bash","tool_use_id":"t5",

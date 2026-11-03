@@ -20,7 +20,7 @@ sha256 in jkingston/trimui-brick-firmware `package/brick-{radio,gpu}/files.json`
 | `lib/firmware/rgx.fw.22.102.54.38`, `rgx.sh.22.102.54.38` | `pvrsrvkm` (GE8300) |
 | `gpu` output: `lib/lib{EGL,GLESv2,GLES_CM,IMGegl,glslcompiler,usc,srv_um,pvrNULL_WSEGL}.so*` | DDK 1.19 userspace. It is not installed; see its `share/doc/.../README` |
 
-`modules/brick-firmware.nix` (`mortar.firmware.enable`, default true):
+`devices/brick/firmware.nix` (`mortar.firmware.enable`, default true):
 
 - Adds the firmware to `hardware.firmware`.
 - Turns on iwd instead of wpa_supplicant. networkd runs DHCP on wlan0.

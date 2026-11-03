@@ -160,7 +160,7 @@ pub fn rgb1555(p: u16) -> u32 {
 }
 
 /// How the picture is scaled (the user picks it per system or per game;
-/// the system's default is in modules/mortar-play.nix).
+/// the system's default is in modules/packs/emulation.nix).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Filter {

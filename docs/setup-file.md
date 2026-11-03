@@ -3,7 +3,7 @@
 Set up a Brick before its first boot from any computer, the way Raspberry Pi
 images work: flash the card, open its `NIXOS_BOOT` partition, edit
 `mortar.toml`. New images carry a blank, commented copy. With
-`mortar.setup.enable = true` (modules/mortar-setup.nix) the Brick applies it
+`mortar.setup.enable = true` (modules/core/setup.nix) the Brick applies it
 at boot, before Wi-Fi, SSH and mDNS start.
 
 ```toml

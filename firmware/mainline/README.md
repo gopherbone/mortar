@@ -185,8 +185,9 @@ selection without UART would need a `gpio input` key check in bootcmd.
 The integration lives in `devices/brick/`.
 
 - Packages are `pkgs.callPackage ./firmware/mainline/u-boot.nix { }` and the
-  matching `tf-a.nix` and `scp.nix`. Build them natively for aarch64-linux.
-- For the SD image, add `(import ./image/build-image-mainline.nix { })` to the
-  NixOS modules. Then build `config.system.build.sdImage`.
-- Apply the overlay with
-  `hardware.deviceTree.overlays = [ { name = "tf-a-reserved"; dtsFile = ./firmware/mainline/reserved-memory.dtso; } ]`.
+  matching `tf-a.nix` and `scp.nix`. Build them natively for aarch64-linux
+  (`nix build .#u-boot-mainline`).
+- `devices/brick/image.nix` builds the SD image: `nix build .#sd-image`, which is
+  `config.system.build.sdImage` of a system importing `devices/brick`.
+- `devices/brick/default.nix` applies the overlay,
+  `hardware.trimui-brick.extraDtOverlays` with `reserved-memory.dtso`.

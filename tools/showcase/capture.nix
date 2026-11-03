@@ -153,7 +153,7 @@ let
     EOF
   '';
 
-  # The Brick's terminal (modules/mortar-shell.nix, modules/mortar-zsh.nix):
+  # The Brick's terminal (modules/core/shell.nix, modules/packs/terminal.nix):
   # foot in JetBrains Mono and the Pond palette, zsh with the Mortar prompt,
   # autosuggestions and the keyboard's suggestion chips.
   footIni = writeText "foot.ini" ''

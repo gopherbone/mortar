@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 /// Where the current choice comes from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Scope {
-    /// The system's default (modules/mortar-play.nix).
+    /// The system's default (modules/packs/emulation.nix).
     Default,
     /// Kept for every game of the system.
     System,

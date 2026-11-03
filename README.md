@@ -129,8 +129,8 @@ still assumes more than it covers: a 1024x768 panel and Brick button codes in Ru
 `gpio-vibrator` for rumble, `usb0` and `wlan0`, and the card name `Codec` when PipeWire
 is off.
 
-The earlier setup (`firmware/`'s vendor-boot0 chain, `re_tools/`, `harness/`,
-`FINDINGS.md`) is brittonr's work, kept for reference; Mortar doesn't boot it.
+An earlier boot path (a vendor `boot0` chain and the tools for it, brittonr's work)
+is gone from the tree; the git history keeps it. Mortar doesn't use it.
 
 ## Credits
 
@@ -154,5 +154,5 @@ The earlier setup (`firmware/`'s vendor-boot0 chain, `re_tools/`, `harness/`,
 
 GPL-2.0-or-later for code in this repository (see `LICENSE`), except
 `pkgs/puzzlescript`, which is MIT (its own `LICENSE`). Patches keep their upstream
-licenses. The TrimUI binaries under `firmware/` and `re_tools/` are covered by neither
-(see `LICENSE`).
+licenses. The repository holds no vendor binaries; older commits do, and they are
+covered by neither (see `LICENSE`). Builds fetch TrimUI's files at build time.

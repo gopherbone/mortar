@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //! Shell configuration: the launcher entries and system actions, as JSON
-//! written by the NixOS module (modules/mortar-shell.nix) to
+//! written by the NixOS module (modules/core/shell.nix) to
 //! /etc/mortar-shell/config.json.
 
 use mortar_ui::icons::Icon;
@@ -209,10 +209,10 @@ pub struct Config {
     /// The shell's own screens: renderer, motion, sounds, haptics.
     #[serde(default)]
     pub ui: UiConfig,
-    /// Over-the-air updates (modules/mortar-update.nix): Settings > Updates.
+    /// Over-the-air updates (modules/core/update.nix): Settings > Updates.
     #[serde(default)]
     pub update: Option<UpdateConfig>,
-    /// mortar-play's games, one app each (modules/mortar-play.nix): the
+    /// mortar-play's games, one app each (modules/packs/emulation.nix): the
     /// Games category's library, the game panel, hibernation.
     #[serde(default)]
     pub games: Option<GamesConfig>,

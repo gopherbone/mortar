@@ -36,7 +36,7 @@ let
     name = "mortar-user-migrate";
     runtimeInputs = with pkgs; [ coreutils findutils gnused jq ];
     text = ''
-      # Move the root session's data to ${cfg.name} (once; see mortar-user.nix).
+      # Move the root session's data to ${cfg.name} (once; see the header of this file).
       # (MORTAR_MIGRATE_* only for the build-time test.)
       user=''${MORTAR_MIGRATE_USER:-${lib.escapeShellArg cfg.name}}
       group=''${MORTAR_MIGRATE_GROUP:-${lib.escapeShellArg group}}

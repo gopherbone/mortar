@@ -3,7 +3,7 @@
 //! exponential pitch sweep, band-passed noise with a swept centre, attack +
 //! exponential decay envelopes) mirroring the prototype's WebAudio SFX
 //! table, and a player thread that mixes voices into ALSA ("default": the
-//! codec's dmix in modules/mortar-apps.nix, 44.1 kHz).
+//! codec's dmix in modules/core/audio.nix, 44.1 kHz).
 //!
 //! The player opens the PCM on the first sound and closes it after a few
 //! seconds of silence, so an idle shell holds no audio device. Writes block

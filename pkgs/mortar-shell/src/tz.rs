@@ -7,7 +7,7 @@
 //!
 //! The zone is set with `timedatectl set-timezone` (config
 //! `actions.timezoneSet`); NixOS leaves /etc/localtime to timedated when
-//! `time.timeZone` is null (modules/mortar-base.nix).
+//! `time.timeZone` is null (modules/core/base.nix).
 
 use std::collections::HashMap;
 use std::io::{BufRead, Write};

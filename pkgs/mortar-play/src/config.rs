@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //! The frontend's config: directories, hotkeys and the curated systems
 //! (core, option presets, controls, scaling, BIOS). Written by
-//! modules/mortar-play.nix to /etc/mortar-play/config.json; nothing is
+//! modules/packs/emulation.nix to /etc/mortar-play/config.json; nothing is
 //! configurable from the device itself by design.
 
 use crate::input::{Button, GAME_BUTTONS, PadId};

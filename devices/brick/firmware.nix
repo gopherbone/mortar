@@ -16,9 +16,8 @@
 # The firmware package is unfree; the flake's allowUnfreePredicate must allow
 # "trimui-brick-firmware" (and "brick-bluetooth-identity" is GPL-2.0, fine).
 #
-# Wi-Fi limits (brick-port-survey.md, jkingston kernel drivers/net/wireless/
-# xradio): 2.4 GHz only, station mode only (no AP/hotspot, no P2P), no WPA3/
-# SAE, HT20 only (no HT40/SGI/STBC/GF) and HT needs the driver's `allow_ht`
+# Wi-Fi limits (jkingston kernel drivers/net/wireless/xradio): 2.4 GHz only,
+# station mode only (no AP/hotspot, no P2P), no WPA3/SAE, HT20 only (no HT40/SGI/STBC/GF) and HT needs the driver's `allow_ht`
 # parameter. The driver has no MAC in the DT, so wlan0 gets a random MAC on
 # every boot (eth_random_addr) unless something pins it.
 #

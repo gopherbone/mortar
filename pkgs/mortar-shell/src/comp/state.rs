@@ -793,7 +793,7 @@ impl Shell {
         self.check_resume();
         self.last_input = Instant::now();
         // the power key belongs to the shell (logind ignores it, see
-        // modules/mortar-shell.nix): tap = sleep/wake, hold = power menu
+        // modules/core/shell.nix): tap = sleep/wake, hold = power menu
         if code == codes::KEY_POWER {
             self.power_key(value);
             return;

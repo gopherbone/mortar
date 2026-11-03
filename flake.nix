@@ -97,7 +97,7 @@
       checks = lib.genAttrs linuxSystems (system:
         let pkgs = nixpkgs.legacyPackages.${system};
         in {
-          # over-the-air updates end to end (MinIO as the bucket)
+          # over-the-air updates end to end (Garage as the bucket)
           mortar-update = import ./tests/mortar-update.nix { inherit pkgs; };
           # the engine without bundled games (pkgs/puzzlescript)
           puzzlescript = pkgs.callPackage ./pkgs/puzzlescript/check.nix {
@@ -111,10 +111,8 @@
           default = pkgs.mkShell {
             buildInputs = with pkgs; [
               dtc dosfstools e2fsprogs mtools parted util-linux zstd file python3
-              git-lfs
             ];
             shellHook = ''
-              git-lfs install --local > /dev/null 2>&1 || true
               echo "Mortar dev shell"
               echo "  nix build .#sd-image       - bare SD card image"
               echo "  nix build .#sd-image-full  - everything"

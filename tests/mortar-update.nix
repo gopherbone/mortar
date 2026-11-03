@@ -4,7 +4,7 @@
 #   ci     Garage (an S3 server standing in for Cloudflare R2, region
 #          "auto" like R2) and the publisher: `mortar publish --path …`
 #          pushes a signed closure and the manifest with a write key
-#   brick  modules/mortar-update.nix with a read-only key from the card's
+#   brick  modules/core/update.nix with a read-only key from the card's
 #          mortar.toml; `mortar-update check` downloads and stages
 #
 # Also: the read key cannot write, unsigned closures are refused, low

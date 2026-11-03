@@ -10,7 +10,7 @@ use std::process::{Command, Stdio};
 /// region `auto`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Bucket {
-    /// `https://host[:port]` (`http://` for a local MinIO).
+    /// `https://host[:port]` (`http://` for a local Garage).
     pub endpoint: String,
     pub bucket: String,
     pub region: String,
@@ -106,7 +106,7 @@ impl Bucket {
         u
     }
 
-    /// Path-style object URL (R2 and MinIO both take it).
+    /// Path-style object URL (R2 and Garage both take it).
     pub fn object_url(&self, key: &str) -> String {
         format!("{}/{}/{}", self.endpoint, self.bucket, key.trim_start_matches('/'))
     }

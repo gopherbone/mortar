@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
-# mortar-update: over-the-air updates on the Brick (modules/mortar-update.nix,
+# mortar-update: over-the-air updates on the Brick (modules/core/update.nix,
 # docs/updates.md). The library part (manifest, bucket access) is shared
 # with the `mortar` CLI's `publish`.
 { lib, rustPlatform }:

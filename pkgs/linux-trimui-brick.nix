@@ -267,7 +267,7 @@ buildLinux (
       # when it is on the command line.
       U_SERIAL_CONSOLE = yes;
 
-      # --- zram swap (zramSwap in modules/mortar-base.nix; without the
+      # --- zram swap (zramSwap in modules/core/base.nix; without the
       #     module the dev-zram0 job never finishes and blocks reboot) ---
       ZSMALLOC = module;
       ZRAM = module;

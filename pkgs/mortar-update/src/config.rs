@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-//! /etc/mortar-update/config.json, written by modules/mortar-update.nix.
+//! /etc/mortar-update/config.json, written by modules/core/update.nix.
 //! No secrets: the credentials live in `<stateDir>/credentials` (root, 0600).
 
 use serde::Deserialize;

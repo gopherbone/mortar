@@ -61,7 +61,7 @@ pkgs/mortar-shell/
     gl.rs            GLES 2 renderer of scenes on the stock PowerVR libs
     gpu.rs           GPU UI presenter: dumb-buffer targets, app textures
   test.nix           headless integration test (screenshots, transition frames)
-modules/mortar-shell.nix
+modules/core/shell.nix
 ```
 
 The UI code (software renderer, fonts, icons, theme tokens, widgets,
@@ -110,7 +110,7 @@ on black.
 ## Games (mortar-play)
 
 Every game is its own app (pkgs/mortar-play, `mortar.shell.games`, set by
-modules/mortar-play.nix), so games sit in Running next to the M8 and the
+modules/packs/emulation.nix), so games sit in Running next to the M8 and the
 terminal, each titled with its cleaned name and system ("Pocket King ·
 GBC").
 
@@ -498,13 +498,13 @@ blocks with 1 px ink outlines, isometric illustrations.
   `mortar-shell tz-offsets` child process, since setting TZ in the
   threaded compositor is unsafe). A sets it with `timedatectl
   set-timezone` (`actions.timezoneSet`). The configuration carries no
-  zone (`time.timeZone = null` in modules/mortar-base.nix: it would say
+  zone (`time.timeZone = null` in modules/core/base.nix: it would say
   where the Brick is), so NixOS leaves /etc/localtime to timedated and
   the choice survives deploys and reboots. The clock calls tzset() before
   localtime_r: with TZ unset glibc then re-reads /etc/localtime when it
   changed (verified on the device: a running process follows the change
   within a second); localtime_r alone never would.
-- Power key (logind ignores it, see modules/mortar-shell.nix; the PMIC's
+- Power key (logind ignores it, see modules/core/shell.nix; the PMIC's
   own long-hold force-off is untouched): a tap sleeps, a tap or any
   button wakes; holding it shows a filling "hold for power menu" pill and
   at 0.8 s opens the power menu (Sleep, Restart, Power off; the last two
@@ -780,7 +780,7 @@ with any client that takes keyboard input.
 `src/osk_suggest.rs` (model, protocol, drawing), `src/comp/suggest.rs`
 (socket), `zsh/mortar-osk.zsh` (installed in
 `share/mortar-shell/`, sourced by /etc/zshrc from
-modules/mortar-zsh.nix).
+modules/packs/terminal.nix).
 
 - zsh in a terminal the shell started (MORTAR_APP set) connects once to
   `$XDG_RUNTIME_DIR/mortar-osk.sock` (0600; peers of another uid are
@@ -1110,7 +1110,7 @@ shell through it; over SSH it gives remote screenshots and app control
 
 ## Session and NixOS integration
 
-`modules/mortar-shell.nix`, off by default:
+`modules/core/shell.nix`, off by default:
 
 - Adds the greeter session "Mortar" (order 0, so it is first), running
   `mortar-shell-session`: `mortar-shell run` under `systemd-cat -t

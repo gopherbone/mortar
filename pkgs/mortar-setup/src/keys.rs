@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //! root's authorized keys: `<card>/ssh-keys/root` (the card's FAT partition,
 //! editable from any computer) and `~root/.ssh/authorized_keys` (where
-//! ssh-copy-id puts them). sshd reads both (modules/mortar-usb.nix).
+//! ssh-copy-id puts them). sshd reads both (modules/core/usb.nix).
 
 use crate::control::KeyView;
 use crate::state::{write_atomic, Paths};

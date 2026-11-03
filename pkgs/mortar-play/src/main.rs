@@ -10,7 +10,7 @@
 //!   mortar-play --script "wait 30, press a, shot x.png" [...]   scripted input
 //!
 //! The library UI starts by default. Config: /etc/mortar-play/config.json
-//! (modules/mortar-play.nix), or $MORTAR_PLAY_CONFIG.
+//! (modules/packs/emulation.nix), or $MORTAR_PLAY_CONFIG.
 
 mod app;
 mod audio;

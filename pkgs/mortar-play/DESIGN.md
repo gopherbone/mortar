@@ -4,7 +4,7 @@ A libretro frontend for Mortar with the MinUI idea: a curated core per
 system, preconfigured, no settings on the device. Copy games in, pick one,
 play. It is not RetroArch: there are no per-game option menus, shaders,
 overlays, netplay or achievements. All the choices that can be made ahead of
-time are made in `modules/mortar-play.nix`.
+time are made in `modules/packs/emulation.nix`.
 
 ## Pieces
 
@@ -26,7 +26,7 @@ pkgs/mortar-play/
   src/testrom.rs       a tiny NES program assembled in Rust (tests need no third-party ROM)
   test.nix             integration test (passthru.tests.integration)
   test-shell.nix       inside mortar-shell, games as apps (passthru.tests.shell)
-modules/mortar-play.nix  curated systems, presets, dirs, launcher entries
+modules/packs/emulation.nix  curated systems, presets, dirs, launcher entries
 ```
 
 ## Frontend core
@@ -71,7 +71,7 @@ asked (vertical arcade games), then laid out on the 1024x768 screen.
 steps through them and applies at once; A keeps the choice for the game,
 X for all the system's games (`src/display.rs`, kept in
 `<stateDir>/display.json`, a game's own choice over its system's, over the
-system's default `scaling` / `aspect` in modules/mortar-play.nix).
+system's default `scaling` / `aspect` in modules/packs/emulation.nix).
 
 | filter | what | inside the shell | CPU per frame (PS1 320x240, 1008 MHz) | default for |
 |---|---|---|---|---|
@@ -129,7 +129,7 @@ Presenters:
 
 Cores produce samples at their own rate (32040.5 Hz SNES, 32768 Hz GB/GBA,
 44.1 or 48 kHz others). The device runs at 44.1 kHz (dmix on the codec,
-`modules/mortar-apps.nix`); SDL3 opens the default device, and the stream's
+`modules/core/audio.nix`); SDL3 opens the default device, and the stream's
 input format is set to the device format so SDL does no conversion of its
 own. `audio::Resampler` is a cubic Hermite resampler on interleaved stereo
 i16 that carries its history across frames (no seams).
@@ -273,7 +273,7 @@ lime selection, Instrument Serif titles), rendered on the CPU into a
   with its HLE BIOS: warned once per run, "Play anyway"), core load errors,
   empty folders.
 
-## Systems (defaults in modules/mortar-play.nix)
+## Systems (defaults in modules/packs/emulation.nix)
 
 | System | Core (nixpkgs `libretro.*`) | Licence | Notes |
 |---|---|---|---|

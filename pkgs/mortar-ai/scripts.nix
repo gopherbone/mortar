@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 # The terminal side of Mortar AI (scripts/*.sh), built with the paths and
-# names the NixOS module (modules/mortar-ai.nix) or a test chooses.
+# names the NixOS module (modules/packs/ai.nix) or a test chooses.
 #
 #   mortar-claude                foot runs this: attach to (or create) the
 #                                persistent "claude" tmux session

@@ -42,7 +42,7 @@ usage: mortar-update [--config FILE] <command>
                              mortar.toml, write the first status
   rollback                   make the previous system the next boot entry
 
-config: /etc/mortar-update/config.json (modules/mortar-update.nix)";
+config: /etc/mortar-update/config.json (modules/core/update.nix)";
 
 struct Ctx {
     cfg: Config,

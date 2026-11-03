@@ -2,7 +2,7 @@
 # mortar-ai: controller-friendly Claude Code front end (a Wayland app for
 # mortar-shell) and the sign-in helper (`mortar-ai pair`). Pure Rust,
 # software rendered with the mortar-ui toolkit (path dependency, library
-# only). See DESIGN.md; the NixOS side is modules/mortar-ai.nix.
+# only). See DESIGN.md; the NixOS side is modules/packs/ai.nix.
 #
 #   passthru.tests.headless   mortar-shell on its headless backend runs
 #                             mortar-ai against a fake `claude -p` and the

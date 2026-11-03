@@ -33,7 +33,7 @@ let
     foreground=e1ebf7
   '';
   # zsh with the OSK suggestion plugin (the Brick's /etc/zshrc loads it the
-  # same way, modules/mortar-zsh.nix)
+  # same way, modules/packs/terminal.nix)
   zshrc = writeText "zshrc" ''
     HISTFILE=$HOME/.zsh_history SAVEHIST=100 HISTSIZE=100
     autoload -U compinit && compinit -C -d $HOME/.zcompdump

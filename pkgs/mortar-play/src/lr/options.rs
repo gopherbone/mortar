@@ -3,7 +3,7 @@
 //! SET_VARIABLES, or v1/v2 definitions); the frontend answers GET_VARIABLE
 //! with the system preset from the config when it names a valid value, else
 //! with the core's default. There is no options menu by design: presets
-//! are curated in modules/mortar-play.nix.
+//! are curated in modules/packs/emulation.nix.
 
 use std::collections::{BTreeMap, HashMap};
 use std::ffi::{CStr, CString, c_char};

@@ -39,7 +39,7 @@ rustPlatform.buildRustPackage {
 
   passthru = {
     inherit fonts;
-    # the blank setup file put on new images (modules/mortar-setup.nix)
+    # the blank setup file put on new images (modules/core/setup.nix)
     template = ./mortar.toml;
   };
 

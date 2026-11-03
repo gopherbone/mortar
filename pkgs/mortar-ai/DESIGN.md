@@ -8,7 +8,7 @@ harness, nothing on-device.
 
 ## What there is
 
-`modules/mortar-ai.nix` (`mortar.ai.enable`, off by default) adds three
+`modules/packs/ai.nix` (`mortar.ai.enable`, off by default) adds three
 launcher entries to the shell and the plumbing behind them:
 
 | Entry | What it runs | For |
@@ -31,7 +31,7 @@ pkgs/mortar-ai/
   src/preview.rs   demo states to PNG (any OS)
   scripts/*.sh     the terminal side (built by scripts.nix with the module's paths)
   test.nix         headless test in mortar-shell with a fake claude
-modules/mortar-ai.nix
+modules/packs/ai.nix
 ```
 
 ## Persistence: tmux

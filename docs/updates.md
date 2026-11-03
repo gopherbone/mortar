@@ -90,7 +90,7 @@ nix key convert-secret-to-public < ~/.config/mortar/signing-key   # -> mortar-1:
 
 ### 3. flake.nix
 
-Fill in the block next to `./modules/mortar-update.nix`:
+Fill in the block next to `./modules/core/update.nix`:
 
 ```nix
 mortar.update = {

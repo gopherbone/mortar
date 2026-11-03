@@ -513,7 +513,7 @@ pub fn detail(tool: &str, input: &Value) -> String {
     }
 }
 
-/// "Edit mortar-shell.nix" when Claude Code sends no description.
+/// "Edit shell.nix" when Claude Code sends no description.
 fn default_title(tool: &str, input: &Value) -> String {
     let file = |k: &str| str_of(input, k).rsplit('/').next().unwrap_or("").to_string();
     match tool {
