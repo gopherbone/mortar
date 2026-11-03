@@ -57,7 +57,7 @@
             config.allowUnfreePredicate = pkg: builtins.elem (lib.getName pkg) full.mortar.unfree;
           };
         in {
-          # SD images (aarch64-linux; embed the SCP blob: local only, never publish).
+          # SD images (aarch64-linux; embed TrimUI's SCP blob, see docs/updates.md).
           sd-image = bare.system.build.sdImage;
           sd-image-full = full.system.build.sdImage;
           default = self.packages.${system}.sd-image;
@@ -94,7 +94,8 @@
           default = self.apps.${system}.mortar;
         });
 
-      # VM tests: `nix build .#checks.aarch64-linux.mortar-update`
+      # `nix build .#checks.aarch64-linux.NAME`. mortar-update and usb-pairing are
+      # NixOS VM tests: they need KVM (docs/updates.md, Runners).
       checks = lib.genAttrs linuxSystems (system:
         let pkgs = nixpkgs.legacyPackages.${system};
         in {
@@ -113,11 +114,25 @@
               modules = [ ./configurations/bare.nix { mortar.usb.trustHost = true; } ];
             }).config;
           };
-          # which generation U-Boot's rollback key boots (devices/brick/rollback.nix)
-          previous-conf = pkgs.callPackage ./tests/previous-conf.nix {
-            previousConf = self.nixosConfigurations.brick-bare.config.system.build.mortarPreviousConf;
-          };
+          # the compositor, mortar-play and mortar-ai headless, with real clients
+          # (mortar-ai against a stand-in for `claude`: no Claude Code in here)
+          mortar-shell-headless = (pkgs.callPackage ./pkgs/mortar-shell { }).tests.headless;
+          mortar-play-integration = (pkgs.callPackage ./pkgs/mortar-play { }).tests.integration;
+          mortar-play-shell = (pkgs.callPackage ./pkgs/mortar-play { }).tests.shell;
+          mortar-ai-headless = (pkgs.callPackage ./pkgs/mortar-ai {
+            mortar-shell = pkgs.callPackage ./pkgs/mortar-shell { };
+          }).tests.headless;
+
+          # every pack and port on its own evaluates, and what's published holds
+          # nothing it shouldn't (docs/updates.md)
+          eval-matrix = pkgs.writeText "mortar-eval-matrix"
+            (builtins.unsafeDiscardStringContext (builtins.toJSON self.lib.evalMatrix));
+          public-policy = pkgs.callPackage ./tests/public-policy.nix { inherit self; };
         } // lib.optionalAttrs (system == "aarch64-linux") {
+          # which generation U-Boot's rollback key boots (devices/brick/rollback.nix)
+          previous-conf = self.nixosConfigurations.brick-bare.pkgs.callPackage ./tests/previous-conf.nix {
+            previousConf = bare.system.build.mortarPreviousConf;
+          };
           # the move from root's session, with and without the AI pack
           user-migrate = self.nixosConfigurations.brick-bare.pkgs.callPackage ./tests/user-migrate.nix {
             coreMigrate = bare.system.build.mortarUserMigrate;

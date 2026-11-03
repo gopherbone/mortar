@@ -1,31 +1,37 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
-# Build Mortar and publish it for over-the-air updates (docs/updates.md).
+# Test Mortar, build it and publish it to the `testing` channel (docs/updates.md).
+# Bricks on the release channel get it only when someone runs promote.yml.
 #
-# On every push to `mortar`: build the system for aarch64-linux, push its
-# closure, signed, to the private R2 bucket (a Nix binary cache), then
-# point channels/mortar.json at it. Bricks pick it up from there.
+#   settings   before anything is built: is everything needed to publish there?
+#              Every pack and port evaluates, what's published holds only what may
+#              be public.
+#   vm-tests   the NixOS VM tests, on an x86 runner with KVM
+#   build      arm64: the other checks, brick-bare and brick-full; then their
+#              closures, signed, to the bucket and channels/testing/<config>.json
 #
-# The closure holds non-redistributable files (TrimUI blobs, unfree cores),
-# so: the bucket stays private, and nothing built here is uploaded as a
-# workflow artifact. PICO-8 is never part of the system
-# (it lives in its own profile on the Brick, put there by `mortar pico8`).
+# What must never be in anything public: Claude Code, the non-commercial emulator
+# cores, PICO-8 and game data. None is in brick-bare or brick-full; `settings` and
+# `build` check, and fail the run if that changes (modules/unfree.nix). TrimUI's
+# files for the Brick are in the closure, as the project has decided
+# (docs/updates.md, "What may be published"). Nothing built here is uploaded as a
+# workflow artifact.
 #
 # Secrets (Settings > Secrets and variables > Actions):
 #   R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY  R2 token with write access to the bucket
 #   NIX_SIGNING_KEY                         `nix key generate-secret` output
 # Bucket, endpoint and public key come from mortar.update in the configuration.
 #
-# Runners: GitHub's arm64 Linux runners (ubuntu-24.04-arm); on a private
-# repository they bill per minute against the plan's included usage.
-# Fallbacks (Run workflow > runner): `x86-qemu` (x86 runner, aarch64
-# builds emulated: much slower) or `self-hosted` (your own runner with the
-# label `mortar`, e.g. the Mac with its linux-builder). Without CI at all:
-# `mortar publish` from the Mac.
+# Runners: GitHub's standard runners are free and unlimited on a public repository,
+# arm64 (ubuntu-24.04-arm) included. Fallbacks (Run workflow > runner): `x86-qemu`
+# (x86 runner, aarch64 builds emulated: much slower) or `self-hosted` (your own
+# runner with the label `mortar`). Never give a self-hosted runner pull requests.
+# Without CI at all: `mortar publish` from a computer.
 name: Build and publish
 
 on:
   push:
     branches: [mortar]
+  pull_request:
   workflow_dispatch:
     inputs:
       runner:
@@ -34,28 +40,129 @@ on:
         options: [arm, x86-qemu, self-hosted]
         default: arm
       publish:
-        description: Publish to the update channel
+        description: Publish to the testing channel
         type: boolean
         default: true
 
 # A newer push supersedes a running build. Cancelling never leaves a
-# half-published channel: the manifest is written last.
+# half-published channel: each manifest is written last.
 concurrency:
-  group: mortar-build
+  group: mortar-build-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
   contents: read
 
+env:
+  CONFIGS: brick-bare brick-full
+
 jobs:
-  build:
+  settings:
     # Off until the one-time setup is done (docs/updates.md): set the repository
-    # variable MORTAR_CI=true. Manual runs (workflow_dispatch) always work.
-    if: vars.MORTAR_CI == 'true' || github.event_name == 'workflow_dispatch'
+    # variable MORTAR_CI=true. Manual runs and pull requests always work.
+    if: vars.MORTAR_CI == 'true' || github.event_name != 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    outputs:
+      publish: ${{ steps.publish.outputs.publish }}
+      stores: ${{ steps.bucket.outputs.stores }}
+      public_key: ${{ steps.bucket.outputs.public_key }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - name: Publishing this run?
+        id: publish
+        env:
+          EVENT: ${{ github.event_name }}
+          INPUT: ${{ inputs.publish }}
+        run: |
+          if [ "$EVENT" = push ] || { [ "$EVENT" = workflow_dispatch ] && [ "$INPUT" = true ]; }; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Everything evaluates, each pack and port alone
+        run: nix eval --json .#lib.evalMatrix | jq -r 'to_entries[] | "\(.key)\t\(.value)"'
+
+      - name: What's published holds only what may be public
+        run: |
+          nix build --no-link --print-build-logs .#checks.x86_64-linux.public-policy
+          bash scripts/check-public-closure.sh $(nix eval --json .#lib.evalMatrix \
+            | jq -r '.bare, .full')
+
+      # Fail here, not after hours of building.
+      - name: Update settings
+        id: bucket
+        if: steps.publish.outputs.publish == 'true'
+        env:
+          HAVE_ID: ${{ secrets.R2_ACCESS_KEY_ID != '' }}
+          HAVE_SECRET: ${{ secrets.R2_SECRET_ACCESS_KEY != '' }}
+          HAVE_KEY: ${{ secrets.NIX_SIGNING_KEY != '' }}
+        run: |
+          fail=0
+          err() { echo "::error::$1"; fail=1; }
+          [ "$HAVE_ID" = true ] && [ "$HAVE_SECRET" = true ] && [ "$HAVE_KEY" = true ] ||
+            err "the R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY and NIX_SIGNING_KEY secrets aren't all set (docs/updates.md)"
+          for c in $CONFIGS; do
+            nix eval --json ".#nixosConfigurations.$c.config.mortar" \
+              --apply 'm: { inherit (m.update) enable bucket endpoint region publicKey configName channel; inherit (m.usb) trustHost; }' > "$RUNNER_TEMP/$c.json"
+            j() { jq -r "$1" "$RUNNER_TEMP/$c.json"; }
+            [ "$(j .enable)" = true ] || err "$c: mortar.update.enable is off: fill in mortar.update (docs/updates.md)"
+            case "$(j .endpoint)" in *ACCOUNT_ID*) err "$c: mortar.update.endpoint is still the placeholder" ;; esac
+            case "$(j .publicKey)" in *REPLACE_WITH*) err "$c: mortar.update.publicKey is still the placeholder" ;; esac
+            [ "$(j .configName)" = "$c" ] || err "$c: mortar.update.configName is $(j .configName)"
+            [ "$(j .channel)" != testing ] || err "$c: mortar.update.channel must be the release channel, not testing"
+            [ "$(j .trustHost)" = false ] || err "$c: mortar.usb.trustHost is on"
+          done
+          [ "$fail" = 0 ] || exit 1
+          c=${CONFIGS%% *}
+          jq -r '"store=s3://\(.bucket)?endpoint=\(.endpoint | sub("/+$"; ""))&region=\(.region)",
+                 "public_key=\(.publicKey)"' "$RUNNER_TEMP/$c.json" | sed 's/^store=/stores=/' >> "$GITHUB_OUTPUT"
+
+  # KVM: x86 runners have it once the device is opened up. GitHub's documentation
+  # doesn't promise it on the arm64 ones, so VM tests aren't run there.
+  vm-tests:
+    needs: settings
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          test -w /dev/kvm
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+            system-features = nixos-test benchmark big-parallel kvm
+
+      - name: VM tests
+        run: |
+          nix build --no-link --print-build-logs \
+            .#checks.x86_64-linux.mortar-update \
+            .#checks.x86_64-linux.usb-pairing
+
+  build:
+    needs: [settings, vm-tests]
+    # Pull requests from a fork carry no secrets and never publish; the arm64 build
+    # is a push's or a manual run's: it's the long part.
+    if: github.event_name != 'pull_request'
     runs-on: ${{ fromJSON(inputs.runner == 'x86-qemu' && '"ubuntu-24.04"' || inputs.runner == 'self-hosted' && '["self-hosted","mortar"]' || '"ubuntu-24.04-arm"') }}
     timeout-minutes: 360
-    env:
-      CONFIG: brick-full
     steps:
       - name: Free disk space
         if: runner.environment == 'github-hosted'
@@ -84,15 +191,6 @@ jobs:
             cores = 0
             fallback = true
 
-      - name: Bucket settings
-        id: bucket
-        run: |
-          nix eval --json ".#nixosConfigurations.$CONFIG.config.mortar.update" \
-            --apply 'u: { inherit (u) enable bucket endpoint region publicKey; }' > "$RUNNER_TEMP/update.json"
-          jq -r '"enable=\(.enable)",
-                 "store=s3://\(.bucket)?endpoint=\(.endpoint | sub("/+$"; ""))&region=\(.region)",
-                 "public_key=\(.publicKey)"' "$RUNNER_TEMP/update.json" >> "$GITHUB_OUTPUT"
-
       # The bucket is also a substituter, so unchanged paths (the kernel,
       # GPU userspace, Rust apps) are downloaded instead of rebuilt. The
       # daemon does the substituting, so it gets the credentials.
@@ -101,15 +199,14 @@ jobs:
         env:
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          STORE: ${{ steps.bucket.outputs.store }}
-          PUBLIC_KEY: ${{ steps.bucket.outputs.public_key }}
-          ENABLED: ${{ steps.bucket.outputs.enable }}
+          STORE: ${{ needs.settings.outputs.stores }}
+          PUBLIC_KEY: ${{ needs.settings.outputs.public_key }}
           QEMU: ${{ inputs.runner == 'x86-qemu' }}
         run: |
           if [ "$QEMU" = true ]; then
             echo "extra-platforms = aarch64-linux" | sudo tee -a /etc/nix/nix.conf
           fi
-          if [ "$ENABLED" = true ] && [ -n "$R2_ACCESS_KEY_ID" ]; then
+          if [ -n "$STORE" ] && [ -n "$R2_ACCESS_KEY_ID" ]; then
             printf 'AWS_ACCESS_KEY_ID=%s\nAWS_SECRET_ACCESS_KEY=%s\n' "$R2_ACCESS_KEY_ID" "$R2_SECRET_ACCESS_KEY" \
               | sudo install -m 600 /dev/stdin /etc/nix/r2.env
             sudo mkdir -p /etc/systemd/system/nix-daemon.service.d
@@ -121,32 +218,35 @@ jobs:
           sudo systemctl daemon-reload
           sudo systemctl restart nix-daemon
 
+      # Everything but the VM tests, which need KVM (vm-tests ran them on x86).
+      - name: Checks
+        run: |
+          nix eval --json .#checks.aarch64-linux --apply builtins.attrNames \
+            | jq -r '.[] | select(. != "mortar-update" and . != "usb-pairing") | ".#checks.aarch64-linux." + .' \
+            | xargs nix build --no-link --print-build-logs
+
       - name: Build
         id: build
         run: |
-          top=$(nix build --no-link --print-out-paths ".#nixosConfigurations.$CONFIG.config.system.build.toplevel")
-          echo "toplevel=$top" >> "$GITHUB_OUTPUT"
-          echo "built $top"
-          # PICO-8 must never be in the published closure
-          if nix-store --query --requisites "$top" | grep -i -- '-pico-8'; then
-            echo "::error::PICO-8 is in the system closure"; exit 1
-          fi
-          du -sh $(nix-store --query --requisites "$top") 2>/dev/null | sort -h | tail -5 || true
+          : > "$RUNNER_TEMP/built"
+          for c in $CONFIGS; do
+            top=$(nix build --no-link --print-out-paths ".#nixosConfigurations.$c.config.system.build.toplevel")
+            echo "$c $top" | tee -a "$RUNNER_TEMP/built"
+            bash scripts/check-public-closure.sh "$top"
+            du -sh $(nix-store --query --requisites "$top") 2>/dev/null | sort -h | tail -5 || true
+          done
 
-      - name: Publish
-        if: github.event_name == 'push' || inputs.publish
+      - name: Publish to testing
+        if: needs.settings.outputs.publish == 'true'
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           NIX_SIGNING_KEY: ${{ secrets.NIX_SIGNING_KEY }}
           MORTAR_PUBLISHER: github-actions
-          TOPLEVEL: ${{ steps.build.outputs.toplevel }}
         run: |
-          if [ -z "$AWS_ACCESS_KEY_ID" ] || [ -z "$NIX_SIGNING_KEY" ]; then
-            echo "::error::R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY / NIX_SIGNING_KEY secrets are missing (docs/updates.md)"
-            exit 1
-          fi
           key="$RUNNER_TEMP/signing-key"
           trap 'rm -f "$key"' EXIT
           (umask 077; printf '%s\n' "$NIX_SIGNING_KEY" > "$key")
-          nix run ".#mortar" -- publish --config "$CONFIG" --path "$TOPLEVEL" --key "$key"
+          while read -r c top; do
+            nix run ".#mortar" -- publish --channel testing --config "$c" --path "$top" --key "$key"
+          done < "$RUNNER_TEMP/built"

@@ -123,6 +123,10 @@ impl Config {
     pub fn bucket(&self) -> Result<mortar_update::Bucket, String> {
         mortar_update::Bucket::new(&self.endpoint, &self.bucket, &self.region)
     }
+    /// This Brick's manifest in the bucket.
+    pub fn manifest_key(&self) -> String {
+        mortar_update::manifest::key(&self.channel, self.config_name.as_deref().unwrap_or("unset"))
+    }
     pub fn credentials_file(&self) -> PathBuf {
         self.state_dir.join("credentials")
     }

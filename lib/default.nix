@@ -7,7 +7,24 @@
 #   }
 { self, nixpkgs }:
 
+let
+  inherit (nixpkgs) lib;
+  bare = ../configurations/bare.nix;
+in
 {
+  # bare, full, and each pack and port alone on top of bare.
+  matrix =
+    {
+      bare = self.nixosConfigurations.brick-bare;
+      full = self.nixosConfigurations.brick-full;
+    }
+    // lib.mapAttrs (_: m: self.lib.mkSystem { modules = [ bare m ]; }) (
+      lib.filterAttrs (n: _: lib.hasPrefix "pack-" n || lib.hasPrefix "port-" n) self.nixosModules
+    );
+
+  # Evaluates them all, building nothing: `nix eval --json .#lib.evalMatrix`
+  evalMatrix = lib.mapAttrs (_: s: s.config.system.build.toplevel.drvPath) self.lib.matrix;
+
   mkSystem =
     {
       device ? self.nixosModules.brick,

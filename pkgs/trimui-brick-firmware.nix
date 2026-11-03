@@ -22,8 +22,10 @@
 # zip itself is the same fixed-output fetchurl as firmware/mainline/scp.nix
 # (same name + hash => same store path => one download).
 #
-# Not redistributable: no license grant. Never commit the outputs or push them
-# to a public binary cache. meta.license = unfree; allow it with
+# Proprietary, with no licence granting redistribution: never commit the outputs.
+# TrimUI publishes these files, and the project has decided they may be hosted in
+# the public bare image and cache, which isn't a licence (docs/updates.md, "What
+# may be published"). meta.license = unfree; allow it with
 #   lib.getName pkg == "trimui-brick-firmware"
 {
   lib,
@@ -225,7 +227,7 @@ stdenvNoCC.mkDerivation {
     /usr/lib of TrimUI's stock rootfs (firmware v1.1.1-20251126). It pairs
     with the pvrsrvkm kernel module from jkingston's kernel (img-rogue
     imported from StarFive) and the rgx.fw/rgx.sh.22.102.54.38 firmware in
-    this package's main output. Proprietary, not redistributable.
+    this package's main output. Proprietary (docs/updates.md).
 
       libEGL.so.1 (+ libEGL.so)        EGL front end (IMG, not glvnd)
       libGLESv2.so (+ libGLESv2.so.2)  OpenGL ES 2/3

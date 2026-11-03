@@ -177,7 +177,7 @@ pkgs.testers.runNixOSTest {
         ci.succeed(f"cat > /tmp/m.json <<'EOF'\n{json.dumps(m)}\nEOF")
         if sign is not None:
             ci.succeed(f"mortar sign-manifest --key {sign} < /tmp/m.json > /tmp/signed.json && mv /tmp/signed.json /tmp/m.json")
-        assert s3put("/tmp/m.json", f"channels/{channel}.json") == "200"
+        assert s3put("/tmp/m.json", "channels/mortar/test.json") == "200"
 
     brick.wait_for_unit("mortar-update-init.service")
     running = brick.succeed("readlink -f /run/current-system").strip()
@@ -186,7 +186,7 @@ pkgs.testers.runNixOSTest {
 
     with subtest("the read key cannot write"):
         ci.succeed("echo x > /tmp/x")
-        assert s3put("/tmp/x", "channels/mortar.json", r_id, r_sec) == "403"
+        assert s3put("/tmp/x", "channels/mortar/test.json", r_id, r_sec) == "403"
 
     with subtest("no credentials: unconfigured"):
         assert status()["state"] == "unconfigured", status()
@@ -219,7 +219,7 @@ pkgs.testers.runNixOSTest {
     with subtest("a tampered manifest is refused"):
         put_manifest("${target}", 1000)
         ci.succeed("jq '.published = 2000' /tmp/m.json > /tmp/t.json")
-        assert s3put("/tmp/t.json", "channels/mortar.json") == "200"
+        assert s3put("/tmp/t.json", "channels/mortar/test.json") == "200"
         s = check(expect_ok=False)
         assert s["state"] == "error" and "bad signature" in s["detail"], s
 
@@ -230,7 +230,6 @@ pkgs.testers.runNixOSTest {
 
     with subtest("another channel's manifest, signed, is refused"):
         put_manifest("${target}", 1000, channel="testing")
-        ci.succeed("curl -sf --aws-sigv4 aws:amz:auto:s3 --user " + w_id + ":" + w_sec + " -T /tmp/m.json http://localhost:3900/cache/channels/mortar.json")
         s = check(expect_ok=False)
         assert s["message"] == "Wrong channel", s
 
@@ -258,7 +257,7 @@ pkgs.testers.runNixOSTest {
 
     with subtest("publish a signed system"):
         print(publish("${target}"))
-        m = json.loads(s3cat("channels/mortar.json"))
+        m = json.loads(s3cat("channels/mortar/test.json"))
         assert m["toplevel"] == "${target}" and m["rev"] == "0123456789abcdef" and m["published"] > 1000, m
         assert m["system"] == "${pkgs.stdenv.hostPlatform.system}", m
         assert m["signature"].startswith("mortar-test-1:"), m
@@ -319,6 +318,27 @@ pkgs.testers.runNixOSTest {
         assert check(expect_ok=False)["message"] == "Different configuration"
         brick.succeed("mortar-update check --allow-config-change")
         assert status()["state"] == "ready", status()
+        brick.succeed("mortar-update rollback")
+
+    with subtest("testing is not the release channel, until it's promoted"):
+        # the release channel holds something else
+        put_manifest("${unsigned}", 9999999999)
+        before = s3cat("channels/mortar/test.json")
+        print(publish("${target}", "--channel testing"))
+        t = json.loads(s3cat("channels/testing/test.json"))
+        assert t["channel"] == "testing" and t["toplevel"] == "${target}", t
+        assert s3cat("channels/mortar/test.json") == before
+        assert brick.succeed("readlink -f /nix/var/nix/profiles/system").strip() == running
+
+        # the wrong commit is refused
+        ci.fail(f"{w_env} mortar promote --endpoint http://ci:3900 --bucket cache --key /root/signing-key --config test --rev nope 2>&1")
+        assert s3cat("channels/mortar/test.json") == before
+
+        print(ci.succeed(f"{w_env} mortar promote --endpoint http://ci:3900 --bucket cache --key /root/signing-key --config test --rev 0123456789abcdef 2>&1"))
+        m = json.loads(s3cat("channels/mortar/test.json"))
+        assert m["channel"] == "mortar" and m["toplevel"] == "${target}" and m["published"] > 9999999999, m
+        assert check()["state"] == "ready", status()
+        assert brick.succeed("readlink -f /nix/var/nix/profiles/system").strip() == "${target}"
         brick.succeed("mortar-update rollback")
 
     with subtest("auto-check toggle"):

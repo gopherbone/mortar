@@ -35,7 +35,7 @@
     command = "exec ${pkgs.bashInteractive}/bin/bash --login";
   };
 
-  # Over-the-air updates from a private binary cache (docs/updates.md). Nothing
+  # Over-the-air updates from a binary cache (docs/updates.md). Nothing
   # here is secret: bucket, endpoint, the public signing key. Set these in your
   # configuration with enable = true and `mortar deploy` once; after that CI (or
   # `mortar publish`) updates the Brick over Wi-Fi. `mortar publish` reads these

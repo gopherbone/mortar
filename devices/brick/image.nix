@@ -27,9 +27,10 @@
 #
 # U-Boot runs `sysboot mmc 0:1 any ${scriptaddr} /extlinux/extlinux.conf`.
 #
-# The SPL/FIT embeds the non-redistributable SCP blob, so the image is too:
-# do not publish it. The configuration must allow the unfree SCP derivation
-# (see firmware/mainline/scp.nix).
+# The SPL/FIT embeds TrimUI's proprietary SCP blob. The project hosts it in the
+# public bare image (docs/updates.md, "What may be published"); an image of a
+# system with other unfree software in it must stay private. The configuration
+# must allow the unfree SCP derivation (see firmware/mainline/scp.nix).
 { config, lib, pkgs, modulesPath, ... }:
 
 let

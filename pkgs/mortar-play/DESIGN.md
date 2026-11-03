@@ -295,8 +295,8 @@ The non-commercial cores' systems below are off unless the system sets
 | 2048 | 2048 | Unlicense | no content; a toy and a smoke test |
 
 All are available for aarch64-linux in the pinned nixpkgs. The three
-non-commercial ("unfree redistributable") cores need the flake's
-`allowUnfreePredicate` (names in `mortar.play.unfreeCores`).
+non-commercial cores need `mortar.play.nonCommercialCores = true`, and a system with
+them isn't published (`mortar.play.unfreeCores` lists what is enabled).
 
 ## Performance on the Brick (A133, 4x Cortex-A53 @ up to 2 GHz)
 

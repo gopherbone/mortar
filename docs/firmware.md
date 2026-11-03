@@ -1,10 +1,10 @@
 # Brick proprietary firmware
 
 `pkgs/trimui-brick-firmware.nix` extracts, at build time, the radio and GPU
-files that the jkingston kernel's drivers request. Nothing is committed and
-nothing is redistributable (unfree, `allowSubstitutes = false`). Never push
-the outputs, or the `-zstd` copy NixOS makes for `hardware.firmware`, to a
-public cache.
+files that the jkingston kernel's drivers request. Nothing is committed. The
+files are proprietary and no licence grants redistribution; because TrimUI publishes
+them, the project has decided they may be hosted in the public bare image and cache
+([updates.md](updates.md#what-may-be-published)).
 
 Source: TrimUI's `TG3040_Brick_firmware_v1.1.1.zip` (release
 v1.1.1-20251126, sha256 `488db021…`). This is the same fixed-output fetch as

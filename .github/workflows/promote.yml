@@ -1,0 +1,60 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Put what's on the testing channel on the release channel, by hand, once a Brick on
+# testing has run it (docs/updates.md). Nothing is built: the closure is in the bucket
+# already, and the manifest is re-signed for the release channel.
+#
+# The `release` environment is where required reviewers go (Settings > Environments).
+name: Promote to release
+
+on:
+  workflow_dispatch:
+    inputs:
+      rev:
+        description: The commit to promote (a safeguard; it must be what testing has)
+        type: string
+        required: true
+      config:
+        description: Which configuration
+        type: choice
+        options: [both, brick-bare, brick-full]
+        default: both
+
+permissions:
+  contents: read
+
+jobs:
+  promote:
+    runs-on: ubuntu-24.04
+    environment: release
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the changelog is the commits since the last release
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - name: Promote
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          NIX_SIGNING_KEY: ${{ secrets.NIX_SIGNING_KEY }}
+          MORTAR_PUBLISHER: github-actions
+          REV: ${{ inputs.rev }}
+          WHICH: ${{ inputs.config }}
+        run: |
+          if [ -z "$AWS_ACCESS_KEY_ID" ] || [ -z "$NIX_SIGNING_KEY" ]; then
+            echo "::error::R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY / NIX_SIGNING_KEY secrets are missing (docs/updates.md)"
+            exit 1
+          fi
+          key="$RUNNER_TEMP/signing-key"
+          trap 'rm -f "$key"' EXIT
+          (umask 077; printf '%s\n' "$NIX_SIGNING_KEY" > "$key")
+          case "$WHICH" in both) configs="brick-bare brick-full" ;; *) configs=$WHICH ;; esac
+          for c in $configs; do
+            nix run ".#mortar" -- promote --from testing --config "$c" --rev "$REV" --key "$key"
+          done

@@ -92,6 +92,8 @@ let
   '';
   config = writeText "mortar-ai-test.json" (
     builtins.toJSON {
+      # the boot animation takes the first presses
+      ui.bootAnimation = false;
       apps = [
         {
           id = "ai";

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-//! `channels/<channel>.json`: the newest published system.
+//! `channels/<channel>/<config>.json`: the newest system published for a
+//! configuration on a channel.
 
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
@@ -12,8 +13,8 @@ pub const SCHEMA: u32 = 1;
 const SIGNED_TAG: &[u8] = b"mortar-manifest-1\n";
 
 /// Where a channel's manifest lives in the bucket.
-pub fn key(channel: &str) -> String {
-    format!("channels/{channel}.json")
+pub fn key(channel: &str, config: &str) -> String {
+    format!("channels/{channel}/{config}.json")
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -59,6 +60,11 @@ pub struct SecretKey {
 }
 
 impl SecretKey {
+    /// The public half, as `nix key convert-secret-to-public` writes it.
+    pub fn public(&self) -> String {
+        format!("{}:{}", self.name, B64.encode(self.key.verifying_key().to_bytes()))
+    }
+
     pub fn parse(text: &str) -> Result<SecretKey, String> {
         let (name, b) = text.trim().split_once(':').ok_or("signing key: want name:base64")?;
         let raw = B64.decode(b).map_err(|e| format!("signing key: {e}"))?;
@@ -226,6 +232,7 @@ mod tests {
         x.signature = Some("nocolon".into());
         assert!(x.verify(&keys).is_err());
         assert!(SecretKey::parse("test-1:AAAA").is_err());
+        assert_eq!(SecretKey::parse(SECRET).unwrap().public(), PUBLIC);
     }
 
     #[test]

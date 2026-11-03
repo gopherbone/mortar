@@ -13,8 +13,10 @@
 # checks the two SHA-256s again at boot (U-Boot patch 0004), so a different
 # blob would build but not boot.
 #
-# The blob is proprietary and NOT redistributable: it is fetched at build time
-# and must never be committed to git or pushed to a public binary cache.
+# The blob is proprietary, with no licence granting redistribution: it is fetched
+# at build time and is never committed to git. TrimUI publishes it, and the project
+# has decided that may be hosted in the public bare image and cache; that decision
+# isn't a licence (docs/updates.md, "What may be published").
 # meta.license = unfree, so nixpkgs must allow it, e.g.
 #   nixpkgs.config.allowUnfreePredicate = pkg: lib.getName pkg == "trimui-brick-scp";
 #
@@ -58,7 +60,7 @@ stdenvNoCC.mkDerivation {
     runHook postInstall
   '';
 
-  # Not redistributable: keep it off substituters/Hydra.
+  # It only downloads and unpacks: build it where it's needed.
   preferLocalBuild = true;
   allowSubstitutes = false;
 

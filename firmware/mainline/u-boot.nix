@@ -191,7 +191,7 @@ buildUBoot {
   extraMeta = {
     description = "Mainline U-Boot SPL + TF-A + SCP image for the TrimUI Brick (A133)";
     platforms = [ "aarch64-linux" ];
-    # Embeds the non-redistributable SCP blob.
+    # Embeds TrimUI's proprietary SCP blob (see scp.nix).
     license = [ lib.licenses.gpl2Plus lib.licenses.unfree ];
     hydraPlatforms = [ ];
   };

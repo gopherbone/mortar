@@ -2,8 +2,8 @@
 # Over-the-air updates (pkgs/mortar-update, docs/updates.md).
 #
 # CI (.github/workflows/build.yml) or `mortar publish` builds the system,
-# pushes the closure, signed, to a private S3-compatible bucket (Cloudflare
-# R2) used as a Nix binary cache, and then writes channels/<channel>.json.
+# pushes the closure, signed, to an S3-compatible bucket (Cloudflare R2) used
+# as a Nix binary cache, and then writes channels/<channel>/<configName>.json.
 # The Brick:
 #
 #   mortar-update-init        boot: moves `[update]` credentials from the
@@ -63,7 +63,7 @@ let
 in
 {
   options.mortar.update = {
-    enable = mkEnableOption "over-the-air updates from a private Nix binary cache (docs/updates.md)";
+    enable = mkEnableOption "over-the-air updates from a Nix binary cache (docs/updates.md)";
 
     package = mkOption {
       type = types.package;
@@ -75,7 +75,7 @@ in
     bucket = mkOption {
       type = types.str;
       example = "mortar-cache";
-      description = "Bucket name (private).";
+      description = "Bucket name.";
     };
 
     endpoint = mkOption {
@@ -93,7 +93,7 @@ in
     channel = mkOption {
       type = types.str;
       default = "mortar";
-      description = "Manifest name: channels/<channel>.json in the bucket.";
+      description = "The release channel: the manifest is channels/<channel>/<configName>.json in the bucket.";
     };
 
     publicKey = mkOption {

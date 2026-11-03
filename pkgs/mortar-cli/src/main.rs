@@ -48,6 +48,9 @@ mortar publish [--config NAME] [--path STORE_PATH] [--channel C] [--key FILE]
     the signed channel manifest (docs/updates.md). Key:
     ~/.config/mortar/signing-key; bucket credentials:
     $AWS_ACCESS_KEY_ID/$AWS_SECRET_ACCESS_KEY or ~/.config/mortar/r2-write.
+mortar promote [--config NAME] [--from testing] [--channel C] [--rev COMMIT] [--key FILE]
+    Put what's on one channel on another, for Bricks following the release
+    channel: re-signs the manifest. --rev: refuse unless it is that commit.
 mortar update [--host HOST]       check for an update on the Brick now
 mortar update-creds [--host HOST] [--key-id ID]
     Give the Brick its read-only bucket credentials (asks for the secret,
@@ -233,6 +236,8 @@ fn parse_publish(args: &[String]) -> publish::Opts {
         publisher: env::var("MORTAR_PUBLISHER").unwrap_or_else(|_| "mortar publish".into()),
         force: false,
         dry_run: false,
+        from: None,
+        rev: None,
     };
     let mut it = args.iter();
     let val = |it: &mut std::slice::Iter<String>, n: &str| it.next().cloned().unwrap_or_else(|| die(&format!("{n} needs a value")));
@@ -250,6 +255,8 @@ fn parse_publish(args: &[String]) -> publish::Opts {
             "--publisher" => o.publisher = val(&mut it, a),
             "--force" => o.force = true,
             "--dry-run" => o.dry_run = true,
+            "--from" => o.from = Some(val(&mut it, a)),
+            "--rev" => o.rev = Some(val(&mut it, a)),
             other => die(&format!("unknown option: {other}")),
         }
     }
@@ -356,6 +363,10 @@ fn main() {
     }
     if cmd == "publish" {
         publish::publish(&parse_publish(rest));
+        return;
+    }
+    if cmd == "promote" {
+        publish::promote(&parse_publish(rest));
         return;
     }
     let o = parse(rest);

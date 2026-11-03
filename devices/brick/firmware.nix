@@ -150,7 +150,7 @@ in
       description = ''
         Install the TrimUI Brick's proprietary XR829 Wi-Fi/Bluetooth and
         GE8300 GPU firmware (extracted from TrimUI's stock firmware release;
-        unfree, not redistributable), and enable Wi-Fi (iwd) and Bluetooth.
+        proprietary, see docs/updates.md), and enable Wi-Fi (iwd) and Bluetooth.
       '';
     };
 

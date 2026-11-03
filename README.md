@@ -39,10 +39,12 @@ zstd -d result/sd-image/*.img.zst -o mortar.img
 # write mortar.img to a microSD card (macOS helper: scripts/flash-mac.sh)
 ```
 
-The build downloads TrimUI's public firmware release for its blobs, which aren't
-redistributable, so the image isn't either: **never publish a built image or push it
-to a public cache.** The same goes for emulator cores with non-commercial licences.
-`mortar.unfree` lists what a system may use; `docs/updates.md` covers private updates.
+The build downloads TrimUI's public firmware release for its blobs. They are
+proprietary, and no licence grants redistribution; because TrimUI publishes them, the
+project has decided the bare image and cache may hold them. Anything else unfree, such
+as Claude Code or emulator cores with non-commercial licences, **must never be in a
+published image or a public cache**: a system of your own with those stays private.
+`mortar.unfree` lists what a system may use; see `docs/updates.md`.
 
 After booting a system, change the configuration and:
 

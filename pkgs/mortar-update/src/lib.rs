@@ -2,10 +2,10 @@
 //! Mortar over-the-air updates: what the publisher (`mortar publish`, CI)
 //! and the Brick (`mortar-update`) agree on.
 //!
-//! - A private S3-compatible bucket (Cloudflare R2) is a Nix binary cache:
+//! - An S3-compatible bucket (Cloudflare R2) is a Nix binary cache:
 //!   `nix copy --to 's3://BUCKET?endpoint=…&region=auto'` puts the system
 //!   closure there, signed with the publisher's Nix key.
-//! - `channels/<channel>.json` in the same bucket names the newest system
+//! - `channels/<channel>/<config>.json` in the same bucket names the newest system
 //!   ([`Manifest`]). It is written last, after the closure is complete.
 //! - The Brick reads the manifest, copies the closure with read-only
 //!   credentials (Nix checks the signatures against `trusted-public-keys`)

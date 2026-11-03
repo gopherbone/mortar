@@ -21,7 +21,7 @@
   nixpkgs.hostPlatform = lib.mkDefault "aarch64-linux";
 
   # The SCP blob and the U-Boot embedding it, the Wi-Fi/Bluetooth/GPU firmware,
-  # the PowerVR userspace. Build locally only; never push these to a public cache.
+  # the PowerVR userspace: TrimUI's files, see modules/unfree.nix.
   mortar.unfree = [ "trimui-brick-scp" "u-boot-trimui-brick-mainline" "trimui-brick-firmware" "pvr-ddk-userspace" ];
 
   # TF-A /reserved-memory (0x40000000, 0x40000, no-map)

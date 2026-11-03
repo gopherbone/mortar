@@ -27,6 +27,10 @@ pub struct Opts {
     pub publisher: String,
     pub force: bool,
     pub dry_run: bool,
+    /// `mortar promote`: the channel to take the manifest from.
+    pub from: Option<String>,
+    /// `mortar promote`: refuse unless the manifest is of this commit.
+    pub rev: Option<String>,
 }
 
 /// mortar.update from the flake (no secrets in there).
@@ -176,7 +180,7 @@ pub fn publish(o: &Opts) {
     if !manifest::valid_store_path(&top) {
         die(&format!("not a store path: {top}"));
     }
-    let key_name = manifest::key(&st.channel);
+    let key_name = manifest::key(&st.channel, &st.config);
 
     say(&format!("Reading {key_name}"));
     let prev = match st.bucket.get(&creds, &key_name, "curl") {
@@ -233,21 +237,71 @@ pub fn publish(o: &Opts) {
     }
 
     // the closure is complete; now point the channel at it
+    write_manifest(&st, &creds, &m);
+    say(&format!("Published {} on '{}' ({})", m.short(), st.channel, top));
+    for c in m.changelog.iter().take(10) {
+        println!("  - {c}");
+    }
+}
+
+/// The manifest and its copy in the channel's history.
+fn write_manifest(st: &Settings, creds: &Credentials, m: &Manifest) {
     let tmp = env::temp_dir().join(format!("mortar-manifest-{}.json", std::process::id()));
     std::fs::write(&tmp, m.to_json()).unwrap_or_else(|e| die(&format!("{}: {e}", tmp.display())));
-    let short_rev = rev.as_deref().map(|r| &r[..r.len().min(12)]).unwrap_or("local");
-    let history = format!("channels/{}/{}-{}.json", st.channel, m.published, short_rev);
+    let short_rev = m.rev.as_deref().map(|r| &r[..r.len().min(12)]).unwrap_or("local");
+    let history = format!("channels/{}/{}/{}-{}.json", st.channel, st.config, m.published, short_rev);
+    let key_name = manifest::key(&st.channel, &st.config);
     for k in [&history, &key_name] {
-        if let Err(e) = st.bucket.put(&creds, k, &tmp, "application/json", "curl") {
+        if let Err(e) = st.bucket.put(creds, k, &tmp, "application/json", "curl") {
             let _ = std::fs::remove_file(&tmp);
             die(&format!("uploading {k}: {e}"));
         }
     }
     let _ = std::fs::remove_file(&tmp);
-    say(&format!("Published {} on '{}' ({})", m.short(), st.channel, top));
-    for c in m.changelog.iter().take(10) {
-        println!("  - {c}");
+}
+
+/// `mortar promote`: what is on one channel (testing) goes on another (the
+/// release channel). Its closure is in the bucket already. The manifest is
+/// re-signed: the channel is part of what's signed.
+pub fn promote(o: &Opts) {
+    let st = settings(o);
+    let creds = write_creds(o);
+    let secret = read_secret(&signing_key(o));
+    let from = o.from.as_deref().unwrap_or("testing");
+    if from == st.channel {
+        die(&format!("'{from}' is the channel being promoted to"));
     }
+    let read = |k: &str| match st.bucket.get(&creds, k, "curl") {
+        Ok(b) => Manifest::parse(&b).map(Some).unwrap_or_else(|e| die(&format!("{k}: {e}"))),
+        Err(FetchError::NotFound) => None,
+        Err(e) => die(&format!("{k}: {e}")),
+    };
+    let src_key = manifest::key(from, &st.config);
+    let mut m = read(&src_key).unwrap_or_else(|| die(&format!("nothing published at {src_key}")));
+    m.verify(&[secret.public()]).unwrap_or_else(|e| die(&format!("{src_key}: {e}")));
+    if let Some(want) = &o.rev {
+        if m.rev.as_deref() != Some(want.as_str()) {
+            die(&format!("{src_key} is {}, not {want}", m.rev.as_deref().unwrap_or("unknown")));
+        }
+    }
+    let prev = read(&manifest::key(&st.channel, &st.config));
+    if let Some(p) = prev.as_ref().filter(|p| p.toplevel == m.toplevel && !o.force) {
+        say(&format!("Unchanged: {} is already on '{}' ({})", m.toplevel, st.channel, p.short()));
+        return;
+    }
+    let now = time::now();
+    m.changelog = changelog(o, prev.as_ref(), m.rev.as_deref());
+    m.channel = st.channel.clone();
+    m.published = now.max(prev.as_ref().map(|p| p.published + 1).unwrap_or(0));
+    m.date = time::rfc3339(now);
+    m.publisher = o.publisher.clone();
+    m.sign(&secret);
+    if o.dry_run {
+        print!("{}", m.to_json());
+        return;
+    }
+    write_manifest(&st, &creds, &m);
+    say(&format!("Promoted {} from '{from}' to '{}' ({})", m.short(), st.channel, m.toplevel));
 }
 
 /// `mortar update`: check now on the Brick (it downloads and stages).

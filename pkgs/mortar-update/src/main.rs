@@ -22,7 +22,7 @@ mod power;
 mod status;
 
 use config::Config;
-use mortar_update::{manifest, Bucket, Credentials, FetchError, Manifest};
+use mortar_update::{Bucket, Credentials, FetchError, Manifest};
 use status::{plan, Allow, Phase, Plan, State, Status};
 use std::fs;
 use std::io::{BufRead, BufReader, Read};
@@ -212,9 +212,9 @@ fn provision_stdin(cx: &mut Ctx) -> Result<(), String> {
     println!("stored credentials (key {}) in {}", c.access_key_id, cx.cfg.credentials_file().display());
     // try them
     let b = cx.cfg.bucket()?;
-    match b.get(&c, &manifest::key(&cx.cfg.channel), &cx.cfg.curl) {
+    match b.get(&c, &cx.cfg.manifest_key(), &cx.cfg.curl) {
         Ok(bytes) => match Manifest::parse(&bytes).and_then(|m| m.verify(&cx.cfg.trusted_keys).map(|()| m)) {
-            Ok(m) => println!("bucket ok: {} has {}", manifest::key(&cx.cfg.channel), m.short()),
+            Ok(m) => println!("bucket ok: {} has {}", cx.cfg.manifest_key(), m.short()),
             Err(e) => println!("bucket ok, but {e}"),
         },
         Err(FetchError::NotFound) => println!("bucket ok (nothing published on channel '{}' yet)", cx.cfg.channel),
@@ -311,7 +311,7 @@ fn do_check(cx: &mut Ctx, allow: Allow) -> Status {
     };
     cx.write(&cx.status(Phase::Checking, "Checking…"));
 
-    let key = manifest::key(&cx.cfg.channel);
+    let key = cx.cfg.manifest_key();
     let m = match bucket.get(&creds, &key, &cx.cfg.curl) {
         Ok(b) => match Manifest::parse(&b) {
             Ok(m) => m,
@@ -542,7 +542,7 @@ mod tests {
                 "toplevel":"/nix/store/0c7f8ms0x6r4n3pq7x2a9w1kz5lbv8yd-x","published":5,"date":"x"}"#,
         )
         .unwrap();
-        m.sign(&manifest::SecretKey::parse("test-1:JMPmnQgjB/X0wg+yK5jOkfHTpB0SnK3WQnrptJSIo5UgRd4ydstkc+7FqUCsadPkKIelyJQW0f62jEacj+reRA==").unwrap());
+        m.sign(&mortar_update::manifest::SecretKey::parse("test-1:JMPmnQgjB/X0wg+yK5jOkfHTpB0SnK3WQnrptJSIo5UgRd4ydstkc+7FqUCsadPkKIelyJQW0f62jEacj+reRA==").unwrap());
         m
     }
 
@@ -559,7 +559,7 @@ mod tests {
         let sign = |f: fn(&mut Manifest)| {
             let mut x = manifest();
             f(&mut x);
-            x.sign(&manifest::SecretKey::parse("test-1:JMPmnQgjB/X0wg+yK5jOkfHTpB0SnK3WQnrptJSIo5UgRd4ydstkc+7FqUCsadPkKIelyJQW0f62jEacj+reRA==").unwrap());
+            x.sign(&mortar_update::manifest::SecretKey::parse("test-1:JMPmnQgjB/X0wg+yK5jOkfHTpB0SnK3WQnrptJSIo5UgRd4ydstkc+7FqUCsadPkKIelyJQW0f62jEacj+reRA==").unwrap());
             x
         };
         assert_eq!(refuse(&cfg, &sign(|m| m.channel = "testing".into()), no).unwrap().0, "Wrong channel");

@@ -99,13 +99,14 @@ bootcmd/bootcount changes in 0002, 0003 and 0006 are then overridden by
 
 The SCP firmware (`scp.bin`, 0x14008 bytes, sha256 `b25eacb0…bbe8`) and the SCP
 service DTB (`service.dtb`, 0x25600 bytes, sha256 `06c820c4…f7d8`) are
-proprietary. They are not redistributable.
+proprietary, and no licence grants redistribution.
 
 - `scp.nix` fetches TrimUI's public release zip at build time with a fixed
   hash, as jkingston's Buildroot package does.
-- **Never commit either blob, the U-Boot output or an SD image to git.** Never
-  push them to a public cache. `scp.nix` and `u-boot.nix` set
-  `meta.license = unfree`, `hydraPlatforms = [ ]` and `allowSubstitutes = false`.
+- **Never commit either blob, the U-Boot output or an SD image to git.** The project
+  has decided the public bare image and cache may hold them, because TrimUI publishes
+  them ([docs/updates.md](../../docs/updates.md#what-may-be-published)). `scp.nix` and
+  `u-boot.nix` set `meta.license = unfree`.
 - Evaluating them requires allowing unfree for `trimui-brick-scp` and
   `u-boot-trimui-brick-mainline`.
 
