@@ -31,7 +31,6 @@ your Mac with `mortar pico8`, and updates leave it alone.
 | Signing key (secret half) | `~/.config/mortar/signing-key` on the Mac; GitHub secret `NIX_SIGNING_KEY` | yes |
 | R2 write token | GitHub secrets `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`; `~/.config/mortar/r2-write` on the Mac | yes |
 | R2 read-only token | the Brick: `/var/lib/mortar-update/credentials` (root, 0600, ext4 root fs) | yes |
-| PuzzleScript deploy key | GitHub secret `PUZZLESCRIPT_DEPLOY_KEY` | yes |
 
 No secret is ever in the repository or the Nix store.
 
@@ -106,15 +105,7 @@ Commit it (pushing triggers the first build; that is fine once step 4 is done).
 
 ### 4. GitHub secrets
 
-The PuzzleScript flake input is a private repository fetched over SSH, so
-CI gets a read-only deploy key for it:
-
 ```sh
-ssh-keygen -t ed25519 -N "" -C mortar-ci -f /tmp/puzzlescript-deploy
-gh repo deploy-key add /tmp/puzzlescript-deploy.pub -R gopherbone/puzzlescript_pd -t mortar-ci
-gh secret set PUZZLESCRIPT_DEPLOY_KEY -R gopherbone/mortar < /tmp/puzzlescript-deploy
-rm /tmp/puzzlescript-deploy /tmp/puzzlescript-deploy.pub
-
 gh secret set NIX_SIGNING_KEY -R gopherbone/mortar < ~/.config/mortar/signing-key
 gh secret set R2_ACCESS_KEY_ID -R gopherbone/mortar        # mortar-ci Access Key ID
 gh secret set R2_SECRET_ACCESS_KEY -R gopherbone/mortar    # mortar-ci Secret Access Key

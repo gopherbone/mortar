@@ -6,18 +6,17 @@
 # point channels/mortar.json at it. Bricks pick it up from there.
 #
 # The closure holds non-redistributable files (TrimUI blobs, unfree cores),
-# so: this repository and the bucket stay private, and nothing built here
-# is uploaded as a workflow artifact. PICO-8 is never part of the system
+# so: the bucket stays private, and nothing built here is uploaded as a
+# workflow artifact. PICO-8 is never part of the system
 # (it lives in its own profile on the Brick, put there by `mortar pico8`).
 #
 # Secrets (Settings > Secrets and variables > Actions):
 #   R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY  R2 token with write access to the bucket
 #   NIX_SIGNING_KEY                         `nix key generate-secret` output
-#   PUZZLESCRIPT_DEPLOY_KEY                 read-only deploy key of gopherbone/puzzlescript_pd
 # Bucket, endpoint and public key come from mortar.update in flake.nix.
 #
-# Runners: GitHub's arm64 Linux runners (ubuntu-24.04-arm) work for private
-# repositories and bill per minute against the plan's included usage.
+# Runners: GitHub's arm64 Linux runners (ubuntu-24.04-arm); on a private
+# repository they bill per minute against the plan's included usage.
 # Fallbacks (Run workflow > runner): `x86-qemu` (x86 runner, aarch64
 # builds emulated: much slower) or `self-hosted` (your own runner with the
 # label `mortar`, e.g. the Mac with its linux-builder). Without CI at all:
@@ -68,12 +67,6 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0 # the changelog is the commits since the last publish
-
-      # flake input `puzzlescript` is git+ssh://git@github.com/gopherbone/puzzlescript_pd
-      - name: SSH key for the PuzzleScript input
-        uses: webfactory/ssh-agent@v0.9.1
-        with:
-          ssh-private-key: ${{ secrets.PUZZLESCRIPT_DEPLOY_KEY }}
 
       - name: Emulate aarch64 (x86 fallback)
         if: inputs.runner == 'x86-qemu'

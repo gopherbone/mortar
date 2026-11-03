@@ -1,0 +1,22 @@
+[package]
+name = "puzzlescript-sdl"
+version = "0.1.0"
+edition = "2021"
+description = "SDL3 shell for the native C PuzzleScript engine"
+license = "MIT"
+build = "build.rs"
+
+[[bin]]
+name = "puzzlescript"
+path = "src/main.rs"
+
+[dependencies]
+sdl3 = { version = "0.20", default-features = false, features = ["use-pkg-config"] }
+png = "0.18"
+
+[build-dependencies]
+cc = "1"
+
+[profile.release]
+opt-level = 2
+debug = 1

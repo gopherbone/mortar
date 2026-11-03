@@ -4,14 +4,9 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    # PuzzleScript (private repo; fetched over SSH with the user's key)
-    puzzlescript = {
-      url = "git+ssh://git@github.com/gopherbone/puzzlescript_pd?ref=sdl";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
   };
 
-  outputs = { self, nixpkgs, puzzlescript }:
+  outputs = { self, nixpkgs }:
     let
       supportedSystems = [ "x86_64-linux" "aarch64-linux" ];
       forAllSystems = nixpkgs.lib.genAttrs supportedSystems;
@@ -46,12 +41,6 @@
           ./modules/brick-firmware.nix
           ./modules/brick-gpu.nix
           ./modules/mortar-apps.nix
-          {
-            # The patch is for upstream (the puzzlescript repo); see the file.
-            mortar.apps.puzzlescript.package = puzzlescript.packages.aarch64-linux.default.overrideAttrs (old: {
-              patches = (old.patches or [ ]) ++ [ ./pkgs/puzzlescript/kmsdrm-redraw.patch ];
-            });
-          }
           ./modules/mortar-greeter.nix
           ./modules/mortar-shell.nix
           {
@@ -283,10 +272,16 @@
         });
 
       # VM tests: `nix build .#checks.aarch64-linux.mortar-update`
-      checks = forAllSystems (system: {
-        # over-the-air updates end to end (MinIO as the bucket)
-        mortar-update = import ./tests/mortar-update.nix { pkgs = nixpkgs.legacyPackages.${system}; };
-      });
+      checks = forAllSystems (system:
+        let pkgs = nixpkgs.legacyPackages.${system};
+        in {
+          # over-the-air updates end to end (MinIO as the bucket)
+          mortar-update = import ./tests/mortar-update.nix { inherit pkgs; };
+          # the engine without bundled games (pkgs/puzzlescript)
+          puzzlescript = pkgs.callPackage ./pkgs/puzzlescript/check.nix {
+            puzzlescript = pkgs.callPackage ./pkgs/puzzlescript { };
+          };
+        });
 
       devShells = forAllSystems (system:
         let pkgs = import nixpkgs { inherit system; };

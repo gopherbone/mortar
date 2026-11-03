@@ -2,7 +2,8 @@
 # Built-in apps (greeter sessions in flake.nix) and what they need at
 # runtime.
 #
-#   puzzlescript  PuzzleScript engine (C core + Rust/SDL3 shell)
+#   puzzlescript  PuzzleScript engine (C core + Rust/SDL3 shell). No games ship
+#                 with it: it lists ~/.local/share/puzzlescript/games.
 #   m8c           Dirtywave M8 / M8 Headless client. Plug the M8 into the
 #                 Brick's TOP USB-C port (USB host).
 #   choochootracker  multi-engine tracker / groovebox ("ChooChoo"); see
@@ -64,11 +65,12 @@ in
 {
   options.mortar.apps = {
     puzzlescript = {
-      enable = lib.mkEnableOption "PuzzleScript" // { default = cfg.puzzlescript.package != null; };
+      enable = lib.mkEnableOption "PuzzleScript" // { default = true; };
       package = lib.mkOption {
-        type = lib.types.nullOr lib.types.package;
-        default = null;
-        description = "PuzzleScript package (from the puzzlescript flake input).";
+        type = lib.types.package;
+        default = pkgs.callPackage ../pkgs/puzzlescript { };
+        defaultText = lib.literalExpression "pkgs.callPackage ../pkgs/puzzlescript { }";
+        description = "The PuzzleScript engine. Games are the user's own, in ~/.local/share/puzzlescript/games.";
       };
     };
     pico8 = {
@@ -208,7 +210,7 @@ in
 
   config = {
     environment.systemPackages =
-      lib.optional (cfg.puzzlescript.enable && cfg.puzzlescript.package != null) cfg.puzzlescript.package
+      lib.optional cfg.puzzlescript.enable cfg.puzzlescript.package
       ++ lib.optional cfg.m8c.enable cfg.m8c.package
       ++ lib.optional cfg.choochootracker.enable cfg.choochootracker.package
       ++ lib.optional cfg.littlexm.enable cfg.littlexm.package

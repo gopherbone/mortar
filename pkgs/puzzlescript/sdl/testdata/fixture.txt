@@ -1,0 +1,88 @@
+title Engine check
+author Mortar tests
+homepage example.invalid
+
+========
+OBJECTS
+========
+
+Background
+#223344
+
+Wall
+#556677
+
+Player
+#ccddee
+
+Box
+#aa7733
+
+Target
+#33aa55
+
+=======
+LEGEND
+=======
+
+. = Background
+# = Wall
+P = Player
+B = Box
+T = Target
+
+=======
+SOUNDS
+=======
+
+================
+COLLISIONLAYERS
+================
+
+Background
+Target
+Player, Wall, Box
+
+======
+RULES
+======
+
+[ > Player | Box ] -> [ > Player | > Box ]
+
+==============
+WINCONDITIONS
+==============
+
+All Box on Target
+
+=======
+LEVELS
+=======
+
+#####
+#PBT#
+#####
+
+#####
+#P.B#
+#..T#
+#####
+
+######
+#PB.T#
+######
+
+#####
+#T..#
+#.B.#
+#.P.#
+#####
+
+######
+#P...#
+#.B.T#
+######
+
+########
+#P.B..T#
+########

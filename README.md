@@ -172,7 +172,9 @@ tests/mortar-update.nix   VM test: publish, download, stage, roll back (checks.*
 .github/workflows/        CI: build on push and publish for over-the-air updates
 ```
 
-PuzzleScript comes from a separate flake input (`puzzlescript`). The
+PuzzleScript (`pkgs/puzzlescript`) derives from Stephen Lavelle's
+[PuzzleScript](https://github.com/increpare/PuzzleScript) and is MIT-licensed;
+no games ship with it (see its README). The
 original Liontron-DTB configuration (`nixosConfigurations.trimui-brick`,
 `firmware/` vendor-boot0 chain, `re_tools/`, `harness/`, `FINDINGS.md`) is
 brittonr's work and kept for reference; it is not what Mortar boots.
