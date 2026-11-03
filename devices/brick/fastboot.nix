@@ -18,8 +18,9 @@
 #    still in dmesg, the journal and the black-box logs.
 #  - Unused systemd generators masked; sessions do not wait for the network.
 #
-# To go back: mortar.fastboot.enable = false, or any older generation in
-# the boot menu (each keeps its own kernel, initrd and command line).
+# To go back: mortar.fastboot.enable = false, or an older generation (SELECT
+# held at power-on, or the boot menu; each keeps its own kernel, initrd and
+# command line).
 { config, lib, pkgs, ... }:
 
 let

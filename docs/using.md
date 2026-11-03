@@ -27,6 +27,8 @@ of the apps.
 | Battery | Charger set up like stock (4.2 V, 960 mA, 128 mA termination, NTC/JEITA windows); the AXP2202 fuel gauge runs TrimUI's battery model. Charging/full shown in the status bars; warnings at 15 % and 5 %; clean power-off at 3 %. USB input: 500 mA from a computer, 2.5 A from a charger. `mortar-power status`. |
 | Debug | Each boot saves logs to `mortar-logs/` on the card's FAT partition. |
 
+If a new system won't boot, hold SELECT while powering on, until a second buzz: the previous system starts, once (docs/updates.md).
+
 Tap the power key to sleep: the screen goes dark and the Brick suspends (s2idle) after 3 s; the power key or any gamepad button wakes it. Settings can also sleep it when idle; hold it for Sleep / Restart / Power off. Set the time zone in MENU > Settings > Time zone.
 
 Not yet: deep suspend (it resumes with a fuzzy panel, see devices/brick/hardware.nix), LED effects.

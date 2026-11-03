@@ -339,6 +339,8 @@ pub enum Out {
     Remember,
     /// Settings > Updates: check now.
     UpdateCheck,
+    /// Settings > Updates > Roll back, confirmed.
+    UpdateRollback,
     /// Settings > Auto-check daily.
     UpdateAuto(bool),
     /// A request to mortar-setupd (Wi-Fi, Bluetooth), sent off the loop.
@@ -2735,6 +2737,9 @@ mod tests {
         let v = View { update: Some(&u), ..view(&[], &l, &sys, None) };
         assert!(press(&mut ui, &v, &[Button::A]).is_empty());
         assert_eq!(press(&mut ui, &v, &[Button::A]), vec![Out::Reboot]);
+        // roll back: A twice
+        assert!(press(&mut ui, &v, &[Button::Down, Button::Down, Button::A]).is_empty());
+        assert_eq!(press(&mut ui, &v, &[Button::A]), vec![Out::UpdateRollback]);
         // no update module: no row
         let v0 = view(&[], &l, &sys, None);
         assert!(!cross::settings_rows(&v0).contains(&cross::Row::Page(SubKind::Updates)));

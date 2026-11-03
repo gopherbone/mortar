@@ -21,7 +21,8 @@ bootloader boots NixOS generations through extlinux.
  TF-A BL31 (EL3, PSCI, SCP mailbox, suspend)  ─── stays resident
   ▼
  U-Boot proper (EL2)
-  │  rumble pulse (PH3, 120 ms), 1 s autoboot delay (UART),
+  │  1 s autoboot delay (UART), rumble pulse (PH3, 120 ms),
+  │  SELECT held: second pulse, sysboot mmc 0:1 /extlinux/previous.conf
   │  sysboot mmc 0:1 /extlinux/extlinux.conf     (FAT NIXOS_BOOT)
   │  [fallback: mmc 0:2 /boot/extlinux/extlinux.conf]
   │  ft_board_setup: memreserve BL31, SCP, 0x48000000+16 MiB
@@ -53,7 +54,7 @@ These pins are the same ones jkingston's `configs/brick_defconfig` uses.
 
 ## Patch provenance and licenses
 
-All patches except `u-boot/1001-*` are copied unmodified from jkingston's
+All patches except `u-boot/100*` are copied unmodified from jkingston's
 repository. That repository is GPL-2.0 (`COPYING`). Each patch keeps its
 original author header (Jack Kingston, `998656+jkingston@users.noreply.github.com`).
 The license that applies is the one on the code each patch adds:
@@ -83,6 +84,9 @@ The license that applies is the one on the code each patch adds:
 - **`patches/u-boot/1001-*`** was written for Mortar and is GPL-2.0+. It sets
   load addresses that are safe from the SCP, and the default `fdtfile` (see
   below).
+- **`patches/u-boot/1002-*`** was written for Mortar and is GPL-2.0+. It adds the
+  rollback key to U-Boot's device tree, and makes the `button` command fail on a
+  read error instead of reporting a press.
 - **`extract-scp.py`** is adapted from jkingston's `package/brick-scp/extract.py`
   and is GPL-2.0-only, like its source. It streams the image instead of loading
   it all into memory.
@@ -119,7 +123,7 @@ boot_package (sector 32800) + 0xd1c00. Its `dtb` item is a different tree
 | Root fs | initramfs (`rdinit=/init`) | ext4 `NIXOS_ROOT` (p2); `/boot` = FAT `NIXOS_BOOT` (p1, 512 MiB at 8 MiB) |
 | Load addresses | in bootcmd: kernel 0x42000000, fdt 0x44000000, initrd 0x45000000 | default env (patch 1001): kernel 0x40200000, fdt 0x46000000, script 0x46100000, pxefile 0x46200000, overlays 0x46300000, initrd 0x49000000 (624 MiB room), kernel_comp 0x70000000; `fdt_high`/`initrd_high` = ~0 |
 | BL31 reservation | `fdt rsvmem` in bootcmd, plus `ft_board_setup` memreserve | `ft_board_setup` memreserve (unchanged, runs for sysboot too), plus `reserved-memory.dtso` (no-map) |
-| Bootcount rollback | `BOOTCOUNT_FS` `/brick-bootcount`, limit 1, `altbootcmd` boots `brick-previous`/`brick-baseline` | dropped (see below) |
+| Rollback | automatic: `BOOTCOUNT_FS` `/brick-bootcount`, limit 1, `altbootcmd` boots `brick-previous`/`brick-baseline` | by hand: hold SELECT (see below) |
 | Card writes from U-Boot | `MMC_WRITE`, `FAT_WRITE` (for the bootcount) | none (`MMC_WRITE`, `FAT_WRITE`, `EXT4_WRITE`, `SAVEENV` off; `ENV_IS_NOWHERE`) |
 | Boot delay | 0 | 1 s (UART only; U-Boot has no video) |
 | Watchdog | `WATCHDOG_AUTOSTART` | unchanged |
@@ -153,32 +157,49 @@ initrd above 0x49000000 and boots it in place.
   so that the reset triggers his rollback. Mortar has no rollback, so
   deliberately starving the watchdog would only cause a reboot loop.
 
-## Bootcount / fallback
+## Rollback
 
-Dropped. jkingston's scheme only works with his fixed directories:
+Automatic rollback is dropped. jkingston's scheme only works with his fixed
+directories (U-Boot increments `/brick-bootcount` on FAT, above `BOOTLIMIT=1` the
+`altbootcmd` boots `brick-previous/`, userspace resets the counter), and it needs
+U-Boot to write to the card.
 
-- U-Boot increments `/brick-bootcount` on FAT.
-- Above `BOOTLIMIT=1`, the `altbootcmd` boots `brick-previous/`.
-- Userspace resets the counter.
+What there is instead needs a person and no writes. **Hold SELECT while powering
+on, until a second buzz** (it comes a quarter of a second after the first): U-Boot boots the previous generation, once. The next boot is the
+normal one; `mortar-update rollback` makes it stick.
 
-extlinux has no label that means "previous generation". NixOS labels are
-`nixos-default` and `nixos-<N>-default`, and the generation numbers change.
+- `devices/brick/rollback.nix` writes `extlinux/previous.conf` whenever the boot
+  entries change: a copy of `extlinux.conf` holding only the generation before the
+  default one. extlinux has no label meaning "previous", so userspace has to say.
+  A card with one generation has none.
+- `bootcmd` (`u-boot.nix`) reads the key with `button rollback` (patch 1002) and,
+  if it is held on two reads, runs `sysboot` on that file.
+- Why SELECT: the key has to be on PH, the bank known to be powered in U-Boot since
+  the rumble on PH3 works; A, B, X, Y, the D-pad and volume are on PD, whose supply
+  nobody has checked here, and L, L2, R2 on PB. MENU gets pressed by people waiting
+  for a boot, `Fn` is a switch. Waking from sleep doesn't pass through U-Boot, so
+  gamepad wake is unaffected, and nothing reads SELECT at boot.
+- Failing safe: without the key, or with a read error, or with no `previous.conf`,
+  or one naming files since deleted, `bootcmd` runs on into the normal boot. A
+  stale `previous.conf` can only name a generation older than the current one
+  (a system older than this feature rolled back to doesn't refresh it).
 
-To bring rollback back on top of extlinux:
+The bootloader isn't part of a generation: nothing a deploy or an update does
+changes it, and a card keeps the U-Boot it was written with. To put a new one on a
+card, keeping everything else:
 
-1. Re-enable `BOOTCOUNT_LIMIT`, `BOOTCOUNT_FS`, `FAT_WRITE` and `MMC_WRITE` in
-   `u-boot.nix`.
-2. Set `altbootcmd` to `sysboot mmc 0:1 any ${scriptaddr} /extlinux/fallback.conf`.
-3. Add a NixOS boot-success unit that:
-   - writes `fallback.conf` (a copy of `extlinux.conf` whose `DEFAULT` is the
-     last generation that booted successfully)
-   - zeroes `/boot/brick-bootcount`
-4. Optionally, starve the watchdog when boot does not finish.
+```sh
+nix build .#u-boot-mainline
+# DISK: the whole card, e.g. /dev/rdisk4 on a Mac (diskutil list; unmount it first)
+sudo dd if=DISK of=old-bootloader.bin bs=512 skip=256 count=16128   # the 128K..8M gap
+sudo dd if=result/u-boot-sunxi-with-spl.bin of=DISK bs=512 seek=256 conv=notrunc
+sync
+```
 
-`setenv pxe_label_override <label>` in `altbootcmd` is an alternative to step
-2, but userspace would still have to record the label. Without rollback,
-choose an older generation from the extlinux menu on UART. On-device
-selection without UART would need a `gpio input` key check in bootcmd.
+Sector 256 is 128 KiB; never write it at 0, that's the partition table. If it
+doesn't boot, take the card out (the Brick boots stock from eMMC then) and write
+`old-bootloader.bin` back with the same `seek=256`. Automatic rollback would still
+take `BOOTCOUNT_LIMIT` and `FAT_WRITE` back, plus a boot-success unit.
 
 ## Using it
 

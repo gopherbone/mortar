@@ -15,7 +15,7 @@
 //!   or disconnects, X forgets), "Pair new device" (discovery) and the
 //!   devices found, A pairs. Through mortar-setupd (BlueZ, its agent).
 //! - Time zone: regions, then their cities (the compositor loads the zones).
-//! - Updates (with mortar.update): check now / restart to update,
+//! - Updates (with mortar.update): check now / restart to update, roll back,
 //!   auto-check daily.
 //! - About: version and generation, storage, battery, temperature, the
 //!   device, and Controls (every button and chord).
@@ -128,6 +128,7 @@ pub(super) enum ActK {
     PowerOff,
     Logout,
     Update,
+    Rollback,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -174,7 +175,7 @@ impl SRow {
         !matches!(self, SRow::Label(_) | SRow::Note(..))
     }
     fn confirms(&self) -> bool {
-        matches!(self, SRow::Act(ActK::Restart | ActK::PowerOff | ActK::Logout))
+        matches!(self, SRow::Act(ActK::Restart | ActK::PowerOff | ActK::Logout | ActK::Rollback))
     }
 }
 
@@ -530,7 +531,7 @@ impl ShellUi {
             SubKind::TimeZone => tz_regions(&self.tz_zones),
             SubKind::TzCities => tz_cities(&self.tz_zones, s.region.as_deref().unwrap_or("")),
             SubKind::Updates => match v.update {
-                Some(_) => vec![SRow::Act(ActK::Update), SRow::Opt(OptK::AutoUpdate)],
+                Some(_) => vec![SRow::Act(ActK::Update), SRow::Opt(OptK::AutoUpdate), SRow::Act(ActK::Rollback)],
                 None => vec![SRow::Note("Updates are off".into(), "mortar.update.enable".into())],
             },
             SubKind::About => vec![
@@ -742,6 +743,10 @@ impl ShellUi {
                     }
                     None => self.fx(Sfx::Deny, None),
                 },
+                ActK::Rollback => {
+                    self.out.push(Out::UpdateRollback);
+                    self.show_toast(Toast::info("Rolling back…"));
+                }
             },
             (_, Some(SRow::Fact(f))) => {
                 let (t, s) = fact_text(f, v);
@@ -970,6 +975,7 @@ impl ShellUi {
             Some(SRow::Act(ActK::Restart)) => Some("Restart"),
             Some(SRow::Act(ActK::PowerOff)) => Some("Power off"),
             Some(SRow::Act(ActK::Logout)) => Some("Log out"),
+            Some(SRow::Act(ActK::Rollback)) => Some("Roll back"),
             Some(SRow::Fact(_)) => Some("Show"),
             Some(SRow::Region(n, _)) if n == "UTC" => Some("Set"),
             Some(SRow::Zone(_)) => Some("Set"),
@@ -1214,11 +1220,12 @@ impl ShellUi {
             SRow::Act(ActK::PowerOff) => ("Power off".into(), "Apps close".into()),
             SRow::Act(ActK::Logout) => ("Log out".into(), "Apps close; the greeter appears".into()),
             SRow::Act(ActK::Update) => match v.update {
-                Some(u) if u.ready => ("Restart to update".into(), u.message.clone()),
+                Some(u) if u.ready => (u.message.clone(), "Apps close".into()),
                 Some(u) if u.busy => (u.message.clone(), "Working in the background".into()),
                 Some(u) => ("Check now".into(), u.message.clone()),
                 None => ("Updates".into(), "Off".into()),
             },
+            SRow::Act(ActK::Rollback) => ("Roll back".into(), "The next restart starts the previous system".into()),
             SRow::Fact(f) => fact_text(*f, v),
             SRow::Key(i) => {
                 let (_, _, what, detail) = CONTROLS[*i];

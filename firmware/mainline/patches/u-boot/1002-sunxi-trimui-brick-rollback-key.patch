@@ -1,0 +1,57 @@
+From: Mortar contributors
+Subject: [PATCH] sunxi: trimui-brick: a key U-Boot can read for rollback
+
+bootcmd reads this key to boot the previous generation (u-boot.nix). `gpio input`
+can't set the pull-up the pad needs, so it goes through the button uclass, which
+sets it from the device tree flags.
+
+`button` returned !ret, which is 0 (success, "pressed") for a read error too. A
+failed check has to fall through to the normal boot, so only "on" succeeds now.
+
+Not from jkingston/trimui-brick-firmware; written for Mortar.
+
+--- a/cmd/button.c
++++ b/cmd/button.c
+@@ -74,7 +74,8 @@
+ 
+ 	ret = show_button_state(dev);
+ 
+-	return !ret;
++	/* Only "on" is success: a read error must not look like a pressed key. */
++	return ret == BUTTON_ON ? CMD_RET_SUCCESS : CMD_RET_FAILURE;
+ }
+ 
+ U_BOOT_CMD(
+--- a/dts/upstream/src/arm64/allwinner/sun50i-a133-trimui-brick.dts
++++ b/dts/upstream/src/arm64/allwinner/sun50i-a133-trimui-brick.dts
+@@ -9,6 +9,7 @@
+ /dts-v1/;
+ 
+ #include "sun50i-a100.dtsi"
++#include <dt-bindings/gpio/gpio.h>
+ 
+ / {
+ 	model = "TrimUI Brick";
+@@ -21,6 +22,22 @@
+ 
+ 	chosen {
+ 		stdout-path = "serial0:115200n8";
++	};
++
++	/*
++	 * Only the key bootcmd reads: hold SELECT at power-on to boot the previous
++	 * generation. As in the kernel's tree, the pin needs the SoC's pull-up
++	 * (the driver sets it from the flags), and PH is powered in U-Boot: the
++	 * rumble pulse on PH3 is the same bank.
++	 */
++	keys {
++		compatible = "gpio-keys";
++
++		button-rollback {
++			label = "rollback";
++			linux,code = <0x13a>; /* BTN_SELECT */
++			gpios = <&pio 7 15 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>; /* PH15 */
++		};
+ 	};
+ };
+ 

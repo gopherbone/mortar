@@ -212,12 +212,17 @@ Every update is a new system generation; the previous ones stay installed.
 - **On the Brick** (Terminal or SSH): `mortar-update rollback`, then restart:
   the previous generation becomes the boot entry. The same published
   update is not taken again; the next publish is.
-- **If the new system does not boot**: the U-Boot menu lists the last 5
-  generations, but only on the UART console. Without one, put the card in a
-  computer, open `NIXOS_BOOT/extlinux/extlinux.conf` and change the
-  `DEFAULT` line to the label of the previous entry (the `LABEL` lines below
-  it, newest first), then boot and run `mortar-update rollback` to make it
-  stick.
+- **On the Brick, in Settings**: Settings > Updates > Roll back (press A twice),
+  then restart. Same as above.
+- **If the new system does not boot**: hold SELECT while powering on, until a
+  second buzz. That boots the previous generation, once; then roll back as above
+  to make it stick. This needs a card with a U-Boot from after the feature was
+  added (it isn't updated with the system: firmware/mainline/README.md).
+- **If that doesn't help**: the U-Boot menu lists the last 5 generations, but only
+  on the UART console. Without one, put the card in a computer, open
+  `NIXOS_BOOT/extlinux/extlinux.conf` and change the `DEFAULT` line to the label of
+  the previous entry (the `LABEL` lines below it, newest first), then boot and run
+  `mortar-update rollback` to make it stick.
 - **The channel itself**: publish an older system again, e.g.
   `mortar publish --path /nix/store/…-nixos-system-mortar-… --force` (the
   `toplevel` of an older manifest; `channels/mortar/` in the bucket keeps a

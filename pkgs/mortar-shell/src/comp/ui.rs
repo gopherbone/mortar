@@ -500,6 +500,12 @@ impl Shell {
                         self.update.asked = true;
                     }
                 }
+                Out::UpdateRollback => {
+                    if let Some(u) = &self.cfg.update {
+                        super::state::run_detached(&u.rollback.clone());
+                        self.update.asked = true;
+                    }
+                }
                 Out::Setup(req) => match &self.net_worker {
                     Some(w) => w.send(req),
                     None => {
@@ -1004,7 +1010,8 @@ impl Shell {
             let top = st.available.as_ref().map(|a| a.toplevel.clone()).unwrap_or_default();
             if self.update.toasted.as_deref() != Some(top.as_str()) {
                 self.update.toasted = Some(top);
-                let mut t = Toast::info("Update ready — restart to apply");
+                // a rollback is ready too, with no update to name
+                let mut t = Toast::info(if st.available.is_some() { "Update ready — restart to apply".to_string() } else { st.message.clone() });
                 t.sub = st.available.as_ref().and_then(|a| a.changelog.first().cloned()).unwrap_or_else(|| "Settings › Updates".into());
                 t.secs = 5.0;
                 t.haptic = Some(Haptic::Double);

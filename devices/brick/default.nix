@@ -14,6 +14,7 @@
     ./audio.nix
     ./fastboot.nix
     ./image.nix
+    ./rollback.nix
   ];
 
   hardware.trimui-brick.enable = true;

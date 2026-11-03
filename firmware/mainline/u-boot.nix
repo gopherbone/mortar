@@ -2,7 +2,8 @@
 #
 # Mainline U-Boot (SPL + proper) for the TrimUI Brick (Allwinner A133), at the
 # revision jkingston/trimui-brick-firmware (1161bc7) pins, with his 8 patches
-# plus one Mortar patch (1001, SCP-safe load addresses). See README.md.
+# plus two Mortar patches (1001, SCP-safe load addresses; 1002, the rollback
+# key). See README.md.
 #
 # Output: $out/u-boot-sunxi-with-spl.bin = eGON SPL (LPDDR3 DRAM init, AXP717
 # PMIC rails, SCP start) followed by a FIT with TF-A BL31, the vendor SCP +
@@ -18,6 +19,8 @@
 #     writes the card.
 #   * CONFIG_WATCHDOG_AUTOSTART kept: the SoC watchdog stays armed into Linux.
 #   * BOOTDELAY 0 -> 1 (UART only; there is no video in U-Boot).
+#   * holding SELECT boots the previous generation (extlinux/previous.conf,
+#     written by devices/brick/rollback.nix).
 #
 # Build natively for aarch64-linux (callPackage from aarch64 pkgs). Needs the
 # unfree SCP derivation allowed (see scp.nix).
@@ -38,10 +41,24 @@ let
   # immediate power-on feedback.
   rumble = "gpio set PH3; sleep 0.12; gpio clear PH3";
 
+  # Holding SELECT at power-on (patch 1002 has the key): two reads a moment apart,
+  # the second after the pull-up has surely settled, then a second pulse to say
+  # it was seen, then the previous generation. Anything failing here (no key, no
+  # previous.conf, a file it names is gone) runs on into the normal boot below:
+  # `button` is only true for a key read as pressed, and sysboot returns. It
+  # writes nothing, and nothing persists: the next boot is the normal one.
+  rollback = lib.concatStringsSep " " [
+    "if button rollback; then sleep 0.25; if button rollback; then"
+    "${rumble}; echo Mortar: SELECT held, booting the previous generation;"
+    "sysboot mmc 0:1 any \${scriptaddr} /extlinux/previous.conf;"
+    "fi; fi"
+  ];
+
   # /boot is the FAT p1 (NIXOS_BOOT). The p2 /boot/extlinux fallback only
   # matters if /boot ever lives on the ext4 root instead.
   bootcmd = lib.concatStringsSep "; " [
     rumble
+    rollback
     "sysboot mmc 0:1 any \${scriptaddr} /extlinux/extlinux.conf"
     "sysboot mmc 0:2 any \${scriptaddr} /boot/extlinux/extlinux.conf"
     "echo Mortar: no bootable extlinux.conf on mmc 0:1 or mmc 0:2"
@@ -95,6 +112,11 @@ buildUBoot {
     # CONFIG_CMD_SAVEENV is not set
     CONFIG_ENV_IS_NOWHERE=y
 
+    # The rollback key in bootcmd (patch 1002).
+    CONFIG_BUTTON=y
+    CONFIG_BUTTON_GPIO=y
+    CONFIG_CMD_BUTTON=y
+
     # Kept: the SoC watchdog is armed in U-Boot and left running into Linux.
     CONFIG_WATCHDOG_AUTOSTART=y
   '';
@@ -119,7 +141,8 @@ buildUBoot {
     cfg=$out/u-boot.config
     for want in CONFIG_SUNXI_A133_VENDOR_SCP=y CONFIG_CMD_SYSBOOT=y \
                 CONFIG_WATCHDOG_AUTOSTART=y CONFIG_OF_BOARD_SETUP=y \
-                CONFIG_SUNXI_DRAM_A133_LPDDR3=y CONFIG_DRAM_CLK=672; do
+                CONFIG_SUNXI_DRAM_A133_LPDDR3=y CONFIG_DRAM_CLK=672 \
+                CONFIG_BUTTON_GPIO=y CONFIG_CMD_BUTTON=y; do
       grep -qx "$want" $cfg || { echo "missing $want in .config" >&2; exit 1; }
     done
     for unwanted in CONFIG_BOOTCOUNT_LIMIT CONFIG_FAT_WRITE CONFIG_MMC_WRITE; do

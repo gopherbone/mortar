@@ -113,6 +113,10 @@
               modules = [ ./configurations/bare.nix { mortar.usb.trustHost = true; } ];
             }).config;
           };
+          # which generation U-Boot's rollback key boots (devices/brick/rollback.nix)
+          previous-conf = pkgs.callPackage ./tests/previous-conf.nix {
+            previousConf = self.nixosConfigurations.brick-bare.config.system.build.mortarPreviousConf;
+          };
         } // lib.optionalAttrs (system == "aarch64-linux") {
           # the move from root's session, with and without the AI pack
           user-migrate = self.nixosConfigurations.brick-bare.pkgs.callPackage ./tests/user-migrate.nix {

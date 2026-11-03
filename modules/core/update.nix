@@ -241,6 +241,11 @@ in
       };
     };
 
+    # Settings > Updates > Roll back.
+    systemd.services.mortar-update-rollback = service "rollback" // {
+      description = "Mortar updates: make the previous system the next boot entry";
+    };
+
     # The session user (user.nix) and other members of the
     # mortar-update group may start these units.
     users.groups.mortar-update = { };
@@ -250,6 +255,7 @@ in
             subject.isInGroup("mortar-update")) {
           var unit = action.lookup("unit");
           if (unit == "mortar-update.service" ||
+              unit == "mortar-update-rollback.service" ||
               unit == "mortar-update-auto@on.service" ||
               unit == "mortar-update-auto@off.service") {
             return polkit.Result.YES;
@@ -263,6 +269,7 @@ in
       status = "/run/mortar-update/status.json";
       check = [ systemctl "start" "--no-block" "mortar-update.service" ];
       auto = [ systemctl "start" "--no-block" "mortar-update-auto@{on}.service" ];
+      rollback = [ systemctl "start" "--no-block" "mortar-update-rollback.service" ];
     };
   };
 }

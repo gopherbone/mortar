@@ -273,6 +273,9 @@ pub struct UpdateConfig {
     pub check: Vec<String>,
     /// Auto-check daily; "{on}" is replaced by "on" or "off".
     pub auto: Vec<String>,
+    /// Make the previous system the next boot entry.
+    #[serde(default)]
+    pub rollback: Vec<String>,
 }
 
 /// The parts of mortar-update's status file the shell uses.

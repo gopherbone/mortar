@@ -225,6 +225,14 @@ fn provision_stdin(cx: &mut Ctx) -> Result<(), String> {
 }
 
 fn rollback(cx: &mut Ctx) -> Result<(), String> {
+    let r = do_rollback(cx);
+    if let Err(e) = &r {
+        cx.write(&cx.status(Phase::Error, "Could not roll back").detail(e.clone()));
+    }
+    r
+}
+
+fn do_rollback(cx: &mut Ctx) -> Result<(), String> {
     let p = cx.cfg.profile.to_string_lossy().into_owned();
     run(Command::new(&cx.cfg.nix_env).args(["-p", &p, "--rollback"]), "nix-env --rollback")?;
     let target = resolve(&cx.cfg.profile).ok_or("profile vanished")?;
