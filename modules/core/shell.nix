@@ -311,8 +311,8 @@ let
         inherit (cfg.ui) renderer motion reduceMotion sounds soundVolume haptics bootAnimation screenshotDir cardFps msaa audioDevice suspend suspendGraceMs idleMinutes;
         hapticMs = cfg.ui.hapticMs;
         palette = if cfg.ui.palette != null then cfg.ui.palette else (if cfg.theme == "dark" then "night" else "day");
-        # the stock PowerVR libs for the GPU UI renderer (devices/brick/gpu.nix)
-        glLibDir = if (config.mortar.gpu.enable or false) then "${config.mortar.gpu.package}/lib" else null;
+        # GL libs for the GPU UI renderer, if the device has them
+        glLibDir = config.mortar.device.gpu.libDir;
       };
       inherit (cfg) autostart backgroundFps theme keyboardLayout;
       # SDL apps started through mortar-sdl-run (devices/brick/gpu.nix)
@@ -572,7 +572,8 @@ in
       };
       haptics = mkOption {
         type = types.bool;
-        default = true;
+        default = config.mortar.device.rumble;
+        defaultText = lib.literalExpression "config.mortar.device.rumble";
         description = "Default for Settings > Sound > Vibration (the gpio-vibrator rumble motor).";
       };
       hapticMs = mkOption {
@@ -594,17 +595,16 @@ in
       };
       suspend = mkOption {
         type = types.bool;
-        default = config.hardware.trimui-brick.suspend.enable or false;
-        defaultText = lib.literalExpression "config.hardware.trimui-brick.suspend.enable";
+        default = config.mortar.device.suspend;
+        defaultText = lib.literalExpression "config.mortar.device.suspend";
         description = ''
           Default for Settings > Power > Sleep mode (Suspend / Screen off).
           Sleep (power key tap, MENU > Settings > Power > Sleep, the power
           menu) blanks the
           screen and backlight and occludes the front app; with Suspend it
           also runs `actions.sleep` (`systemctl suspend`) once the screen
-          has been dark for `suspendGraceMs`. Wake sources: see
-          hardware.trimui-brick.suspend (s2idle: any button; deep: power
-          key). Apps are frozen meanwhile (audio stops).
+          has been dark for `suspendGraceMs`. Wake sources: the device's (Brick:
+          hardware.trimui-brick.suspend). Apps are frozen meanwhile (audio stops).
         '';
       };
       suspendGraceMs = mkOption {
@@ -653,8 +653,8 @@ in
 
     gpuApps = mkOption {
       type = types.bool;
-      default = config.mortar.gpu.enable or false;
-      defaultText = lib.literalExpression "config.mortar.gpu.enable";
+      default = config.mortar.device.gpu.apps;
+      defaultText = lib.literalExpression "config.mortar.device.gpu.apps";
       description = ''
         Run SDL apps started through `mortar-sdl-run` on the PowerVR as
         Wayland clients (pkgs/mortar-wlegl; the shell scans their buffers

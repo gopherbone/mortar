@@ -29,7 +29,7 @@ in
       description = "Tracker · groovebox";
       icon = "pad";
       order = 22;
-      command = "exec ${config.mortar.gpu.sdlRun}/bin/mortar-sdl-run ${cfg.package}/bin/choochootracker";
+      command = "exec ${config.mortar.device.sdlRun}/bin/mortar-sdl-run ${cfg.package}/bin/choochootracker";
     };
   };
 }

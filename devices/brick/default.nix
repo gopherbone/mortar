@@ -2,14 +2,16 @@
 # The TrimUI Brick as a NixOS module: kernel, boot chain, firmware, GPU, radios
 # and the SD image. It works without the Mortar UI: this alone is a console
 # system (with root's password "trimui": see hardware.nix; modules/core locks it).
-{ lib, ... }:
+{ config, lib, ... }:
 
 {
   imports = [
     ../../modules/unfree.nix
+    ../../modules/device.nix
     ./hardware.nix
     ./firmware.nix
     ./gpu.nix
+    ./audio.nix
     ./fastboot.nix
     ./image.nix
   ];
@@ -29,4 +31,17 @@
   boot.loader.generic-extlinux-compatible.configurationLimit = lib.mkDefault 5;
 
   mortar.fastboot.enable = lib.mkDefault true;
+
+  # What the layers above need to know (modules/device.nix; audio: audio.nix)
+  mortar.device = {
+    name = "TrimUI Brick";
+    gpu.libDir = if config.mortar.gpu.enable then "${config.mortar.gpu.package}/lib" else null;
+    gpu.apps = config.mortar.gpu.enable;
+    sdlRun = config.mortar.gpu.sdlRun;
+    suspend = config.hardware.trimui-brick.suspend.enable;
+    rumble = true;
+    usb.serialNvmem = "/sys/bus/nvmem/devices/sunxi-sid*/nvmem";
+    # Stock: 2.5 A, the driver's maximum.
+    power.usbAdapterCurrent = 2500000;
+  };
 }

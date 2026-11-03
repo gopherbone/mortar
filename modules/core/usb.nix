@@ -33,7 +33,7 @@ let
 
     # Serial number: SoC SID (stable across reflashes) > machine-id > fixed.
     serial=""
-    for f in /sys/bus/nvmem/devices/sunxi-sid*/nvmem; do
+    for f in ${config.mortar.device.usb.serialNvmem}; do
       if [ -r "$f" ]; then
         serial=$(od -An -tx1 -N16 "$f" 2>/dev/null | tr -d ' \n' || true)
         [ -n "$serial" ] && [ "$serial" != "00000000000000000000000000000000" ] && break
@@ -61,7 +61,7 @@ let
 
       mkdir -p strings/0x409
       echo "Mortar"       > strings/0x409/manufacturer
-      echo "TrimUI Brick" > strings/0x409/product
+      echo "${config.mortar.device.name}" > strings/0x409/product
       echo "$serial"      > strings/0x409/serialnumber
 
       mkdir -p configs/c.1/strings/0x409

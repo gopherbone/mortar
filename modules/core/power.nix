@@ -74,10 +74,10 @@ in
     };
     usbAdapterCurrent = mkOption {
       type = types.ints.unsigned;
-      default = 2500000;
+      default = config.mortar.device.power.usbAdapterCurrent;
+      defaultText = lib.literalExpression "config.mortar.device.power.usbAdapterCurrent";
       description = ''
-        USB input current limit (uA) on a charger (stock: 2.5 A, the driver's
-        maximum). 0 leaves the input limit alone.
+        USB input current limit (uA) on a charger. 0 leaves the input limit alone.
       '';
     };
     dryRun = mkOption {

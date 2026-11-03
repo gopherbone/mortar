@@ -7,6 +7,7 @@
 {
   imports = [
     ../unfree.nix
+    ../device.nix
     ./usb.nix
     ./usb-watchdog.nix
     ./audio.nix

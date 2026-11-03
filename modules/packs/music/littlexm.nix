@@ -25,7 +25,7 @@ in
       description = "Tracker · FastTracker XM";
       icon = "pad";
       order = 23;
-      command = "exec ${config.mortar.gpu.sdlRun}/bin/mortar-sdl-run ${cfg.package}/bin/little-xm-tracker";
+      command = "exec ${config.mortar.device.sdlRun}/bin/mortar-sdl-run ${cfg.package}/bin/little-xm-tracker";
     };
   };
 }

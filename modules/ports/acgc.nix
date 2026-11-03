@@ -51,7 +51,7 @@ in
         icon = "pad";
         order = 26;
         requires = cfg.rom;
-        command = "exec ${config.mortar.gpu.sdlRun}/bin/mortar-sdl-run ${cfg.bin}";
+        command = "exec ${config.mortar.device.sdlRun}/bin/mortar-sdl-run ${cfg.bin}";
       };
     })
   ];

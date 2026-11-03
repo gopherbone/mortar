@@ -34,6 +34,7 @@
     ../modules/packs/terminal.nix
     ../devices/brick/image.nix
 
+    ../devices/brick/audio.nix
     ../devices/brick
     ../modules/core
     ../modules/packs/music

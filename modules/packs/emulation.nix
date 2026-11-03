@@ -332,7 +332,6 @@ let
 
   hasShell = options ? mortar && options.mortar ? shell;
   hasGreeter = options ? mortar && options.mortar ? greeter;
-  hasGpu = options ? mortar && options.mortar ? gpu;
 in
 {
   options.mortar.play = {
@@ -466,11 +465,7 @@ in
               description = "Emulators · libretro";
               icon = "pad";
               order = 15;
-              command =
-                if hasGpu then
-                  "exec ${config.mortar.gpu.sdlRun}/bin/mortar-sdl-run ${launcher}/bin/mortar-play-launch"
-                else
-                  "exec ${launcher}/bin/mortar-play-launch";
+              command = "exec ${config.mortar.device.sdlRun}/bin/mortar-sdl-run ${launcher}/bin/mortar-play-launch";
             };
           }
         ))

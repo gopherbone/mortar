@@ -18,6 +18,8 @@
       nixosModules = {
         # Hardware. Works without the rest (a console system).
         brick = ./devices/brick;
+        # What a device module sets for the layers above.
+        device-interface = ./modules/device.nix;
 
         # The shell, greeter, setup and pairing, power, updates, users.
         core = ./modules/core;

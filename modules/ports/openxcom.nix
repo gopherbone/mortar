@@ -33,7 +33,7 @@ in
       icon = "pad";
       order = 27;
       requires = cfg.data;
-      command = "exec ${config.mortar.gpu.sdlRun}/bin/mortar-sdl-run ${cfg.package}/bin/openxcom";
+      command = "exec ${config.mortar.device.sdlRun}/bin/mortar-sdl-run ${cfg.package}/bin/openxcom";
     };
   };
 }
