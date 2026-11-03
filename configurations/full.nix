@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
-# The full configuration: every pack and port.
+# The full configuration: every pack and port (OpenXcom is not among them: it
+# is an app in its own profile, pkgs/openxcom/app.nix).
 #
 # The leaf modules are listed one by one, in this order, because module order
 # decides the order of merged lists (system packages, kernel parameters, ...;
@@ -13,7 +14,6 @@
     ../devices/brick/firmware.nix
     ../devices/brick/gpu.nix
     ../modules/core/audio.nix
-    ../modules/ports/openxcom.nix
     ../modules/packs/music/littlexm.nix
     ../modules/packs/music/choochoo.nix
     ../modules/packs/music/m8c.nix

@@ -5,9 +5,15 @@
 #     packs = [ mortar.nixosModules.pack-music ];
 #     modules = [ ./my-apps.nix ];
 #   }
+#
+# And an app the shell finds at runtime, outside any system (mk-app.nix):
+#
+#   mortar.lib.mkApp pkgs { package = ...; id = "my-port"; name = "My Port"; }
 { self, nixpkgs }:
 
 {
+  mkApp = import ./mk-app.nix { inherit (nixpkgs) lib; };
+
   mkSystem =
     {
       device ? self.nixosModules.brick,
