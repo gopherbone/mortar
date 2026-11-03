@@ -515,9 +515,11 @@ int display_open(const char *title) {
     }
 
     want_ack = 1;
-    scan_pads();
+    // Watch first: the shell's clone pad appears around when we start, and one
+    // that arrives between a scan and the watch would never be seen.
     ino_fd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
     if (ino_fd >= 0) inotify_add_watch(ino_fd, "/dev/input", IN_CREATE | IN_DELETE | IN_ATTRIB);
+    scan_pads();
 
     struct sigaction sa = {.sa_handler = on_term};
     sigaction(SIGTERM, &sa, NULL);
