@@ -36,10 +36,13 @@ mortar acgc [--host HOST] [--iso PATH] [--remove]
     profile (/nix/var/nix/profiles/acgc), and copy the image to the Brick
     (~/.local/share/acgc/rom/GAFE01.iso). Neither is ever part of the
     system. --remove takes the port away and leaves the image and saves.
-mortar xcom --data PATH [--host HOST]
-    OpenXcom (pkgs/openxcom): check your own copy of UFO: Enemy Unknown and
-    copy the folders the game reads to the Brick
-    (~/.local/share/openxcom/UFO). It is never part of the system.
+mortar xcom [--data PATH] [--host HOST] [--remove]
+    OpenXcom (pkgs/openxcom): build the engine and install it into its own
+    profile (/nix/var/nix/profiles/apps/openxcom); the shell shows it at once.
+    With --data, check your own copy of UFO: Enemy Unknown and copy the
+    folders the game reads to the Brick (~/.local/share/openxcom/UFO). Neither
+    is ever part of the system. --remove takes the engine away and leaves
+    your game files and saves.
 mortar publish [--config NAME] [--path STORE_PATH] [--channel C] [--key FILE]
                [--credentials FILE] [--force] [--dry-run]
                [--endpoint URL --bucket NAME [--region R]]
@@ -343,6 +346,10 @@ fn deploy(o: &Opts) {
     // update cache), so a deploy never brings it back: say so when it's gone.
     if !remote(&o.host, &format!("test -x {PICO8_PROFILE}/bin/pico8")) {
         say("PICO-8 is not installed on the Brick; run `mortar pico8` to add it");
+    }
+    // Moved out of the system: a Brick with the game on it needs it installed once.
+    if remote(&o.host, &xcom::needs_install_script(&o.data_home())) {
+        say("OpenXcom is no longer part of the system; run `mortar xcom` to install it (your game files and saves are untouched)");
     }
 }
 

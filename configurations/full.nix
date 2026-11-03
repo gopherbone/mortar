@@ -3,6 +3,8 @@
 # Claude Code (`nixosModules.pack-ai`) and the non-commercial emulator cores
 # (`mortar.play.nonCommercialCores`) are not in it: they are opt-in, for your own
 # flake (modules/unfree.nix).
+# OpenXcom is not among them either: it is an app in its own profile,
+# pkgs/openxcom/app.nix.
 #
 # The leaf modules are listed one by one, in this order, because module order
 # decides the order of merged lists (system packages, kernel parameters, ...;
@@ -18,7 +20,6 @@
     ../devices/brick/firmware.nix
     ../devices/brick/gpu.nix
     ../modules/core/audio.nix
-    ../modules/ports/openxcom.nix
     ../modules/packs/music/littlexm.nix
     ../modules/packs/music/choochoo.nix
     ../modules/packs/music/m8c.nix

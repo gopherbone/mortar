@@ -1962,6 +1962,50 @@ mod tests {
     fn quiet() -> Prefs {
         Prefs { tips_seen: ["menu", "keyboard", "game", "controls"].map(String::from).to_vec(), ..Prefs::default() }
     }
+    /// An app installed or removed while the MENU shows: discover.rs changes
+    /// the launcher under the open cross.
+    #[test]
+    fn the_cross_follows_entries_coming_and_going() {
+        let sys = Sys::default();
+        let full = launcher();
+        let v = view(&[], &full, &sys, None);
+        let mut ui = ShellUi::new(quiet(), false);
+        ui.menu_key(&v);
+        press(&mut ui, &v, &[Button::Right, Button::Right]);
+        assert_eq!(ui.menu_category(), Some(Cat::Games));
+        assert_eq!(sel_row(&ui), Some(cross::Row::Launch("pico".into())));
+
+        // the last game goes: on to Apps, its tile the raised one
+        let no_games: Vec<_> = full.iter().filter(|l| l.category != Category::Games).cloned().collect();
+        let v = view(&[], &no_games, &sys, None);
+        ui.sync_menu(&v);
+        assert_eq!(ui.menu_category(), Some(Cat::Apps));
+        assert_eq!(ui.cat_strip_slot(), 0);
+        assert!(!cross::rows(Cat::Apps, &v).is_empty());
+        assert_eq!(sel_row(&ui), Some(cross::Row::Launch("term".into())));
+
+        // from Music, right of it: stays on Music, one slot to the left
+        press(&mut ui, &v, &[Button::Right]);
+        assert_eq!(ui.menu_category(), Some(Cat::Music));
+        assert_eq!(ui.cat_strip_slot(), 1);
+        let v = view(&[], &full, &sys, None);
+        ui.sync_menu(&v);
+        assert_eq!(ui.menu_category(), Some(Cat::Music));
+        assert_eq!(ui.cat_strip_slot(), 2, "Games came back in front of it");
+        let v = view(&[], &no_games, &sys, None);
+        ui.sync_menu(&v);
+        assert_eq!(ui.menu_category(), Some(Cat::Music));
+        assert_eq!(ui.cat_strip_slot(), 1);
+
+        // the entry under the selection goes: the row stays in range
+        let one: Vec<_> = no_games.iter().filter(|l| l.id != "files").cloned().collect();
+        press(&mut ui, &v, &[Button::Left, Button::Down]);
+        assert_eq!(sel_row(&ui), Some(cross::Row::Launch("files".into())));
+        let v = view(&[], &one, &sys, None);
+        ui.sync_menu(&v);
+        assert_eq!(sel_row(&ui), Some(cross::Row::Launch("term".into())));
+    }
+
     fn launcher() -> Vec<LauncherInfo> {
         [("term", Category::Apps), ("files", Category::Apps), ("m8", Category::Music), ("pico", Category::Games)]
             .iter()

@@ -10,6 +10,7 @@ mod attention;
 mod comp;
 mod config;
 mod damage;
+mod discover;
 mod games;
 mod haptics;
 mod homeart;

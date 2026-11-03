@@ -5,6 +5,10 @@
 #     packs = [ mortar.nixosModules.pack-music ];
 #     modules = [ ./my-apps.nix ];
 #   }
+#
+# And an app the shell finds at runtime, outside any system (mk-app.nix):
+#
+#   mortar.lib.mkApp pkgs { package = ...; id = "my-port"; name = "My Port"; }
 { self, nixpkgs }:
 
 let
@@ -12,6 +16,8 @@ let
   bare = ../configurations/bare.nix;
 in
 {
+  mkApp = import ./mk-app.nix { inherit (nixpkgs) lib; };
+
   # bare, full, and each pack and port alone on top of bare.
   matrix =
     {

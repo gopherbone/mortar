@@ -13,6 +13,7 @@ a PowerVR GE8300 with no GBM.
 pkgs/mortar-shell/
   src/main.rs        CLI: run | ctl | preview
   src/config.rs      /etc/mortar-shell/config.json (written by the module)
+  src/discover.rs    apps in their own profiles: manifests, scanning, merging
   src/apps.rs        running apps: launch, pid ancestry -> app, MRU, close, reap
   src/router.rs      who gets a pad button (pure, unit-tested)
   src/shellui.rs     the shell UI: boot, transitions, OSD, toasts, app
@@ -48,6 +49,7 @@ pkgs/mortar-shell/
     state.rs         Smithay state + handlers, focus, input dispatch
     backend.rs       element list (renderer-generic), headless backend, screenshots
     drm.rs           libseat session + DRM/KMS output
+    appwatch.rs      inotify: when to look at the app profiles again
     input.rs         evdev devices via the session, classification, grabs
     pads.rs          per-app uinput gamepads
     ctl.rs           control socket
@@ -106,6 +108,69 @@ on black.
   next app in MRU order is shown, or home (the stack on the dashboard).
 - Log out (MENU > Settings > Power) ends the shell (status 0); greetd
   returns to the greeter and all apps get SIGTERM.
+
+## Apps in their own profiles
+
+Launcher entries in the config need a system deploy. An app can instead be a Nix
+profile of its own, `<appProfiles>/<id>` (`mortar.shell.appProfiles`, default
+`/nix/var/nix/profiles/apps`), which the shell finds by itself while it runs.
+`lib.mkApp` makes one from a package; `pkgs/openxcom/app.nix` is a real example.
+
+The manifest is `share/mortar/app.json` in the profile:
+
+```json
+{
+  "format": 1,
+  "id": "openxcom",
+  "name": "OpenXcom",
+  "description": "UFO Defense · your own copy",
+  "category": "games",
+  "icon": "pad",
+  "run": ["bin/openxcom"],
+  "gpu": true,
+  "gamepad": "forward",
+  "requires": ["~/.local/share/openxcom/UFO/GEODATA/WORLD.DAT"]
+}
+```
+
+| Field | | |
+|---|---|---|
+| `format` | required | 1. Another number: skipped, with a warning. Unknown fields are errors, so a new field means a new format. |
+| `id` | required | The profile's name, exactly: lowercase letters, digits, `-`, `_`, up to 64. |
+| `name` | required | On the tile and in the MENU. |
+| `run` | required | The program, relative to the profile (no `..`, and it has to be executable), then its arguments as they are. |
+| `description` | `""` | Second line. |
+| `category` | guessed | `apps`, `games` or `music`. |
+| `icon` | `pad` | From the Mortar UI set. |
+| `gpu` | `false` | Start it through the device's `mortar-sdl-run` (config `sdlRun`). |
+| `gamepad` | `forward` | `forward`, `keyboard` or `none`. |
+| `requires` | `[]` | Absolute or under `~/` (the session user's home). The entry hides until they all exist. Data belongs there, outside the profile, so removing the app leaves it alone. |
+
+- **Scanning.** At start, then whenever an entry that could be a profile comes
+  or goes. Generation links (`<id>-<N>-link`) and nix's temporary names are not
+  profiles.
+- **Watching.** One inotify watch on the directory, a source in the event loop:
+  no timers, no wakeups until something is installed (measured: an idle shell
+  makes the same number of voluntary context switches with and without it). One
+  watch is enough because a profile is a symlink swapped by rename and its target
+  is an immutable store path, so nothing inside it is watched: changing files in
+  place in a plain directory goes unnoticed until the next change next to it.
+  While the directory doesn't exist the nearest parent is watched, and the watch
+  moves down when it appears.
+- **Bad manifests.** A warning (once per profile and message, not on each scan)
+  and no entry. Not JSON, wrong format, wrong id, a missing program, a FIFO or a
+  huge file: nothing here can stop the shell.
+- **Precedence.** An entry from the config with the same id wins; the log says so.
+  Discovered entries follow the config's, by name (they have no `order`).
+- **Updates.** The command goes through the profile link, not its store path, so
+  an update applies to the next start; a running copy goes on as it is.
+- **Removal.** The entry leaves the launcher. A running app is not touched and
+  stays in Running (it has its own copy of the entry). Restart says it's no longer
+  installed, instead of closing it and failing to start it. If the profile comes
+  back, launching switches to the running copy.
+- **Not covered.** `mortar.shell.autostart` is checked against the config's
+  entries when the system is built, so it can't name a discovered app. The greeter
+  lists only the config's sessions.
 
 ## Games (mortar-play)
 
@@ -1143,6 +1208,12 @@ titles, launching and switching, paging, the panel's requests and the
 hibernation policy; mortar-play's `tests.shell` drives the whole flow in
 the shell, see pkgs/mortar-play/DESIGN.md.)
 
+- Unit tests (`cargo test`, also on macOS): manifests (every field, each way one can
+  be bad), scanning, precedence, apps coming and going, a running app outliving
+  its profile, the cross following them; on Linux only, the inotify watch.
+  `passthru.tests.discovery` does this in a running shell in the sandbox, and
+  `checks.*.app-profiles` in a VM with real `nix-env` profiles and garbage
+  collection.
 - Unit tests (`cargo test`, also on macOS): config parsing, pid ancestry,
   MRU, button routing (MENU chord, releases on retarget, keyboard mode),
   OSK layout and typing, the MENU (previous app, the Running page and

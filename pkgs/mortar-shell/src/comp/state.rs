@@ -236,6 +236,11 @@ pub struct Shell {
     /// The launcher as the UI sees it (`view_parts`, several times a
     /// frame): when it was made, which entries were running, the list.
     pub launcher_cache: std::cell::RefCell<Option<LauncherCache>>,
+    /// Finds apps in their own profiles (discover.rs; None: no discovery).
+    pub scanner: Option<crate::discover::Scanner>,
+    /// Discovered apps whose profile went: their "Needs you" still goes
+    /// with them, though the entry is gone.
+    removed_apps: Vec<String>,
 }
 
 impl Shell {
@@ -388,6 +393,8 @@ impl Shell {
             about: crate::about::About::read(),
             about_at: Instant::now(),
             launcher_cache: Default::default(),
+            scanner: None,
+            removed_apps: Vec::new(),
         };
         shell.apply_prefs();
         shell.refresh_timezone();
@@ -520,6 +527,36 @@ impl Shell {
     }
 
     // ------------------------------------------------------------ apps ----
+
+    /// Look at the app profiles again and bring the launcher up to date.
+    /// Running apps are not touched: one whose profile went keeps running.
+    pub fn rediscover(&mut self) {
+        let Some(scanner) = &mut self.scanner else { return };
+        let found = scanner.scan(&self.cfg.apps);
+        let change = crate::discover::apply(&mut self.cfg.apps, found);
+        if change.is_empty() {
+            return;
+        }
+        for id in &change.added {
+            tracing::info!(app = %id, "app profile added");
+        }
+        for id in &change.changed {
+            tracing::info!(app = %id, "app profile changed");
+        }
+        for id in &change.removed {
+            if self.apps.by_entry(id).is_some() {
+                tracing::info!(app = %id, "app profile removed; the running app keeps running");
+            } else {
+                tracing::info!(app = %id, "app profile removed");
+            }
+        }
+        self.removed_apps.retain(|id| !change.added.contains(id));
+        self.removed_apps.extend(change.removed);
+        let (apps, removed) = (&self.apps, &self.removed_apps);
+        self.attention.retain(|id| removed.iter().any(|r| r == id) && apps.by_entry(id).is_none());
+        *self.launcher_cache.borrow_mut() = None;
+        self.ui_dirty = true;
+    }
 
     pub fn launch(&mut self, id: &str) -> Result<u32, String> {
         let e = self.cfg.app(id).cloned().ok_or(format!("unknown app '{id}'"))?;
@@ -663,8 +700,8 @@ impl Shell {
         }
         // "Needs you" of a launcher entry that no longer runs goes with it
         if !gone.is_empty() {
-            let (apps, cfg) = (&self.apps, &self.cfg);
-            if self.attention.retain(|id| cfg.app(id).is_some() && apps.by_entry(id).is_none()) {
+            let (apps, cfg, removed) = (&self.apps, &self.cfg, &self.removed_apps);
+            if self.attention.retain(|id| (cfg.app(id).is_some() || removed.iter().any(|r| r == id)) && apps.by_entry(id).is_none()) {
                 self.ui_dirty = true;
             }
         }

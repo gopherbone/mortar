@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //! The compositor (Linux only).
 
+pub mod appwatch;
 pub mod backend;
 pub mod bg;
 pub mod ctl;
@@ -97,6 +98,8 @@ pub fn run(opts: Opts) -> Result<(), String> {
             smithay::reexports::calloop::timer::TimeoutAction::ToDuration(Duration::from_secs(2))
         })
         .map_err(|e| e.to_string())?;
+
+    appwatch::start(&mut shell, &handle);
 
     // autostart: launch in reverse so the first ends up visible
     let auto: Vec<String> = shell.cfg.autostart.clone();
