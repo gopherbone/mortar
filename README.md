@@ -42,9 +42,11 @@ zstd -d result/sd-image/*.img.zst -o mortar.img
 
 The build downloads TrimUI's public firmware release for its blobs. They are
 proprietary, and no licence grants redistribution; because TrimUI publishes them, the
-project has decided the bare image and cache may hold them. Anything else unfree, such
-as Claude Code or emulator cores with non-commercial licences, **must never be in a
-published image or a public cache**: a system of your own with those stays private.
+project has decided the bare image and cache may hold them. Three emulator cores have
+non-commercial licences that allow free distribution, so they are published too, which
+means **Mortar can't be sold and doesn't take donations** (`LICENSE`). Anything else
+unfree, such as Claude Code, **must never be in a published image or a public cache**: a
+system of your own with that stays private.
 `mortar.unfree` lists what a system may use; see `docs/updates.md`.
 
 After booting a system, change the configuration and:
@@ -70,15 +72,12 @@ nix run .#mortar -- deploy --reboot --config brick-bare # --flake FLAKE for your
 }
 ```
 
-Claude Code and the emulator cores with non-commercial licences (SNES, Mega Drive,
-Master System, Game Gear, Arcade) are in no configuration here. To have them on your
-own Brick:
+Claude Code is in no configuration here. To have it on your own Brick:
 
 ```nix
 modules = [
   mortar.nixosModules.full
   mortar.nixosModules.pack-ai
-  { mortar.play.nonCommercialCores = true; }
 ];
 ```
 
@@ -157,8 +156,8 @@ Keep it that way in anything you contribute.
 
 ## What has and hasn't been tested
 
-Tested on one Brick, by its owner: the full configuration with Claude Code and the
-non-commercial cores added, with all its apps (details and open items in
+Tested on one Brick, by its owner: the full configuration with Claude Code added,
+with all its apps (details and open items in
 [docs/using.md](docs/using.md)). `brick-full` itself, without those, has not been
 booted as such.
 

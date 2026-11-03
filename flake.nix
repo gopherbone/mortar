@@ -40,8 +40,7 @@
       };
 
       nixosConfigurations = {
-        # Every pack and port that may be published (no Claude Code, no
-        # non-commercial cores).
+        # Every pack and port that may be published (no Claude Code).
         brick-full = self.lib.mkSystem { modules = [ ./configurations/full.nix ]; };
         # The old name of brick-full.
         brick-mainline = self.nixosConfigurations.brick-full;

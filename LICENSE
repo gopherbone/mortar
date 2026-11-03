@@ -4,6 +4,13 @@ All original code in this repository is licensed under GPL-2.0-or-later.
 
 Exceptions:
 - pkgs/puzzlescript is under the MIT License; see pkgs/puzzlescript/LICENSE.
+- mortar-play and mortar-ui carry an additional permission to work with libretro cores
+  whatever their licences; see pkgs/mortar-play/LICENSE-EXCEPTION.
+- The emulation pack includes Snes9x 2005, Genesis Plus GX and FBNeo, whose licences
+  allow free distribution but not sale, and FBNeo's forbids asking for donations for a
+  project that uses it. So Mortar with them can't be sold and doesn't take donations.
+  Their licences are in /etc/mortar-play/licenses on a system that has them. Set
+  `mortar.play.nonCommercialCores = false` to build without them.
 - The repository holds no vendor binaries. Earlier commits in its history do
   (TrimUI TG3040 boot firmware, extracted from stock firmware that TrimUI
   distributes); they are not covered by this license.

@@ -32,7 +32,7 @@ if it stops being true (`mortar.public`, `tests/public-policy.nix`,
 | Mortar and free software | Yes |
 | TrimUI's files for the Brick: GPU userspace (`pvr-ddk-userspace`), Wi-Fi, Bluetooth and GPU firmware (`trimui-brick-firmware`), SCP in the boot image (`trimui-brick-scp`, `u-boot-trimui-brick-mainline`) | Yes, by the project's decision (below) |
 | Claude Code | **No.** Commercial software; `nixosModules.pack-ai` for your own system |
-| FBNeo, Genesis Plus GX, Snes9x 2005 | **No.** Non-commercial licences; `mortar.play.nonCommercialCores` for your own system |
+| FBNeo, Genesis Plus GX, Snes9x 2005 | Yes. Their licences allow free distribution, not sale, and FBNeo's rules out asking for donations, so Mortar does neither. Their licences ship in `/etc/mortar-play/licenses`. `mortar.play.nonCommercialCores = false` builds without them |
 | PICO-8 and game data | **No.** Never in the repository, CI or a cache. They stay in profiles of their own on the Brick (`mortar pico8`), and updates leave those alone |
 
 **The decision on TrimUI's files.** They are proprietary, and we have no licence

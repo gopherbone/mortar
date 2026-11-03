@@ -1,0 +1,13 @@
+mortar-play and mortar-ui are licensed under GPL-2.0-or-later, with this
+additional permission.
+
+Copyright (c) 2026 gopherbone
+
+As a special exception, the copyright holder of mortar-play and mortar-ui gives you
+permission to combine them with libretro cores, which they load as plugins through the
+libretro API, whatever those cores' licences, and to distribute the result. You must
+follow the GNU GPL for mortar-play and mortar-ui themselves, and each core's own
+licence for that core. This permission does not change any core's licence.
+
+If you modify mortar-play or mortar-ui, you may extend this exception to your version,
+but you don't have to. If you don't want to, delete this exception from your version.

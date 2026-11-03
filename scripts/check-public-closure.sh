@@ -7,8 +7,8 @@
 #   usage: check-public-closure.sh <store path>...
 set -euo pipefail
 
-# Commercial software, non-commercial cores, and what comes from a user's own files.
-deny='-(claude-code|mortar-claude|libretro-(fbneo|genesis-plus-gx|snes9x2005)|pico-8|pico8|acgc|GAFE01|openxcom-data|UFO)[-.]'
+# Commercial software, and what comes from a user's own files.
+deny='-(claude-code|mortar-claude|pico-8|pico8|acgc|GAFE01|openxcom-data|UFO)[-.]'
 
 status=0
 for path in "$@"; do

@@ -1,8 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 # The full configuration: every pack and port this repository may publish.
-# Claude Code (`nixosModules.pack-ai`) and the non-commercial emulator cores
-# (`mortar.play.nonCommercialCores`) are not in it: they are opt-in, for your own
-# flake (modules/unfree.nix).
+# Claude Code (`nixosModules.pack-ai`) is not in it: it is opt-in, for your own flake
+# (modules/unfree.nix).
 # OpenXcom is not among them either: it is an app in its own profile,
 # pkgs/openxcom/app.nix.
 #

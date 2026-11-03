@@ -9,8 +9,7 @@
 #   build      arm64: the other checks, brick-bare and brick-full; then their
 #              closures, signed, to the bucket and channels/testing/<config>.json
 #
-# What must never be in anything public: Claude Code, the non-commercial emulator
-# cores, PICO-8 and game data. None is in brick-bare or brick-full; `settings` and
+# What must never be in anything public: Claude Code, PICO-8 and game data. None is in brick-bare or brick-full; `settings` and
 # `build` check, and fail the run if that changes (modules/unfree.nix). TrimUI's
 # files for the Brick are in the closure, as the project has decided
 # (docs/updates.md, "What may be published"). Nothing built here is uploaded as a

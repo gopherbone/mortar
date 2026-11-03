@@ -5,8 +5,10 @@
 # What may be published is narrower. TrimUI's files for the Brick are hosted in the
 # public bare image and cache: the project's decision, because TrimUI publishes
 # them (docs/updates.md). It is not a licence: they stay proprietary, and nobody
-# here can grant rights in them. Commercial software (Claude Code) and
-# non-commercial emulator cores are never in anything public.
+# here can grant rights in them. Three emulator cores have non-commercial licences that
+# allow free distribution, so they are published too, which is why Mortar can't be
+# sold or take donations (LICENSE). Commercial software (Claude Code) is never in
+# anything public.
 { config, lib, ... }:
 
 let
@@ -24,7 +26,7 @@ in
     publicUnfree = lib.mkOption {
       type = lib.types.listOf lib.types.str;
       readOnly = true;
-      default = [ "trimui-brick-scp" "u-boot-trimui-brick-mainline" "trimui-brick-firmware" "pvr-ddk-userspace" ];
+      default = [ "trimui-brick-scp" "u-boot-trimui-brick-mainline" "trimui-brick-firmware" "pvr-ddk-userspace" "libretro-snes9x2005-plus" "libretro-genesis-plus-gx" "libretro-fbneo" ];
       description = "The unfree packages the project has decided may be in a public image or cache.";
     };
 

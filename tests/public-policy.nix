@@ -4,8 +4,8 @@
 #   - bare and full evaluate to the same system with mortar.public on, which
 #     refuses every unfree package outside mortar.publicUnfree. So nothing else
 #     unfree is in them, however it got there.
-#   - The opt-ins are in fact refused: Claude Code, the non-commercial cores, and
-#     a root console for USB hosts.
+#   - The opt-ins are in fact refused: Claude Code and a root console for USB hosts.
+#   - The non-commercial cores are in, and can be turned off.
 #
 # `lib.evalMatrix` covers the rest; CI's closure check is the second line, by name,
 # for what isn't marked unfree.
@@ -22,8 +22,10 @@ let
     "bare holds only what may be published" = drv [ bare public ] == self.nixosConfigurations.brick-bare.config.system.build.toplevel.drvPath;
     "full holds only what may be published" = drv [ full public ] == self.nixosConfigurations.brick-full.config.system.build.toplevel.drvPath;
     "Claude Code is refused" = refused [ bare self.nixosModules.pack-ai public ];
-    "non-commercial cores are refused" =
-      refused [ bare self.nixosModules.pack-emulation { mortar.play.nonCommercialCores = true; } public ];
+    "the non-commercial cores may be published" =
+      !(refused [ bare self.nixosModules.pack-emulation public ]);
+    "the non-commercial cores can be turned off" =
+      !(refused [ bare self.nixosModules.pack-emulation { mortar.play.nonCommercialCores = false; } public ]);
     "a trusted USB host is refused" = refused [ bare { mortar.usb.trustHost = true; } public ];
     "the opt-ins do evaluate for your own system" =
       !(refused [ bare self.nixosModules.pack-ai self.nixosModules.pack-emulation { mortar.play.nonCommercialCores = true; mortar.usb.trustHost = true; } ]);

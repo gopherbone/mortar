@@ -17,12 +17,13 @@
 # on the PowerVR GPU through mortar-sdl-run).
 #
 # Several of the best cores for a 2 GHz A53 have non-commercial licences:
-# snes9x2005-plus, genesis-plus-gx, fbneo. They stay out of anything public, so
-# their systems (SNES, Mega Drive, Master System, Game Gear, Arcade) are off until
-# your own configuration sets `mortar.play.nonCommercialCores = true`, which also
-# adds them to `mortar.unfree` (`mortar.play.unfreeCores` lists what is enabled).
-# A system with them on must not be published (modules/unfree.nix). Changing a
-# system's core may need another entry in `mortar.unfree`.
+# snes9x2005-plus, genesis-plus-gx, fbneo. Their terms allow free distribution, so
+# they are on by default and published, with their licences in
+# /etc/mortar-play/licenses. They rule out selling Mortar, and FBNeo rules out asking
+# for donations (LICENSE). `mortar.play.nonCommercialCores = false` builds without
+# them, for example to sell devices with it; their systems (SNES, Mega Drive, Master
+# System, Game Gear, Arcade) are then off. Changing a system's core may need another
+# entry in `mortar.unfree`.
 {
   config,
   lib,
@@ -351,12 +352,13 @@ in
 
     nonCommercialCores = mkOption {
       type = types.bool;
-      default = false;
+      default = true;
       description = ''
-        Turn on the curated systems whose cores have non-commercial licences:
-        SNES (snes9x2005-plus), Mega Drive, Master System and Game Gear
-        (genesis-plus-gx), Arcade (fbneo). For a system you build for yourself:
-        one with this on must not go in a public image or cache.
+        The curated systems whose cores have non-commercial licences: SNES
+        (snes9x2005-plus), Mega Drive, Master System and Game Gear
+        (genesis-plus-gx), Arcade (fbneo). Their terms allow free distribution but
+        not sale, and FBNeo's not asking for donations: turn this off if you sell
+        or take donations for what you build.
       '';
     };
 
@@ -453,6 +455,10 @@ in
       lib.mkMerge [
         {
           environment.etc."mortar-play/config.json".source = configFile;
+          # Their licences require shipping these texts.
+          environment.etc."mortar-play/licenses/snes9x2005" = lib.mkIf cfg.nonCommercialCores { source = "${lr.snes9x2005-plus.src}/copyright"; };
+          environment.etc."mortar-play/licenses/genesis-plus-gx" = lib.mkIf cfg.nonCommercialCores { source = "${lr.genesis-plus-gx.src}/LICENSE.txt"; };
+          environment.etc."mortar-play/licenses/fbneo" = lib.mkIf cfg.nonCommercialCores { source = "${lr.fbneo.src}/src/license.txt"; };
           environment.systemPackages = [ cfg.package launcher ];
 
           systemd.tmpfiles.rules =
