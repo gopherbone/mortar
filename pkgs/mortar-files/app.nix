@@ -1,8 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
-# Files as an app in its own profile, /nix/var/nix/profiles/apps/files: not part
-# of the system. `mortar files` builds this (flake output
-# `packages.aarch64-linux.mortar-files`) and installs it. Keyboard mode: the pad
-# arrives as keys and the shell's on-screen keyboard types names.
+# Files with a manifest, for its headless test. On a device it's part of the system
+# (`mortar.shell.files`, modules/core/shell.nix). Keyboard mode: the pad arrives as
+# keys and the shell's on-screen keyboard types names.
 { pkgs, mkApp }:
 
 mkApp pkgs {

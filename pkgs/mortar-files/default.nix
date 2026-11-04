@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 # mortar-files: a file manager for the Brick's buttons (a Wayland app for
 # mortar-shell). Pure Rust, software rendered with the mortar-ui toolkit (path
-# dependency, library only). See DESIGN.md. `app.nix` makes it an app with a
-# manifest.
+# dependency, library only). See DESIGN.md. It's in the core system
+# (`mortar.shell.files`); `app.nix` gives it a manifest for the headless test.
 #
 #   the cargo tests         the operations against real temp folders, and the
 #                           app driven with key events

@@ -264,6 +264,19 @@ let
     category = "apps";
   };
 
+  filesApp = {
+    name = "Files";
+    description = "Browse, copy, move, tidy";
+    icon = "folder";
+    gamepad = "keyboard";
+    singleInstance = true;
+    order = 7;
+    command = [ "${cfg.files.package}/bin/mortar-files" ];
+    env = { };
+    art = null;
+    category = "apps";
+  };
+
   fromGreeter = lib.mapAttrs (
     id: s: {
       inherit (s) name description icon env order requires;
@@ -286,6 +299,7 @@ let
         order = 6;
       };
     })
+    // (lib.optionalAttrs cfg.files.enable { files = filesApp; })
     // cfg.apps;
 
   sorted = lib.sort (a: b: if a.order == b.order then a.id < b.id else a.order < b.order) (
@@ -437,6 +451,20 @@ in
         }
       '';
       description = "Launcher entries, keyed by id (added to the imported greeter sessions and the terminal).";
+    };
+
+    files = {
+      enable = mkOption {
+        type = types.bool;
+        default = true;
+        description = "Files, the file manager, under Apps.";
+      };
+      package = mkOption {
+        type = types.package;
+        default = pkgs.callPackage ../../pkgs/mortar-files { mortar-shell = cfg.package; };
+        defaultText = lib.literalExpression "pkgs.callPackage ../../pkgs/mortar-files { }";
+        description = "The mortar-files package.";
+      };
     };
 
     appProfiles = mkOption {
@@ -764,7 +792,7 @@ in
         ];
 
         environment.etc."mortar-shell/config.json".source = configFile;
-        environment.systemPackages = [ cfg.package session ] ++ lib.optional cfg.terminal.enable cfg.terminal.package;
+        environment.systemPackages = [ cfg.package session ] ++ lib.optional cfg.files.enable cfg.files.package ++ lib.optional cfg.terminal.enable cfg.terminal.package;
 
         # Per-app virtual gamepads (uinput): the uinput group may use
         # /dev/uinput. Session users also need the input and video groups
