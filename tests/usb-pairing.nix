@@ -115,9 +115,10 @@ pkgs.testers.runNixOSTest {
         # sshd turns this address away for a while after a failed login
         computer.wait_until_succeeds(f"sshpass -p {code} ssh-copy-id -f -i /root/second.pub -o PubkeyAuthentication=no -o StrictHostKeyChecking=no root@10.55.0.1", timeout=120)
         computer.wait_until_succeeds(f"ssh {second} true", timeout=120)
-        # the code was for one key: with one added, it isn't a password any more
-        computer.fail(f"sshpass -p {code} ssh -o PubkeyAuthentication=no -o StrictHostKeyChecking=no root@10.55.0.1 true")
+        # the code was for one key: with one added (the daemon looks once a second), it
+        # isn't a password any more
         brick.wait_until_succeeds("mortar-setup status | jq -e '.password_login == false'")
+        computer.fail(f"sshpass -p {code} ssh -o PubkeyAuthentication=no -o StrictHostKeyChecking=no root@10.55.0.1 true")
 
     with subtest("Wi-Fi from a terminal says so when there's none"):
         out = brick.succeed("mortar-setup wifi")
