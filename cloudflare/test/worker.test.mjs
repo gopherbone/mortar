@@ -126,6 +126,15 @@ test("If-Range and If-None-Match", async () => {
   assert.equal(r.status, 200);
 });
 
+test("the pairing page the Brick's screen points at", async () => {
+  const r = await worker.fetch(new Request("https://x/pair"), { BUCKET: memoryBucket(objects) });
+  assert.equal(r.status, 200);
+  assert.match(r.headers.get("content-type"), /text\/html/);
+  const page = await r.text();
+  assert.match(page, /ssh-copy-id root@10\.55\.0\.1/);
+  assert.match(page, /\$env:USERPROFILE\\\.ssh\\id_ed25519\.pub/);
+});
+
 test("parseRange", () => {
   assert.deepEqual(parseRange("bytes=0-0", 1), { offset: 0, length: 1 });
   assert.deepEqual(parseRange("bytes=-100", 10), { offset: 0, length: 10 });

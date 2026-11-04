@@ -238,6 +238,11 @@ pub(super) fn note_line(ui: &mut Ui, x: f32, y: f32, w: f32, text: &str, kind: P
 
 // ------------------------------------------------------------ 3 USB ----
 
+/// Where this system's pairing instructions are (`mortar.update.baseUrl`/pair).
+fn pair_help() -> Option<String> {
+    std::env::var("MORTAR_SETUP_HELP").ok().filter(|u| !u.is_empty())
+}
+
 pub struct UsbPair {
     keys_at_start: Vec<String>,
 }
@@ -272,16 +277,23 @@ impl Page for UsbPair {
         if !st.usb_connected && st.usb_network {
             y += step(ui, body.x, y, colw, 1, "Connect the Brick's bottom USB-C port to your computer.") + ui.cq(2.2);
             y += step(ui, body.x, y, colw, 2, "It shows up as a network adapter. This screen changes when it does.") + ui.cq(2.2);
-            step(ui, body.x, y, colw, 3, "Then run mortar pair in a terminal, and type the code.");
+            step(ui, body.x, y, colw, 3, "Then this screen tells you what to run.");
         } else {
             y += step(ui, body.x, y, colw, 1, "Open a terminal on your computer.") + ui.cq(2.0);
             y += step(ui, body.x, y, colw, 2, "Run this:") + ui.cq(1.0);
-            y += command(ui, body.x + ui.cq(5.0), y, colw - ui.cq(5.0), "mortar pair") + ui.cq(2.4);
-            if st.password_login {
-                let text = format!("Or just ssh root@{} and use the code as the password.", host_local(cx));
-                step(ui, body.x, y, colw, 3, &text);
+            // Nothing to install: an SSH password works only over the cable, while a code shows.
+            let usb = if st.usb_address.is_empty() { "10.55.0.1" } else { st.usb_address.as_str() };
+            let cmd = if st.password_login { format!("ssh-copy-id root@{usb}") } else { "mortar pair".to_string() };
+            y += command(ui, body.x + ui.cq(5.0), y, colw - ui.cq(2.0), &cmd) + ui.cq(2.4);
+            let text = if st.password_login {
+                "The password it asks for is the code."
             } else {
-                step(ui, body.x, y, colw, 3, "It asks for the code and checks the host key below for you.");
+                "It asks for the code and checks the host key below for you."
+            };
+            y += step(ui, body.x, y, colw, 3, text) + ui.cq(2.0);
+            if let Some(url) = pair_help() {
+                let more = format!("Windows, no SSH key yet, other ways: {url}");
+                toolkit::paragraph(ui, body.x + ui.cq(5.0), y, colw - ui.cq(5.0), &more, &sub(ui, 2.0));
             }
         }
 
@@ -327,7 +339,8 @@ impl Page for UsbPair {
             py += fst.line_px();
         }
         py += ui.cq(1.0);
-        toolkit::paragraph(ui, px, py, pw, "mortar pair checks this for you.", &sub(ui, 2.0));
+        let note = if st.password_login { "If ssh asks about a key, this should match." } else { "mortar pair checks this for you." };
+        toolkit::paragraph(ui, px, py, pw, note, &sub(ui, 2.0));
     }
 
     fn button(&mut self, b: Button, cx: &mut Cx) -> Nav {
@@ -351,6 +364,10 @@ impl Page for UsbPair {
     fn tick(&mut self, cx: &mut Cx) -> Nav {
         // a key arrived (mortar pair, or ssh-copy-id with the code)
         if cx.st().keys.iter().any(|k| !self.keys_at_start.contains(&k.fingerprint)) {
+            let wifi = &cx.st().wifi;
+            if cx.mode == Mode::FirstBoot && wifi.available && wifi.state != "connected" {
+                return Nav::Replace(Box::new(WifiList::after_pairing(cx)));
+            }
             return Nav::Replace(Box::new(Ready::default()));
         }
         Nav::Stay
@@ -365,12 +382,19 @@ impl Page for UsbPair {
 
 pub struct WifiList {
     list: ListState,
+    /// The next step of first-boot setup after pairing: it can be skipped, and it's
+    /// over if `mortar wifi` joins a network from the computer meanwhile.
+    after_pairing: bool,
 }
 
 impl WifiList {
     pub fn new(cx: &mut Cx) -> WifiList {
         let _ = cx.dev.act(Request::WifiScan);
-        WifiList { list: ListState::default() }
+        WifiList { list: ListState::default(), after_pairing: false }
+    }
+
+    pub fn after_pairing(cx: &mut Cx) -> WifiList {
+        WifiList { after_pairing: true, ..WifiList::new(cx) }
     }
 }
 
@@ -394,7 +418,7 @@ fn net_row_desc(n: &NetView) -> String {
 impl Page for WifiList {
     fn draw(&mut self, ui: &mut Ui, cx: &Cx) {
         let st = cx.st();
-        let body = cx.frame(ui, false, &[hint("X", "WPS button"), hint("Y", "Scan"), hint("B", "Back"), hint("A", "Join")]);
+        let body = cx.frame(ui, false, &[hint("X", "WPS button"), hint("Y", "Scan"), hint("B", if self.after_pairing { "Skip" } else { "Back" }), hint("A", "Join")]);
         let mut y = body.y + ui.cq(1.0);
         if cx.mode == Mode::Settings {
             y += toolkit::crumb(ui, body.x, y, "Settings /");
@@ -460,6 +484,7 @@ impl Page for WifiList {
                     return Nav::Push(Box::new(WifiJoin::new("", true)));
                 }
             }
+            Button::B if self.after_pairing => return Nav::Replace(Box::new(Ready::default())),
             Button::B => return Nav::Pop,
             Button::A | Button::Start => {
                 let Some(n) = nets.get(self.list.sel) else { return Nav::Stay };
@@ -477,6 +502,13 @@ impl Page for WifiList {
                 }
             }
             _ => {}
+        }
+        Nav::Stay
+    }
+
+    fn tick(&mut self, cx: &mut Cx) -> Nav {
+        if self.after_pairing && cx.st().wifi.state == "connected" {
+            return Nav::Replace(Box::new(Ready::default()));
         }
         Nav::Stay
     }
@@ -584,7 +616,7 @@ impl Page for Ready {
             let pw = if st.password_login { "" } else { " Password login is off." };
             format!("{added}: {}.{pw}", key_label(k))
         } else {
-            "No SSH key yet. Connect the USB cable and run mortar pair, or put your public key in ssh-keys/ on the card.".into()
+            "No SSH key yet. Connect the USB cable to pair a computer, or put your public key in ssh-keys/ on the card.".into()
         };
         y += toolkit::paragraph(ui, body.x, y, ui.cq(66.0), &text, &s) + ui.cq(3.0);
 

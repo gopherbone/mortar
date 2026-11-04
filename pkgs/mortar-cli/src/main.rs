@@ -64,6 +64,7 @@ mortar update [--host HOST]       check for an update on the Brick now
 mortar update-creds [--host HOST] [--key-id ID]
     S3 mode: give the Brick its read-only bucket credentials (asks for the
     secret, or $MORTAR_UPDATE_SECRET), over SSH.
+mortar wifi [--host HOST]         join a Wi-Fi network, typing on this computer
 mortar pair [--host HOST] [--key FILE.pub] [--name ALIAS] [--code CODE] [--no-ssh-config]
     Put this computer's SSH key on a Brick using the code on its screen
     (over the USB cable), check its host key, and add `Host ALIAS`
@@ -416,6 +417,11 @@ fn main() {
             if !remote(&o.host, "mortar-rumble 300 2") {
                 die("could not buzz the Brick");
             }
+        }
+        "wifi" => {
+            let mut c = Command::new("ssh");
+            c.args(["-t", &format!("root@{}", o.host), "mortar-setup", "wifi"]);
+            std::process::exit(c.status().map(|s| s.code().unwrap_or(1)).unwrap_or(1));
         }
         "ssh" => {
             let mut c = Command::new("ssh");

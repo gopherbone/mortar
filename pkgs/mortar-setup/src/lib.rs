@@ -14,6 +14,7 @@
 
 pub mod control;
 pub mod ui;
+pub mod wifi_cli;
 
 #[cfg(feature = "daemon")]
 pub mod apply;

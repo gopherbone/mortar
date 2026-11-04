@@ -38,8 +38,15 @@ Settings > Remote access > Pair a new computer. `mortar pair`:
    ```
 
 Without the helper: while password login is on (the default until the first
-key), `ssh root@mortar.local` or `ssh-copy-id root@mortar.local` over the
-cable accept the code as the password.
+key), `ssh root@10.55.0.1` or `ssh-copy-id root@10.55.0.1` over the cable accept
+the code as the password. That's what the screen suggests, as it needs nothing
+installed. After a wrong code, sshd's own penalty turns the address away for a while
+(`Connection reset`). A system with `mortar.update.baseUrl` points at `<baseUrl>/pair` for the rest
+(`cloudflare/worker.js`).
+
+Wi-Fi is the next step on the Brick's screen. To type on your computer instead,
+`mortar pair` offers it straight away, and any time after: `mortar wifi`, or
+`ssh -t root@10.55.0.1 mortar-setup wifi`.
 
 ## Protocol (mortar-pair/1)
 

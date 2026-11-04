@@ -7,7 +7,7 @@ use mortar_pair::client::{hello, pair, PairError};
 use mortar_pair::{Code, ErrorCode, Msg, PublicKey, PORT, USB_ADDR};
 use std::env;
 use std::fs;
-use std::io::{self, BufRead, Write};
+use std::io::{self, BufRead, IsTerminal, Write};
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -197,6 +197,17 @@ pub fn run(o: &Opts) {
     }
     if let Some(wifi) = paired.addresses.iter().find(|a| a.as_str() != USB_ADDR) {
         println!("{DIM}  (also on Wi-Fi at {wifi}; over the cable at {USB_ADDR}){OFF}");
+    }
+    // Wi-Fi from this keyboard, if the Brick isn't on it yet and someone's here to type.
+    if o.ssh_config && o.code.is_none() && io::stdin().is_terminal() {
+        let done = Command::new("ssh")
+            .args(["-t", "-o", &format!("HostKeyAlias={}", o.name), "-i"])
+            .arg(key_path.with_extension(""))
+            .args(["-o", "IdentitiesOnly=yes", &format!("root@{}", addr.ip()), "mortar-setup", "wifi", "--if-needed"])
+            .status();
+        if !done.is_ok_and(|s| s.success()) {
+            println!("{DIM}  Wi-Fi can wait: set it up on the Brick, or with mortar wifi.{OFF}");
+        }
     }
 }
 

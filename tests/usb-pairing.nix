@@ -6,6 +6,7 @@
 #   no key: SSH refuses, other ports are closed, DHCP and pairing answer
 #   `mortar pair` with the code on the screen: the key lands, SSH works with it
 #   `nix copy` over ssh-ng, which is how `mortar deploy` moves a system
+#   ssh-copy-id with the code as the password, for a computer without `mortar`
 { pkgs }:
 
 let
@@ -42,7 +43,7 @@ pkgs.testers.runNixOSTest {
   nodes.computer =
     { ... }:
     {
-      environment.systemPackages = [ mortar pkgs.busybox pkgs.netcat pkgs.openssh ];
+      environment.systemPackages = [ mortar pkgs.busybox pkgs.netcat pkgs.openssh pkgs.ssh-copy-id pkgs.sshpass ];
       nix.settings.experimental-features = [ "nix-command" ];
       virtualisation.additionalPaths = [ payload ];
       # the name `mortar pair` writes; a real computer resolves it over mDNS
@@ -95,5 +96,32 @@ pkgs.testers.runNixOSTest {
         computer.succeed("nix copy --no-check-sigs --to ssh-ng://brick ${payload}")
         brick.succeed("nix-store --check-validity ${payload}")
         brick.succeed("grep -q closure ${payload}")
+
+    with subtest("no password but the code, while a code is showing"):
+        brick.succeed("""echo '{"op":"set_password_login","on":true}' | socat - UNIX-CONNECT:/run/mortar-setup/control.sock""")
+        brick.succeed("mortar-setup new-code")
+        brick.succeed("echo 'root:rootpass' | chpasswd")
+        nokey = "-o PubkeyAuthentication=no -o StrictHostKeyChecking=no root@10.55.0.1 true"
+        computer.fail(f"sshpass -p rootpass ssh {nokey}")
+        computer.fail(f"sshpass -p ''' ssh {nokey}")
+
+    with subtest("ssh-copy-id with the code as the password: nothing to install"):
+        brick.succeed("""echo '{"op":"set_password_login","on":true}' | socat - UNIX-CONNECT:/run/mortar-setup/control.sock""")
+        code = brick.succeed("mortar-setup new-code").strip()
+        computer.succeed("ssh-keygen -q -t ed25519 -N ''' -f /root/second </dev/null")
+        second = "-i /root/second -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=no root@10.55.0.1"
+        computer.fail(f"ssh {second} true")
+        computer.fail("sshpass -p WRONG-0000 ssh-copy-id -f -i /root/second.pub -o PubkeyAuthentication=no -o StrictHostKeyChecking=no root@10.55.0.1")
+        # sshd turns this address away for a while after a failed login
+        computer.wait_until_succeeds(f"sshpass -p {code} ssh-copy-id -f -i /root/second.pub -o PubkeyAuthentication=no -o StrictHostKeyChecking=no root@10.55.0.1", timeout=120)
+        computer.wait_until_succeeds(f"ssh {second} true", timeout=120)
+        # the code was for one key: with one added, it isn't a password any more
+        computer.fail(f"sshpass -p {code} ssh -o PubkeyAuthentication=no -o StrictHostKeyChecking=no root@10.55.0.1 true")
+        brick.wait_until_succeeds("mortar-setup status | jq -e '.password_login == false'")
+
+    with subtest("Wi-Fi from a terminal says so when there's none"):
+        out = brick.succeed("mortar-setup wifi")
+        assert "no Wi-Fi" in out, out
+        assert brick.succeed("mortar-setup wifi --if-needed") == ""
   '';
 }

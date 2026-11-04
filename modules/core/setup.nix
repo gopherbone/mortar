@@ -32,6 +32,12 @@
 let
   inherit (lib) mkOption mkEnableOption types mkIf mkMerge;
   cfg = config.mortar.setup;
+  # What the pairing screen points at, without the scheme: it's for typing.
+  pairHelp =
+    let
+      base = config.mortar.update.baseUrl or null;
+    in
+    if base == null then "" else lib.removePrefix "https://" base + "/pair";
   exe = lib.getExe cfg.package;
   systemctl = "${config.systemd.package}/bin/systemctl";
   greeterOn = config.mortar ? greeter && config.mortar.greeter.enable;
@@ -145,6 +151,8 @@ in
       ];
 
       environment.systemPackages = [ cfg.package ];
+      # for the same screen under Settings
+      environment.sessionVariables.MORTAR_SETUP_HELP = pairHelp;
       users.groups.mortar-setup.members = cfg.controlUsers;
 
       systemd.tmpfiles.rules = [ "d /var/lib/mortar-setup 0700 root root - -" ];
@@ -213,17 +221,28 @@ in
         Match all
         Include /run/mortar-setup/sshd/*.conf
       '';
-      security.pam.services.sshd.rules.auth.mortar-pairing-code = {
-        # before every other auth rule (autoOrderRules start at 10100)
-        order = 10050;
-        control = "sufficient";
-        modulePath = "${config.security.pam.package}/lib/security/pam_exec.so";
-        args = [
-          "quiet"
-          "expose_authtok"
-          exe
-          "check-password"
-        ];
+      security.pam.services.sshd.rules.auth = {
+        mortar-pairing-code = {
+          # before every other auth rule (autoOrderRules start at 10100)
+          order = 10050;
+          control = "sufficient";
+          modulePath = "${config.security.pam.package}/lib/security/pam_exec.so";
+          args = [
+            "quiet"
+            "expose_authtok"
+            exe
+            "check-password"
+          ];
+        };
+        # sshd then calls pam_setcred, where pam_exec has nothing to do, and with no
+        # other rule that reaches pam_deny and ends the login it just accepted. pam_env
+        # can't let anyone in: it ignores authentication and only answers pam_setcred.
+        # (pam_permit here would: anything pam_exec ignored would pass.)
+        mortar-pairing-code-credentials = {
+          order = 10051;
+          control = "sufficient";
+          modulePath = "${config.security.pam.package}/lib/security/pam_env.so";
+        };
       };
     })
 
@@ -247,6 +266,7 @@ in
         unitConfig.ConditionPathExists = "!/var/lib/mortar-setup/done";
         restartIfChanged = false;
         environment.MORTAR_UI_THEME = if shellOn then config.mortar.shell.theme else "light";
+        environment.MORTAR_SETUP_HELP = pairHelp;
         serviceConfig = {
           Type = "simple";
           ExecCondition = "${uiCondition}";

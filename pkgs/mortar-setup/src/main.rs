@@ -26,6 +26,8 @@ commands:
   status           print the daemon's state as JSON
   finish           mark first-boot setup as done (skip the screens)
   new-code         show a fresh pairing code (as if Y was pressed)
+  wifi             join a Wi-Fi network from this terminal (--if-needed: only
+                   if not connected yet)
   screenshot       render one screen with demo data to a PNG
   check-password   PAM helper (pam_exec expose_authtok): is the password
                    the pairing code? Uses PAM_USER, PAM_RHOST.
@@ -63,6 +65,7 @@ struct Args {
     group: Option<String>,
     sshd_reload: Option<String>,
     no_iwd: bool,
+    if_needed: bool,
     no_bluetooth: bool,
     no_ssh_password: bool,
     no_system: bool,
@@ -90,6 +93,7 @@ fn parse() -> Result<Args, String> {
             "--socket-group" => a.group = Some(val(&mut it, &arg)?),
             "--sshd-reload" => a.sshd_reload = Some(val(&mut it, &arg)?),
             "--no-iwd" => a.no_iwd = true,
+            "--if-needed" => a.if_needed = true,
             "--no-bluetooth" => a.no_bluetooth = true,
             "--no-ssh-password" => a.no_ssh_password = true,
             "--no-system" => a.no_system = true,
@@ -343,6 +347,7 @@ fn run() -> Result<i32, String> {
             println!("{}", c.status()?.pairing.map(|p| p.code).unwrap_or_default());
             Ok(0)
         }
+        "wifi" => mortar_setup::wifi_cli::run(&Client::new(socket(&a)), a.if_needed),
         "ui" => run_ui(&a),
         "screenshot" => screenshot(&a).map(|_| 0),
         "check-password" => Ok(check_password(&a)),

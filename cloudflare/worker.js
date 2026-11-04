@@ -121,6 +121,36 @@ gets its over-the-air updates: a read-only Nix binary cache, with signed channel
 </body></html>
 `;
 
+// What the Brick's pairing screen points at (MORTAR_SETUP_HELP, modules/core/setup.nix).
+const PAIR = `<!doctype html>
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pair a computer with Mortar</title>
+<body style="font: 16px/1.5 system-ui, sans-serif; max-width: 40em; margin: 2em auto; padding: 0 1em">
+<h1>Pair a computer with Mortar</h1>
+<p>Connect the Brick's bottom USB-C port to your computer and open
+<b>Settings &gt; Remote access &gt; Pair a new computer</b> (first boot starts there). You'll use
+the code on its screen. Afterwards, <code>ssh root@10.55.0.1</code> works over the cable.</p>
+<h2>macOS and Linux</h2>
+<pre>ssh-copy-id root@10.55.0.1</pre>
+<p>The password it asks for is the code. If it says there are no identities, make a key first
+with <code>ssh-keygen -t ed25519</code>. When it asks about the host key, compare the
+fingerprint with the one on the Brick's screen before saying yes. After a wrong code, the Brick
+turns your computer away for a little while (<code>Connection reset</code>): wait a minute and try again.</p>
+<h2>Windows (PowerShell)</h2>
+<pre>ssh-keygen -t ed25519   # if you have no key yet
+type $env:USERPROFILE\\.ssh\\id_ed25519.pub | ssh root@10.55.0.1 "mkdir -p ~/.ssh; cat &gt;&gt; ~/.ssh/authorized_keys"</pre>
+<h2>With Nix</h2>
+<pre>nix run github:gopherbone/mortar/mortar#mortar -- pair</pre>
+<p>This checks the host key for you, and offers to set up Wi-Fi from your keyboard.</p>
+<h2>No cable</h2>
+<p>Put your public key in <code>ssh-keys/root</code> on the card's boot partition.</p>
+<h2>Wi-Fi from your keyboard</h2>
+<p>Once paired, instead of the on-screen keyboard:</p>
+<pre>ssh -t root@10.55.0.1 mortar-setup wifi</pre>
+<p><a href="/">Mortar update cache</a> · <a href="${REPO}">source</a></p>
+</body></html>
+`;
+
 export default {
   async fetch(request, env) {
     if (request.method !== "GET" && request.method !== "HEAD") {
@@ -136,6 +166,11 @@ export default {
       });
     }
     // Raw: every key the bucket may serve is plain ASCII, with no escapes to read.
+    if (url.pathname === "/pair") {
+      return new Response(request.method === "HEAD" ? null : PAIR, {
+        headers: { "content-type": "text/html; charset=utf-8", "cache-control": "public, max-age=3600" },
+      });
+    }
     return serve(request, env, url.pathname.slice(1));
   },
 };
