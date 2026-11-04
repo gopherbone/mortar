@@ -6,8 +6,9 @@
 //! - The shell grabs every physical pad (EVIOCGRAB), so no app can read one
 //!   directly.
 //! - MENU pressed on its own toggles the shell overlay. MENU pressed while
-//!   another pad button is held goes to the app instead (m8c quits on
-//!   SELECT+MENU).
+//!   another pad button is held goes to an app with its own virtual pad
+//!   instead (m8c quits on SELECT+MENU). Other apps can't receive MENU, so
+//!   for them it always toggles the overlay.
 //! - With the overlay up, buttons drive the overlay.
 //! - Otherwise buttons go to the visible app, as its gamepad mode says:
 //!   forwarded to its own virtual pad, turned into keys, or dropped.
@@ -82,7 +83,7 @@ impl Router {
         if code == codes::BTN_MODE {
             let others = self.held.iter().any(|c| *c != codes::BTN_MODE);
             if down {
-                if others && let Receiver::App(uid, mode) = rx {
+                if others && let Receiver::App(uid, mode @ GamepadMode::Forward) = rx {
                     self.menu_to_app = true;
                     self.emit(uid, mode, code, value, &mut out);
                     return out;
@@ -159,6 +160,18 @@ mod tests {
         assert_eq!(r.key(BTN_MODE, 1, APP), vec![Routed::Forward(7, BTN_MODE, 1)]);
         assert_eq!(r.key(BTN_MODE, 0, APP), vec![Routed::Forward(7, BTN_MODE, 0)]);
         assert_eq!(r.key(BTN_SELECT, 0, APP), vec![Routed::Forward(7, BTN_SELECT, 0)]);
+    }
+
+    #[test]
+    fn menu_with_a_button_held_opens_the_overlay_over_apps_without_a_pad() {
+        for mode in [GamepadMode::Keyboard, GamepadMode::None] {
+            let app = Receiver::App(7, mode);
+            let mut r = Router::default();
+            r.key(BTN_TL, 1, app);
+            r.key(BTN_TR, 1, app);
+            assert_eq!(r.key(BTN_MODE, 1, app), vec![Routed::ToggleOverlay]);
+            assert_eq!(r.key(BTN_MODE, 0, Receiver::Overlay), vec![]);
+        }
     }
 
     #[test]

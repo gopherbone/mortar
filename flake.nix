@@ -80,6 +80,12 @@
             inherit (self.lib) mkApp;
           };
 
+          # Files, an app with a manifest: `mortar files` installs it into
+          # /nix/var/nix/profiles/apps/files (pkgs/mortar-files).
+          mortar-files = self.nixosConfigurations.brick-full.pkgs.callPackage ./pkgs/mortar-files/app.nix {
+            inherit (self.lib) mkApp;
+          };
+
           # tools/showcase: frames of the real shell for the showcase video
           showcase-capture = pkgs.callPackage ./tools/showcase/capture.nix { };
         });
@@ -123,6 +129,10 @@
           # the compositor, mortar-play and mortar-ai headless, with real clients
           # (mortar-ai against a stand-in for `claude`: no Claude Code in here)
           mortar-shell-headless = (pkgs.callPackage ./pkgs/mortar-shell { }).tests.headless;
+          # Files on the same backend: found by its manifest, real file operations
+          mortar-files-headless = (pkgs.callPackage ./pkgs/mortar-files {
+            mortar-shell = pkgs.callPackage ./pkgs/mortar-shell { };
+          }).tests.headless;
           mortar-play-integration = (pkgs.callPackage ./pkgs/mortar-play { }).tests.integration;
           mortar-play-shell = (pkgs.callPackage ./pkgs/mortar-play { }).tests.shell;
           mortar-ai-headless = (pkgs.callPackage ./pkgs/mortar-ai {
