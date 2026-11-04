@@ -18,7 +18,7 @@ in
     baseUrl = "https://mortar.angelfire.workers.dev";
     publicKey = "mortar-1:g6azCIBbBdslv81kYgZzgv7sAFYBPAnINCG8PUGFyaY=";
     inherit channel;
-    # `testing` takes every push that passes CI, with no one having run it on a Brick.
+    # `testing` takes every release candidate, with no one having run it on a Brick.
     # A stranger's Brick shouldn't stage that by itself, so while the channel is
     # `testing` the daily check starts off (Check now and the setting still work).
     # The release channel only moves by hand, so there it starts on: it stages, it

@@ -37,6 +37,10 @@ pub struct Manifest {
     /// Git commit the system was built from (None: dirty tree).
     #[serde(default)]
     pub rev: Option<String>,
+    /// The release's tag ("v0.1.0"); None: built from a commit that has none.
+    /// Left out when None, so a manifest without one is signed as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
     /// NixOS label (`nixos-version`).
     #[serde(default)]
     pub label: Option<String>,
@@ -148,10 +152,11 @@ impl Manifest {
         serde_json::to_string_pretty(self).expect("manifest serializes") + "\n"
     }
 
-    /// "a1b2c3d · 2026-11-01"
+    /// "v0.1.0 · 2026-11-01", or "a1b2c3d · 2026-11-01" without a version.
     pub fn short(&self) -> String {
         let rev = self.rev.as_deref().map(|r| &r[..r.len().min(7)]).unwrap_or("local");
-        format!("{rev} · {}", &self.date[..self.date.len().min(10)])
+        let name = self.version.as_deref().unwrap_or(rev);
+        format!("{name} · {}", &self.date[..self.date.len().min(10)])
     }
 }
 
@@ -171,6 +176,7 @@ mod tests {
             published: 1_793_525_400,
             date: crate::time::rfc3339(1_793_525_400),
             rev: Some("fb4f6aa0123456789".into()),
+            version: None,
             label: None,
             changelog: vec!["USB MIDI".into()],
             publisher: "test".into(),
@@ -189,6 +195,20 @@ mod tests {
         let mut x = m();
         x.sign(&SecretKey::parse(SECRET).unwrap());
         x
+    }
+
+    #[test]
+    fn version_names_it_and_is_signed() {
+        let mut x = m();
+        let plain = x.short();
+        x.version = Some("v0.1.0".into());
+        assert!(x.short().starts_with("v0.1.0 · "));
+        assert_ne!(x.short(), plain);
+        assert!(x.to_json().contains("\"version\": \"v0.1.0\""));
+        let mut y = m();
+        assert!(!y.to_json().contains("version"), "absent when there isn't one");
+        y.version = Some("v0.1.0".into());
+        assert_ne!(y.signed_bytes(), m().signed_bytes());
     }
 
     #[test]

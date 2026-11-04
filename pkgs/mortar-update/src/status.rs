@@ -142,6 +142,7 @@ mod tests {
             published,
             date: String::new(),
             rev: None,
+            version: None,
             label: None,
             changelog: vec![],
             publisher: String::new(),

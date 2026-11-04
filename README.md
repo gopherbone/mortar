@@ -101,7 +101,7 @@ walks you through setup; `docs/setup-file.md` is how to set it up beforehand, fr
 **Updates** come over Wi-Fi from that same address, with no account or credentials: Settings
 > Updates > Check now. An update is signed (`docs/updates.md`), downloads in the background
 and becomes the next boot entry; it never restarts the Brick. These images follow the
-`testing` channel, every push that passes CI, so the daily check starts off until there is
+`testing` channel, every release candidate that passes CI, so the daily check starts off until there is
 a release channel to follow. Turn it on in Settings if you like.
 
 **If an update goes wrong**, hold SELECT while powering on: two buzzes, and the Brick boots

@@ -30,3 +30,4 @@ target/
 
 # macOS
 .DS_Store
+.wrangler/

@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
-# Put what's on the testing channel on the release channel, by hand, once a Brick on
-# testing has run it (docs/updates.md). Nothing is built: the closure is in the bucket
+# Put what's on the testing channel on the release channel, once a Brick on testing has
+# run it (docs/updates.md): push the final tag, v0.1.0, to the commit of the release
+# candidate that was tried, or run this by hand. Nothing is built: the closure is in the bucket
 # already, the manifest is re-signed for the release channel, and the SD image is copied
 # to images/mortar/.
 #
@@ -8,6 +9,8 @@
 name: Promote to release
 
 on:
+  push:
+    tags: ["v*", "!v*-*"]
   workflow_dispatch:
     inputs:
       rev:
@@ -49,8 +52,9 @@ jobs:
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           NIX_SIGNING_KEY: ${{ secrets.NIX_SIGNING_KEY }}
           MORTAR_PUBLISHER: github-actions
-          REV: ${{ inputs.rev }}
-          WHICH: ${{ inputs.config }}
+          MORTAR_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+          REV: ${{ inputs.rev || github.sha }}
+          WHICH: ${{ inputs.config || 'both' }}
         run: |
           if [ -z "$AWS_ACCESS_KEY_ID" ] || [ -z "$R2_ACCOUNT_ID" ] || [ -z "$NIX_SIGNING_KEY" ]; then
             echo "::error::R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY / R2_ACCOUNT_ID / NIX_SIGNING_KEY secrets are missing (docs/updates.md)"
@@ -62,7 +66,7 @@ jobs:
           case "$WHICH" in both) configs="brick-bare brick-full" ;; *) configs=$WHICH ;; esac
           for c in $configs; do
             # A Brick follows what the system it runs says. One that says `testing` would
-            # go back to that channel, and to every push, the moment it took this release.
+            # go back to that channel, and to every release candidate, the moment it took this release.
             follows=$(nix eval --raw "git+file://$PWD?rev=$REV#nixosConfigurations.$c.config.mortar.update.channel")
             if [ "$follows" != mortar ]; then
               echo "::error::$REV: $c follows '$follows', not 'mortar'. Set channel = \"mortar\" in configurations/public.nix, push, try that on testing and promote that."

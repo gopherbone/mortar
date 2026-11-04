@@ -68,20 +68,30 @@ private (no r2.dev URL, no custom domain, no Worker), and it must not be this on
 line: `channel` in `configurations/public.nix`, `testing` until the owner promotes a
 release.
 
+A push to `mortar` only runs the settings and VM tests, and skips those if it changes
+nothing but documentation. Tags are what build and publish. Create them by hand, when you
+mean to:
+
+| Tag | What it does |
+|---|---|
+| `v0.1.0-rc.1` | Builds and publishes to `testing` |
+| `v0.1.0` | Promotes that commit from `testing` to the release channel; builds nothing |
+
 To release:
 
-1. Set `channel = "mortar"` in `configurations/public.nix` and push. This is a step of its
+1. Set `channel = "mortar"` in `configurations/public.nix` and commit. This is a step of its
    own because a Brick keeps following what its system says: a system that says `testing`
    would take its Brick back to `testing` the moment it was promoted, and
    `promote.yml` refuses one. Bricks that are on `testing` take this system when they
    check, and from then on follow the release channel.
-2. Try that build from `testing` on a Brick.
-3. **Actions > Promote to release > Run workflow**, with the commit (`rev` in
-   `channels/testing/<config>.json`; it must match). It needs no build: the closure is in
-   the bucket. The manifest is signed again, as the channel is part of what's signed, and
-   that commit's image is copied to `images/mortar/`. To require a reviewer, add one to the
-   `release` environment (Settings > Environments). `mortar promote --from testing --rev
-   COMMIT` does the same from a computer.
+2. Tag that commit `v0.1.0-rc.1`, push the tag, and try the build from `testing` on a Brick.
+   Fixing something means another commit and `v0.1.0-rc.2`.
+3. Within 3 days (step 3 of the setup below), tag the **same commit** `v0.1.0` and push it.
+   It needs no build: the closure is in the bucket. The manifest is signed again under the
+   new tag, as the channel is part of what's signed, and that commit's image is copied to
+   `images/mortar/`. **Actions > Promote to release > Run workflow** does the same by hand,
+   and `mortar promote --from testing --rev COMMIT` from a computer. To require a reviewer,
+   add one to the `release` environment (Settings > Environments).
 4. Point the README and the Worker's index page (`IMAGE` in `cloudflare/worker.js`) at
    `images/mortar/`.
 
@@ -163,7 +173,7 @@ Fallbacks (Actions > Build and publish > Run workflow > runner):
 - No CI at all: `nix run .#mortar -- publish` on your computer.
 
 R2 storage is $0.015/GB-month after a free 10 GB-month; downloads (egress)
-are free. Each push adds about 1.9 GB of images, which is what to watch; see
+are free. Each release candidate adds about 1.9 GB of images, kept 3 days, which is what to watch; see
 [Cleaning the bucket](#cleaning-the-bucket). A request through the Worker counts against
 the Workers plan's and R2's request allowances, and the Worker keeps no cache of its own.
 
@@ -198,12 +208,14 @@ once. No token is needed to read, and the Worker gets at the bucket through its 
 
 ### 3. Old testing images expire
 
-Every push adds an image of each configuration under `images/testing/v/`. Promoting copies
-the one it needs, so these can go after a while. The name that stays is outside the prefix.
+Every release candidate adds an image of each configuration under `images/testing/v/`. Promoting copies
+the one it needs, so these can go soon: promote within 3 days of the build, or run the
+workflow again first, or the release has no new image. The name that stays is outside the
+prefix.
 (`--help` for the flags; the dashboard's bucket Settings has the same.)
 
 ```sh
-npx wrangler r2 bucket lifecycle add mortar-cache testing-images images/testing/v/ --expire-days 30
+npx wrangler r2 bucket lifecycle add mortar-cache testing-images images/testing/v/ --expire-days 3
 ```
 
 ### 4. GitHub
@@ -220,7 +232,7 @@ one is missing, or if `NIX_SIGNING_KEY` isn't the secret half of `publicKey` in
 `configurations/public.nix`. Check that Actions is enabled for the repository, and make
 the `release` environment (Settings > Environments) that `promote.yml` runs in.
 
-Builds on push stay off until you turn them on, so pushes don't spend
+CI on push stays off until you turn it on, so pushes don't spend
 minutes or fail before the secrets exist:
 
 ```sh
@@ -303,7 +315,7 @@ only your keys, so the whole closure is in your bucket: `mortar publish` without
 - **Settings > Auto-check daily** (`mortar.update.autoCheck`; `[update] auto_check` in
   `mortar.toml`). The daily check (`mortar-update-auto.timer`, also 20 minutes after boot)
   downloads and stages an update by itself; it never restarts the Brick. On the published
-  systems it starts **off while they follow `testing`**, which takes every push that passes
+  systems it starts **off while they follow `testing`**, which takes every release candidate that passes
   CI with no one having run it on a Brick, and **on once they follow the release channel**,
   which moves only by hand (`configurations/public.nix`). A flake of your own gets on.
 - No download while the battery is below 30% and not charging

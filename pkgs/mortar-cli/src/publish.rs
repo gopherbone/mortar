@@ -169,6 +169,11 @@ fn git(flake: &str, args: &[&str]) -> Option<String> {
     out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
+/// The tag being released (MORTAR_VERSION, from CI).
+fn version() -> Option<String> {
+    std::env::var("MORTAR_VERSION").ok().filter(|v| !v.is_empty())
+}
+
 fn rev(o: &Opts) -> Option<String> {
     if let Some(r) = env::var("MORTAR_REV").or_else(|_| env::var("GITHUB_SHA")).ok().filter(|r| !r.is_empty()) {
         return Some(r);
@@ -238,6 +243,7 @@ pub fn publish(o: &Opts) {
         published: now.max(prev.as_ref().map(|p| p.published + 1).unwrap_or(0)),
         date: time::rfc3339(now),
         rev: rev.clone(),
+        version: version(),
         label: label(&top),
         changelog: changelog(o, prev.as_ref(), rev.as_deref()),
         publisher: o.publisher.clone(),
@@ -460,6 +466,10 @@ pub fn promote(o: &Opts) {
         return;
     }
     let now = time::now();
+    // Promoting an rc under the final tag names it after that tag.
+    if let Some(v) = version() {
+        m.version = Some(v);
+    }
     m.changelog = changelog(o, prev.as_ref(), m.rev.as_deref());
     m.channel = st.channel.clone();
     m.published = now.max(prev.as_ref().map(|p| p.published + 1).unwrap_or(0));

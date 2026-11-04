@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
-# Test Mortar, build it and publish it to the `testing` channel (docs/updates.md).
-# Bricks on the release channel get it only when someone runs promote.yml.
+# Test Mortar on every push; build it and publish it to the `testing` channel only for
+# a release candidate's tag, v0.1.0-rc.1 (docs/updates.md). promote.yml takes it from
+# there: the final tag, v0.1.0, on the same commit.
 #
 #   settings   before anything is built: is everything needed to publish there?
 #              Every pack and port evaluates, what's published holds only what may
@@ -33,6 +34,12 @@ name: Build and publish
 on:
   push:
     branches: [mortar]
+    tags: ["v*-rc*"]
+    # Not evaluated for tags: a tag always runs.
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "pkgs/*/docs/**"
   pull_request:
   workflow_dispatch:
     inputs:
@@ -84,9 +91,15 @@ jobs:
         id: publish
         env:
           EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
           INPUT: ${{ inputs.publish }}
         run: |
-          if [ "$EVENT" = push ] || { [ "$EVENT" = workflow_dispatch ] && [ "$INPUT" = true ]; }; then
+          case "$EVENT:$REF" in
+            push:refs/tags/*) want=true ;;
+            workflow_dispatch:*) want=$INPUT ;;
+            *) want=false ;;
+          esac
+          if [ "$want" = true ]; then
             echo "publish=true" >> "$GITHUB_OUTPUT"
           else
             echo "publish=false" >> "$GITHUB_OUTPUT"
@@ -168,9 +181,9 @@ jobs:
 
   build:
     needs: [settings, vm-tests]
-    # Pull requests from a fork carry no secrets and never publish; the arm64 build
-    # is a push's or a manual run's: it's the long part.
-    if: github.event_name != 'pull_request'
+    # The long part: a release candidate's tag or a manual run. A push to the branch
+    # stops at the VM tests; pull requests from a fork carry no secrets and never publish.
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
     runs-on: ${{ fromJSON(inputs.runner == 'x86-qemu' && '"ubuntu-24.04"' || inputs.runner == 'self-hosted' && '["self-hosted","mortar"]' || '"ubuntu-24.04-arm"') }}
     timeout-minutes: 360
     steps:
@@ -251,6 +264,7 @@ jobs:
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           NIX_SIGNING_KEY: ${{ secrets.NIX_SIGNING_KEY }}
           MORTAR_PUBLISHER: github-actions
+          MORTAR_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
         run: |
           key="$RUNNER_TEMP/signing-key"
           trap 'rm -f "$key"' EXIT

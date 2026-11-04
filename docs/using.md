@@ -23,7 +23,7 @@ of the apps.
 | Setup | First-boot setup: a `mortar.toml` file on the card, setup screens on the panel (Wi-Fi list, on-screen keyboard, WPS), and `mortar pair` from your computer (docs/setup-file.md, docs/pairing.md). |
 | Wi-Fi, Bluetooth | XR829: 2.4 GHz station mode via iwd; BlueZ with pairing in Settings > Bluetooth (headphones over A2DP, controllers forwarded to apps like the built-in pad). |
 | Display | JD9168 DSI panel, 1024×768. |
-| Updates | Over Wi-Fi, from a public cache with no account: CI builds each push and publishes it; the Brick downloads, stages and asks you to restart (docs/updates.md). Or `nix run .#mortar -- deploy` over USB. Every generation stays in the boot menu. |
+| Updates | Over Wi-Fi, from a public cache with no account: CI builds each tagged release candidate and publishes it; the Brick downloads, stages and asks you to restart (docs/updates.md). Or `nix run .#mortar -- deploy` over USB. Every generation stays in the boot menu. |
 | Battery | Charger set up like stock (4.2 V, 960 mA, 128 mA termination, NTC/JEITA windows); the AXP2202 fuel gauge runs TrimUI's battery model. Charging/full shown in the status bars; warnings at 15 % and 5 %; clean power-off at 3 %. USB input: 500 mA from a computer, 2.5 A from a charger. `mortar-power status`. |
 | Debug | Each boot saves logs to `mortar-logs/` on the card's FAT partition. |
 
