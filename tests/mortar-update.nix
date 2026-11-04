@@ -150,6 +150,10 @@ pkgs.testers.runNixOSTest {
     { ... }:
     {
       imports = [ ../modules/core/update.nix ];
+      # The Brick's bootloader, on every platform (x86's default is GRUB, which won't
+      # install on the test VM's disk).
+      boot.loader.grub.enable = false;
+      boot.loader.generic-extlinux-compatible.enable = true;
       mortar.update = {
         enable = true;
         bucket = "cache";
@@ -171,6 +175,10 @@ pkgs.testers.runNixOSTest {
     { ... }:
     {
       imports = [ ../modules/core/update.nix ];
+      # The Brick's bootloader, on every platform (x86's default is GRUB, which won't
+      # install on the test VM's disk).
+      boot.loader.grub.enable = false;
+      boot.loader.generic-extlinux-compatible.enable = true;
       mortar.update = {
         enable = true;
         baseUrl = "http://ci:8080";
