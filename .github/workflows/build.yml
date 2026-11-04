@@ -176,9 +176,9 @@ jobs:
       - name: VM tests
         run: |
           nix eval --json .#checks.x86_64-linux --apply \
-            'c: builtins.filter (n: builtins.elem "kvm" (c.${n}.requiredSystemFeatures or [ ])) (builtins.attrNames c)' \
+            'c: builtins.filter (n: c.${n} ? driver) (builtins.attrNames c)' \
             | jq -r '.[] | ".#checks.x86_64-linux." + .' \
-            | xargs nix build --no-link --print-build-logs
+            | xargs -r nix build --no-link --print-build-logs
 
   build:
     needs: [settings, vm-tests]
@@ -238,9 +238,9 @@ jobs:
       - name: Checks
         run: |
           nix eval --json .#checks.aarch64-linux --apply \
-            'c: builtins.filter (n: !builtins.elem "kvm" (c.${n}.requiredSystemFeatures or [ ])) (builtins.attrNames c)' \
+            'c: builtins.filter (n: !(c.${n} ? driver)) (builtins.attrNames c)' \
             | jq -r '.[] | ".#checks.aarch64-linux." + .' \
-            | xargs nix build --no-link --print-build-logs
+            | xargs -r nix build --no-link --print-build-logs
 
       # Rooted, because the disk is short (14 GB): garbage collection makes room for the
       # images, keeping these.
