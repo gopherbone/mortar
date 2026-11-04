@@ -80,10 +80,17 @@
             inherit (self.lib) mkApp;
           };
 
-          # Files, an app with a manifest: `mortar files` installs it into
-          # /nix/var/nix/profiles/apps/files (pkgs/mortar-files).
-          mortar-files = self.nixosConfigurations.brick-full.pkgs.callPackage ./pkgs/mortar-files/app.nix {
+          # Another app with a manifest: pkgs/wpe-browser. Builds WPE WebKit (no
+          # cache has it), and is in no image.
+          wpe-browser = self.nixosConfigurations.brick-full.pkgs.callPackage ./pkgs/wpe-browser/app.nix {
             inherit (self.lib) mkApp;
+          };
+
+          # Its test in a VM with the real shell but no GPU. Not under `checks`, which CI
+          # builds on every push.
+          wpe-browser-test = import ./tests/wpe-browser.nix {
+            pkgs = self.nixosConfigurations.brick-full.pkgs;
+            app = self.packages.${system}.wpe-browser;
           };
 
           # tools/showcase: frames of the real shell for the showcase video

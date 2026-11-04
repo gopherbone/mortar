@@ -1,0 +1,191 @@
+Mortar's change to upstream wpe-tsp's patches/0008-ion-dmabuf-render-targets.patch (WebKit's
+licences): the Brick's mainline kernel has no /dev/ion, so the web process allocates the same linear
+ARGB8888 render targets as KMS dumb buffers (CMA, like mortar-wlegl), shown without a CPU copy.
+WEBKIT_DMABUF_DUMB=/dev/dri/cardN turns it on. Falls back to copied frames if allocation fails.
+
+--- a/Source/WebKit/UIProcess/glib/WebProcessPoolGLib.cpp
++++ b/Source/WebKit/UIProcess/glib/WebProcessPoolGLib.cpp
+@@ -204,6 +204,9 @@
+ #if OS(ANDROID)
+         parameters.rendererBufferTransportMode.add(RendererBufferTransportMode::Hardware);
+ #endif
++        // Devices without GBM can still share DMA-bufs: KMS dumb buffers (see AcceleratedSurface).
++        if (g_getenv("WEBKIT_DMABUF_DUMB"))
++            parameters.rendererBufferTransportMode.add(RendererBufferTransportMode::Hardware);
+         parameters.rendererBufferTransportMode.add(RendererBufferTransportMode::SharedMemory);
+     }
+ #endif
+--- a/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/AcceleratedSurface.h
++++ b/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/AcceleratedSurface.h
+@@ -334,6 +334,23 @@
+ 
+         Ref<WebCore::BitmapTexture> m_texture;
+     };
++
++    // Render target backed by a KMS dumb buffer, for drivers that import DMA-bufs
++    // (EGL_EXT_image_dma_buf_import) but can neither export them (EGL_MESA_image_dma_buf_export)
++    // nor allocate them via GBM. Enabled by setting WEBKIT_DMABUF_DUMB to the DRM card's path.
++    class RenderTargetDumb final : public RenderTargetShareableBuffer {
++    public:
++        static bool isAvailable();
++        static std::unique_ptr<RenderTarget> create(AcceleratedSurface&, const WebCore::IntSize&);
++        RenderTargetDumb(AcceleratedSurface&, const WebCore::IntSize&, EGLImage, WebCore::DMABufBufferAttributes&&);
++        ~RenderTargetDumb();
++
++    private:
++        bool supportsExplicitSync() const override { return true; }
++
++        EGLImage m_image { nullptr };
++        unsigned m_texture { 0 };
++    };
+ #endif // PLATFORM(GTK) || ENABLE(WPE_PLATFORM)
+ 
+ #if USE(WPE_RENDERER)
+--- a/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/AcceleratedSurface.cpp
++++ b/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/AcceleratedSurface.cpp
+@@ -58,6 +58,9 @@
+ #include "AcceleratedSurfaceMessages.h"
+ #include <WebCore/DMABufBuffer.h>
+ #include <epoxy/egl.h>
++#include <drm/drm.h>
++#include <drm/drm_mode.h>
++#include <sys/ioctl.h>
+ #endif
+ 
+ #if USE(LIBEPOXY)
+@@ -511,6 +514,113 @@
+ }
+ 
+ AcceleratedSurface::RenderTargetTexture::~RenderTargetTexture() = default;
++
++// From drm_fourcc.h, for builds without libdrm.
++static constexpr uint32_t dumbBufferFormat = 0x34325241; // DRM_FORMAT_ARGB8888, fourcc 'AR24'
++static constexpr uint64_t dumbBufferModifier = 0x00ffffffffffffffULL; // DRM_FORMAT_MOD_INVALID
++
++// The KMS device to allocate dumb buffers from, named by WEBKIT_DMABUF_DUMB.
++static int dumbDevice()
++{
++    static int device = [] {
++        auto& extensions = PlatformDisplay::sharedDisplay().eglExtensions();
++        auto* path = getenv("WEBKIT_DMABUF_DUMB");
++        if (!path || !*path || !extensions.EXT_image_dma_buf_import)
++            return -1;
++        return open(path, O_RDWR | O_CLOEXEC);
++    }();
++    return device;
++}
++
++// A linear dumb buffer of at least width x height pixels, as a DMA-buf. The DMA-buf keeps the
++// memory alive after the GEM handle is gone.
++static UnixFileDescriptor dumbAllocate(uint32_t width, uint32_t height, uint32_t& stride)
++{
++    struct drm_mode_create_dumb create = { };
++    create.width = width;
++    create.height = height;
++    create.bpp = 32;
++    if (ioctl(dumbDevice(), DRM_IOCTL_MODE_CREATE_DUMB, &create))
++        return { };
++    stride = create.pitch;
++    struct drm_prime_handle prime = { };
++    prime.handle = create.handle;
++    prime.flags = DRM_CLOEXEC | DRM_RDWR;
++    int result = ioctl(dumbDevice(), DRM_IOCTL_PRIME_HANDLE_TO_FD, &prime);
++    struct drm_mode_destroy_dumb destroy = { };
++    destroy.handle = create.handle;
++    ioctl(dumbDevice(), DRM_IOCTL_MODE_DESTROY_DUMB, &destroy);
++    return UnixFileDescriptor(result ? -1 : prime.fd, UnixFileDescriptor::Adopt);
++}
++
++bool AcceleratedSurface::RenderTargetDumb::isAvailable()
++{
++    return dumbDevice() >= 0;
++}
++
++std::unique_ptr<AcceleratedSurface::RenderTarget> AcceleratedSurface::RenderTargetDumb::create(AcceleratedSurface& surface, const IntSize& size)
++{
++    // GPUs want aligned rows (the PowerVR GE8300 rejects e.g. 1279 * 4 bytes): pad to 32 pixels.
++    uint32_t stride = 0;
++    auto fd = dumbAllocate((size.width() + 31) & ~31, size.height(), stride);
++    if (!fd) {
++        WTFLogAlways("Failed to allocate dumb buffer of size %dx%d: %s", size.width(), size.height(), safeStrerror(errno).data());
++        return nullptr;
++    }
++
++    DMABufBufferAttributes attributes;
++    attributes.size = size;
++    attributes.fourcc = dumbBufferFormat;
++    attributes.fds.append(WTF::move(fd));
++    attributes.offsets.append(0);
++    attributes.strides.append(stride);
++    attributes.modifier = dumbBufferModifier;
++
++    // No modifier: the buffer is linear, which is what the driver assumes without one.
++    Vector<EGLAttrib> imageAttributes {
++        EGL_WIDTH, size.width(),
++        EGL_HEIGHT, size.height(),
++        EGL_LINUX_DRM_FOURCC_EXT, dumbBufferFormat,
++        EGL_DMA_BUF_PLANE0_FD_EXT, attributes.fds[0].value(),
++        EGL_DMA_BUF_PLANE0_OFFSET_EXT, 0,
++        EGL_DMA_BUF_PLANE0_PITCH_EXT, stride,
++        EGL_NONE
++    };
++    auto image = PlatformDisplay::sharedDisplay().createEGLImage(EGL_NO_CONTEXT, EGL_LINUX_DMA_BUF_EXT, nullptr, imageAttributes);
++    if (!image) {
++        WTFLogAlways("Failed to create EGL image for dumb buffer of size %dx%d", size.width(), size.height());
++        return nullptr;
++    }
++
++    return makeUnique<RenderTargetDumb>(surface, size, image, WTF::move(attributes));
++}
++
++AcceleratedSurface::RenderTargetDumb::RenderTargetDumb(AcceleratedSurface& surface, const IntSize& size, EGLImage image, DMABufBufferAttributes&& attributes)
++    : RenderTargetShareableBuffer(surface, size)
++    , m_image(image)
++{
++    // Texture rather than renderbuffer storage: the path the PowerVR driver is known to support.
++    glGenTextures(1, &m_texture);
++    glBindTexture(GL_TEXTURE_2D, m_texture);
++    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
++    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
++    glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, m_image);
++    glBindTexture(GL_TEXTURE_2D, 0);
++    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_texture, 0);
++    if (m_surface->useSkia())
++        createSkiaSurfaceForFramebuffer(m_fbo);
++
++    WebProcess::singleton().parentProcessConnection()->send(Messages::AcceleratedBackingStore::DidCreateDMABufBuffer(m_id, WTF::move(attributes), RendererBufferFormat::Usage::Rendering), m_surface->surfaceID());
++}
++
++AcceleratedSurface::RenderTargetDumb::~RenderTargetDumb()
++{
++    m_skiaSurface = nullptr;
++    if (m_texture)
++        glDeleteTextures(1, &m_texture);
++    if (m_image)
++        PlatformDisplay::sharedDisplay().destroyEGLImage(m_image);
++}
+ 
+ #endif // PLATFORM(GTK) || ENABLE(WPE_PLATFORM)
+ 
+@@ -601,7 +711,7 @@
+     switch (display.type()) {
+ #if PLATFORM(GTK) || ENABLE(WPE_PLATFORM)
+     case PlatformDisplay::Type::Surfaceless:
+-        if (display.eglExtensions().MESA_image_dma_buf_export && WebProcess::singleton().rendererBufferTransportMode().contains(RendererBufferTransportMode::Hardware))
++        if ((display.eglExtensions().MESA_image_dma_buf_export || RenderTargetDumb::isAvailable()) && WebProcess::singleton().rendererBufferTransportMode().contains(RendererBufferTransportMode::Hardware))
+             m_type = Type::Texture;
+         else
+             m_type = Type::SharedMemory;
+@@ -769,6 +879,12 @@
+     }
+ #endif
+     case Type::Texture:
++        if (!PlatformDisplay::sharedDisplay().eglExtensions().MESA_image_dma_buf_export) {
++            if (auto target = RenderTargetDumb::create(m_surface.get(), m_size))
++                return target;
++            // Rendering into nothing would leave the page blank: copy frames instead.
++            return RenderTargetSHMImage::create(m_surface.get(), m_size);
++        }
+         return RenderTargetTexture::create(m_surface.get(), m_size);
+     case Type::SharedMemory:
+         return RenderTargetSHMImage::create(m_surface.get(), m_size);

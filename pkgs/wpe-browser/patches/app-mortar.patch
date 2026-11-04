@@ -1,0 +1,319 @@
+wpe-tsp on Mortar: the changes to upstream's app/ (MIT, Copyright (c) 2026 Stanislav Matveyev).
+It stays an SDL2 program and reaches the shell through sdl2-compat and sdl3-pvr (see default.nix).
+- The pad is the shell's per-app virtual pad: map its evdev buttons to what the stock pad reports.
+- Pause when the shell suspends the window: unmap the WPE view, skip swaps, slow the input tick.
+- Keyboards and mice read from evdev are dropped while not on screen (nothing grabs them).
+- Settings under ~/.config, downloads under ~/.local/share, no paths on /mnt or in /tmp.
+- No mpv, yt-dlp or RustyPipe: their settings go, YouTube plays in the page.
+
+--- a/app/browser.c
++++ b/app/browser.c
+@@ -24,6 +24,7 @@
+ #include <glib-unix.h>
+ #include <glib/gstdio.h>
+ #include <math.h>
++#include <dlfcn.h>
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
+@@ -70,7 +71,6 @@
+ /* Defaults for settings.conf values (see launch.sh) */
+ #define DEFAULT_POINTER_HIDE_SECONDS 10   /* 0 = never hide */
+ #define DEFAULT_HISTORY_SIZE 20           /* 0 = don't record history */
+-#define DEFAULT_DOWNLOAD_DIR "/mnt/SDCARD/Downloads"
+ #define DEFAULT_KEYBOARD_LAYOUTS "us,ua,ru" /* physical and on-screen keyboards */
+ #define NOTICE_MS 2000                       /* short status-strip notices (keyboard layout) */
+ /* USER_AGENT=mobile: iPhone Safari (our engine is WebKit, so sites' Safari code paths fit best).
+@@ -92,6 +92,7 @@
+ #define KEY_REPEAT_DELAY_MS 350 /* d-pad arrow keys */
+ #define KEY_REPEAT_RATE_MS 50
+ #define TICK_MS 16
++#define HIDDEN_TICK_MS 100 /* Mortar, not on screen: only watching for being shown again */
+ 
+ typedef struct {
+     SDL_Window *window;
+@@ -150,6 +151,8 @@
+     char *notice;               /* short status-strip message, cleared by notice_timer */
+     guint notice_timer;
+     int view_height;
++    gboolean hidden;            /* Mortar: the shell suspended the window (another app, its MENU, screen off) */
++    guint8 pad_hat;             /* Mortar: d-pad buttons held, as a hat */
+ } App;
+ 
+ static App app;
+@@ -180,6 +183,10 @@
+ {
+     if (!app.renderer) /* display released to mpv */
+         return;
++    if (app.hidden) { /* a swap would only wait for a frame callback: draw when shown again */
++        app.needs_present = TRUE;
++        return;
++    }
+     if (app.portrait) {
+         if (!app.canvas) /* (re)created with the renderer */
+             app.canvas = SDL_CreateTexture(app.renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_TARGET,
+@@ -2258,10 +2265,90 @@
+     }
+ }
+ 
++/* The virtual pad's buttons as the stock pad reports them (gamepad.h): a hat, L2/R2 on axes.
++ * Returns FALSE to drop the event. */
++static gboolean mortar_pad_event(SDL_Event *ev)
++{
++    static const int buttons[] = { BTN_B, BTN_A, BTN_X, BTN_Y, BTN_L1, BTN_R1, -1, -1,
++                                   BTN_SELECT, BTN_START, BTN_MENU, -1, -1, -1, -1, BTN_9, BTN_10 };
++    if (ev->type != SDL_JOYBUTTONDOWN && ev->type != SDL_JOYBUTTONUP)
++        return TRUE;
++    if (!app.joystick || SDL_JoystickNumButtons(app.joystick) != MORTAR_PAD_BUTTONS)
++        return TRUE;
++    int button = ev->jbutton.button;
++    gboolean down = ev->type == SDL_JOYBUTTONDOWN;
++    if (g_getenv("WPE_TSP_INPUT_DEBUG"))
++        fprintf(stderr, "[wpe-tsp] pad button %d %s\n", button, down ? "down" : "up");
++    if (button >= MORTAR_PAD_BUTTONS)
++        return FALSE;
++    if (button == 6 || button == 7) {
++        SDL_Event axis = { 0 };
++        axis.type = SDL_JOYAXISMOTION;
++        axis.jaxis.axis = button == 6 ? AXIS_L2 : AXIS_R2;
++        axis.jaxis.value = down ? 32767 : 0;
++        *ev = axis;
++        return TRUE;
++    }
++    if (button >= 11 && button <= 14) {
++        static const guint8 hats[] = { SDL_HAT_UP, SDL_HAT_DOWN, SDL_HAT_LEFT, SDL_HAT_RIGHT };
++        app.pad_hat = down ? app.pad_hat | hats[button - 11] : app.pad_hat & ~hats[button - 11];
++        SDL_Event hat = { 0 };
++        hat.type = SDL_JOYHATMOTION;
++        hat.jhat.value = app.pad_hat;
++        *ev = hat;
++        return TRUE;
++    }
++    ev->jbutton.button = (Uint8)buttons[button];
++    return TRUE;
++}
++
++/* Whether the shell has suspended the window. SDL3 reports that as OCCLUDED, which sdl2-compat
++ * drops from the events it passes on, so ask SDL3 itself about the same window. */
++static gboolean window_occluded(void)
++{
++    static Uint64 (*get_flags)(SDL_Window *);
++    static gboolean looked;
++    if (!looked) {
++        looked = TRUE;
++        void *sdl3 = dlopen("libSDL3.so.0", RTLD_LAZY | RTLD_NOLOAD);
++        if (sdl3)
++            get_flags = (Uint64 (*)(SDL_Window *))dlsym(sdl3, "SDL_GetWindowFlags");
++        if (!get_flags)
++            fprintf(stderr, "[wpe-tsp] no SDL3 underneath: can't tell when hidden\n");
++    }
++    return get_flags && app.window && (get_flags(app.window) & 0x4 /* SDL_WINDOW_OCCLUDED */);
++}
++
++/* Not on screen: tell WebKit, which stops rendering and throttles the page; audio keeps playing. */
++static void set_hidden(gboolean hidden)
++{
++    fprintf(stderr, "[wpe-tsp] %s\n", hidden ? "hidden: page paused" : "on screen");
++    app.hidden = hidden;
++    hid_set_active(!hidden);
++    WPEToplevel *toplevel = wpe_view_get_toplevel(app.wpe_view);
++    if (toplevel)
++        wpe_toplevel_state_changed(toplevel, hidden ? WPE_TOPLEVEL_STATE_FULLSCREEN
++                                                    : WPE_TOPLEVEL_STATE_FULLSCREEN | WPE_TOPLEVEL_STATE_ACTIVE);
++    /* The view keeps its focus: losing it would blur the field and close the on-screen keyboard. */
++    if (hidden) {
++        wpe_view_unmap(app.wpe_view);
++    } else {
++        wpe_view_map(app.wpe_view);
++        app.needs_present = TRUE;
++    }
++}
++
+ static gboolean input_tick(gpointer user_data)
+ {
+     (void)user_data;
+     SDL_Event ev;
++    SDL_PumpEvents();
++    gboolean occluded = window_occluded();
++    if (occluded != app.hidden) {
++        set_hidden(occluded);
++        g_timeout_add(occluded ? HIDDEN_TICK_MS : TICK_MS, input_tick, NULL);
++        return G_SOURCE_REMOVE;
++    }
+     if (player_busy()) {
+         /* mpv has the screen and the gamepad; while yt-dlp resolves, only B (cancel) works */
+         while (SDL_PollEvent(&ev))
+@@ -2272,6 +2359,8 @@
+         return G_SOURCE_CONTINUE;
+     }
+     while (SDL_PollEvent(&ev)) {
++        if (!mortar_pad_event(&ev))
++            continue;
+         rotate_input(&ev);
+         /* A press that chose a menu item (or closed the keyboard) must not have its release reach the
+          * page once the overlay is gone: a lone mouse-up over a link followed it (e.g. right click ->
+@@ -2558,7 +2647,7 @@
+ /* ------------------------------------------------------------------------- */
+ 
+ #define RESTART_EXIT_CODE 75            /* launch.sh: start again, reading settings.conf anew */
+-#define RESTART_URI_FILE "/tmp/wpe-tsp-restart-uri"  /* the page to reopen after a restart */
++#define RESTART_URI_FILE g_build_filename(g_get_user_runtime_dir(), "wpe-tsp-restart-uri", NULL)  /* the page to reopen after a restart */
+ 
+ static gboolean settings_applied(const char *key, const char *value)
+ {
+@@ -2690,6 +2779,7 @@
+ 
+ int main(int argc, char **argv)
+ {
++    g_set_prgname("wpe-browser"); /* Mortar: WebKit names its data and cache folders after this */
+     /* Home page: HOME_URL from settings.conf only. Without one, the view keeps WebKit's own empty
+      * page. The start page follows START_PAGE (below); a command-line URL overrides it. */
+     const char *home_env = g_getenv("WPE_TSP_HOME_URL");
+@@ -2717,7 +2807,7 @@
+         start_url = NULL;
+     else if (start_env && *start_env && g_ascii_strcasecmp(start_env, "home") && g_ascii_strcasecmp(start_env, "last"))
+         fprintf(stderr, "[wpe-tsp] START_PAGE=%s unknown, using home\n", start_env);
+-    const char *play_env = g_getenv("WPE_TSP_PLAY_YOUTUBE_IN_MPV");
++    const char *play_env = NULL; /* Mortar: no mpv, yt-dlp or ytp in the package: videos play in the page */
+     app.play_youtube = play_env && *play_env && strcmp(play_env, "0"); /* default 0: videos play in the page */
+     gboolean youtube_ytp = !g_strcmp0(play_env, "2"); /* 2: resolved by ytp (RustyPipe), 1: by yt-dlp */
+     PlayerCallbacks player_callbacks = {
+@@ -2836,8 +2926,10 @@
+     }
+     g_free(cookie_path);
+     const char *download_env = g_getenv("WPE_TSP_DOWNLOAD_DIR");
+-    downloads_init(webkit_network_session_get_default(), download_env && *download_env ? download_env : DEFAULT_DOWNLOAD_DIR,
++    char *default_download_dir = g_build_filename(g_get_user_data_dir(), "wpe-browser", "downloads", NULL);
++    downloads_init(webkit_network_session_get_default(), download_env && *download_env ? download_env : default_download_dir,
+                    on_downloads_changed, NULL);
++    g_free(default_download_dir);
+ 
+     WebKitSettings *settings = webkit_settings_new_with_settings(
+         /* Web Inspector for debugging: WEBKIT_INSPECTOR_HTTP_SERVER=<device ip>:<port>, opened in a
+@@ -2882,7 +2974,9 @@
+         setup_embed_play(app.web_view);
+     else if (g_strcmp0(g_getenv("WPE_TSP_HW_VIDEO_DECODE"), "0")) /* default on, see launch.sh */
+         setup_youtube_h264(app.web_view);
+-    char *settings_path = g_build_filename(app_data_dir, "..", "settings.conf", NULL);
++    /* Mortar: under ~/.config, the wrapper says where */
++    const char *settings_env = g_getenv("WPE_TSP_SETTINGS_FILE");
++    char *settings_path = settings_env ? g_strdup(settings_env) : g_build_filename(app_data_dir, "..", "settings.conf", NULL);
+     settings_init(settings_path, settings_applied, settings_restart);
+     g_free(settings_path);
+     /* AD_BLOCK=1 (default): share/adblock/rules.json; WPE_TSP_ADBLOCK_RULES overrides the file */
+--- a/app/gamepad.h
++++ b/app/gamepad.h
+@@ -30,3 +30,10 @@
+ 
+ /* Trigger axes count as "pressed" above this value. */
+ #define TRIGGER_THRESHOLD 16000
++
++/*
++ * Mortar: the shell's virtual pad, a clone of the Brick's gpio-keys pad. Its buttons, in evdev order:
++ * SOUTH(B) EAST(A) NORTH(X) WEST(Y) TL TR TL2 TR2 SELECT START MODE DPAD_UP/DOWN/LEFT/RIGHT F1 F2.
++ * No hat, no axes. mortar_pad_event() in browser.c turns them into what the stock pad reports.
++ */
++#define MORTAR_PAD_BUTTONS 17
+--- a/app/hid.c
++++ b/app/hid.c
+@@ -42,6 +42,7 @@
+     gboolean caps_lock;
+     GPtrArray *layouts;         /* of Layout* */
+     guint layout;               /* active one */
++    gboolean inactive;          /* not on screen: read and drop */
+ } hid;
+ 
+ /* The keymap text of layout name ("ua", "ua(phonetic)") from the keymaps file, or NULL */
+@@ -223,6 +224,15 @@
+         hid.cb.key(code + 8, keysym_of(code + 8), value, hid.held | (hid.caps_lock ? HID_MOD_CAPS_LOCK : 0), hid.cb.user_data);
+ }
+ 
++void hid_set_active(gboolean active)
++{
++    hid.inactive = !active;
++    if (!active) {
++        hid.held = 0;
++        hid.rel_x = hid.rel_y = 0;
++    }
++}
++
+ static void device_free(gpointer data)
+ {
+     Device *d = data;
+@@ -247,7 +257,7 @@
+         g_hash_table_remove(hid.devices, d->path);
+         return G_SOURCE_REMOVE;
+     }
+-    for (size_t i = 0; i < (size_t)n / sizeof(ev[0]); i++) {
++    for (size_t i = 0; !hid.inactive && i < (size_t)n / sizeof(ev[0]); i++) {
+         const struct input_event *e = &ev[i];
+         switch (e->type) {
+         case EV_KEY:
+--- a/app/hid.h
++++ b/app/hid.h
+@@ -32,6 +32,8 @@
+ /* layouts: comma-separated XKB layouts/variants (KEYBOARD_LAYOUTS: "us,ua(phonetic)"), the first
+  * is the default; keymaps_path: share/xkb-keymaps.bin (scripts/xkb-keymaps.py) */
+ void hid_init(const HidCallbacks *callbacks, const char *layouts, const char *keymaps_path);
++/* Mortar: drop input from these devices while the browser isn't on screen (they aren't grabbed) */
++void hid_set_active(gboolean active);
+ const char *hid_layout_name(void);              /* the active one */
+ guint hid_layout_count(void);                   /* layouts that could be loaded */
+ guint hid_layout_index(void);                   /* the active one's index */
+--- a/app/settings.c
++++ b/app/settings.c
+@@ -21,7 +21,6 @@
+     "3.0", "3.0", NULL };
+ static const char *const user_agents[] = { "mobile", "Mobile", "desktop", "Desktop", NULL };
+ static const char *const on_off[] = { "1", "On", "0", "Off", NULL };
+-static const char *const youtube_players[] = { "0", "In the browser", "1", "In mpv (yt-dlp)", "2", "In mpv (RustyPipe)", NULL };
+ static const char *const memory_limits[] = { "350", "350 MB", "400", "400 MB", "450", "450 MB", "500", "500 MB",
+                                              "550", "550 MB", "600", "600 MB", "650", "650 MB", "700", "700 MB", NULL };
+ static const char *const hide_times[] = { "0", "Never", "5", "5 s", "10", "10 s", "20", "20 s", "30", "30 s", "60", "60 s", NULL };
+@@ -41,9 +40,7 @@
+     { "USER_AGENT", "Site version", "Mobile sites are lighter: best for 1 GB of RAM", user_agents, NULL },
+     { "AD_BLOCK", "Block ads and trackers", "EasyList + EasyPrivacy; pages load faster and use less memory", on_off, "Ads" },
+     { "AD_BLOCK_EXCEPTIONS", "Ads allowed on", "Sites separated by spaces (with their subdomains); also from the menu", NULL, NULL },
+-    { "PLAY_YOUTUBE_IN_MPV", "YouTube plays", "In mpv: hardware H.264, smooth 720p, light on CPU; RustyPipe starts in ~2 s, yt-dlp in ~9 s", youtube_players, "Video" },
+-    { "HW_VIDEO_DECODE", "Hardware H.264 in pages", "720p at ~13% CPU instead of ~70%", on_off, NULL },
+-    { "WEBGL", "WebGL (3D graphics)", "3D pages use more memory", on_off, NULL },
++    { "WEBGL", "WebGL (3D graphics)", "3D pages use more memory", on_off, "Video" },
+     { "KEYBOARD_LAYOUTS", "Keyboard layouts", "XKB names, e.g. \"us,ua,de(nodeadkeys)\"; the first is the default", NULL, "Input" },
+     { "POINTER_HIDE_SECONDS", "Hide the pointer after", "Without moving it; the stick or A shows it again", hide_times, NULL },
+     { "DOWNLOAD_DIR", "Download folder", "Created if missing", NULL, "Storage and memory" },
+--- a/app/settings.default.conf
++++ b/app/settings.default.conf
+@@ -1,4 +1,4 @@
+-# WPE Browser settings. Read by launch.sh at every start; never overwritten by updates (they ship
++# WPE Browser settings. Read at every start; never overwritten by updates (they ship
+ # settings.default.conf, from which new settings are added here with their defaults).
+ # SELECT -> Settings in the browser edits them too (changing only the line of that setting).
+ 
+@@ -30,25 +30,8 @@
+ # Number of recently visited pages kept in History (SELECT menu; 0 = don't record).
+ HISTORY_SIZE=20
+ 
+-# Where downloaded files are saved (created if missing).
+-DOWNLOAD_DIR="/mnt/SDCARD/Downloads"
+-
+-# YouTube only (all other videos and audio play inside the page):
+-# 0 = YouTube plays inside the page too (H.264 on the hardware decoder with HW_VIDEO_DECODE=1:
+-#     ~38% CPU with YouTube's page running; in mpv ~14%).
+-# 1 = YouTube video pages and embedded YouTube players play in the bundled mpv, with the hardware
+-# H.264 decoder (smooth 720p, light on CPU and memory), via yt-dlp (checked for updates once a
+-# day, with an offer to install a newer one). The video page stays open (description, comments)
+-# with a "Play in mpv" button to watch again.
+-# 2 = the same, but the stream is found by ytp (RustyPipe) instead of yt-dlp: the video starts after
+-# ~2 s instead of ~9 s (live streams ~2 s instead of ~20 s), using ~28 MB of memory instead of ~330 MB.
+-# It is given this browser's YouTube cookies. Bundled; not updated by the browser.
+-PLAY_YOUTUBE_IN_MPV=0
+-
+-# H.264 video in pages on the Allwinner hardware decoder (Cedar): 720p at ~13% CPU instead of ~70%.
+-# Falls back to software decoding by itself where the hardware can't be used. With it, YouTube in
+-# the page is asked for H.264 instead of VP9 (no hardware support). 0 = software decoding only.
+-HW_VIDEO_DECODE=1
++# Where downloaded files are saved (created if missing). Empty: ~/.local/share/wpe-browser/downloads
++DOWNLOAD_DIR=""
+ 
+ # Browser identity: "mobile" (iPhone Safari: lighter mobile sites, best for 1 GB RAM),
+ # "desktop" (WPE's own Linux UA) or a full user-agent string. SELECT menu ->
