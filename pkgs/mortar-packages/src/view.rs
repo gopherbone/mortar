@@ -704,7 +704,9 @@ fn draw_progress(app: &App, ui: &mut Ui) {
     ui.text(plate.x + 38.0, plate.y + 100.0, &nums, &body(38.0, t.line));
     let d = regular(26.0, t.line_soft);
     let mut y = plate.y + 158.0;
-    let what = if r.kind == Kind::Tool {
+    let what = if cancelling {
+        "It stops here, and leaves nothing behind."
+    } else if r.kind == Kind::Tool {
         "You can leave this and use other apps. It carries on, and shows on Terminal's path when it's ready."
     } else {
         "You can leave this and use other apps. It carries on, and shows under Apps when it's ready."

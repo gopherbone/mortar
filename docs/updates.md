@@ -19,6 +19,7 @@ Brick (mortar-update: Settings > Updates > Check now, or daily)
   ├─ curl <baseUrl>/channels/<channel>/<config>.json            checks signature, channel, configuration, age
   ├─ nix-store --realise <toplevel>                             from <baseUrl> and cache.nixos.org; Nix checks
   │                                                             every signature against the Brick's own keys
+  ├─ every path is what was published (docs/packages.md)        or the update is refused
   ├─ system profile + switch-to-configuration boot              a new boot entry; the old ones stay
   └─ toast "Update ready — restart to apply"
 ```

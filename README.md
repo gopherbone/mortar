@@ -65,7 +65,7 @@ Screenshots and animations come from the shell's own preview renderer with sampl
 | Layer | Where | Flake output | What |
 |---|---|---|---|
 | Hardware | `devices/brick/` (sources: `firmware/mainline`, `dtb`, `patches`, `pkgs/linux-trimui-brick.nix`, ...) | `nixosModules.brick` | Kernel, boot chain, firmware, GPU, PMIC, panel, radios, SD image. Works without the UI. |
-| Core | `modules/core/`, `pkgs/mortar-*` | `nixosModules.core` | Shell, Files, greeter, setup, pairing, power, updates, the session user, the `mortar` command. |
+| Core | `modules/core/`, `pkgs/mortar-*` | `nixosModules.core` | Shell, Files, Packages, greeter, setup, pairing, power, updates, the session user, the `mortar` command. |
 | Packs | `modules/packs/` | `nixosModules.pack-emulation`, `pack-music`, `pack-terminal`, `pack-ai` | mortar-play; m8c, ChooChoo, Little XM; zsh; Claude Code (optional, in no configuration here). Importing one turns it on. |
 | Ports | `modules/ports/` | `nixosModules.port-pico8`, `port-acgc`, `port-puzzlescript` | Apps that need your own data. Each entry waits for it, or says where it goes. |
 | Apps | `lib/mk-app.nix`, `pkgs/openxcom/app.nix`, `pkgs/wpe-browser/app.nix` | `lib.mkApp`, `packages.*.openxcom`, `packages.*.wpe-browser` | A package with a manifest, in its own profile on the device: no system rebuild. |
