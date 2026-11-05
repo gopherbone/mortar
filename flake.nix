@@ -114,6 +114,9 @@
       checks = lib.genAttrs linuxSystems (system:
         let pkgs = nixpkgs.legacyPackages.${system};
         in {
+          # signed manifests and package indexes: refusals, domain separation, and
+          # searching an index the size of nixpkgs within a fixed buffer
+          mortar-index = pkgs.callPackage ./pkgs/mortar-index { };
           # over-the-air updates end to end (Garage as the bucket)
           mortar-update = import ./tests/mortar-update.nix { inherit pkgs; };
           # apps in their own profiles on a real Nix store

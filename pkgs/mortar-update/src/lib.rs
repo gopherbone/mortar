@@ -16,9 +16,8 @@
 //! is linked; credentials reach curl on stdin, never on the command line. See
 //! docs/updates.md.
 
-pub mod manifest;
+pub use mortar_index::{manifest, time};
 pub mod s3;
-pub mod time;
 
 pub use manifest::Manifest;
 pub use s3::{get_many, get_public, Bucket, Credentials, FetchError};

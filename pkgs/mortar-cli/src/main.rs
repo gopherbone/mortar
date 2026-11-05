@@ -46,20 +46,24 @@ mortar xcom [--data PATH] [--host HOST] [--remove]
 mortar publish [--config NAME] [--path STORE_PATH] [--channel C] [--key FILE]
                [--credentials FILE] [--force] [--dry-run]
                [--endpoint URL --bucket NAME [--region R]] [--upstream URL]...
+               [--catalog FILE [--catalog-only]]
     Over-the-air updates without CI: build, push the closure signed to the
     bucket (mortar.update in the flake, or --endpoint/--bucket), then write
     the signed channel manifest (docs/updates.md). --upstream: a cache the
     Brick also reads; what it holds isn't uploaded. Key:
     ~/.config/mortar/signing-key; bucket credentials:
     $AWS_ACCESS_KEY_ID/$AWS_SECRET_ACCESS_KEY or ~/.config/mortar/r2-write.
+    --catalog: also sign and write a package catalog (lib.mkCatalog) with what it
+    lists, at channels/<channel>/catalog.json; --catalog-only: and no system.
 mortar publish-image --image FILE [--config NAME] [--channel C]
                [--endpoint URL --bucket NAME [--region R]]
     Put an SD image at images/<channel>/<config>-latest.img.zst, and under this
     commit's name, each with a sha256.
 mortar promote [--config NAME] [--from testing] [--channel C] [--rev COMMIT] [--key FILE]
+               [--catalog-only]
     Put what's on one channel on another, for Bricks following the release
-    channel: re-signs the manifest, and copies the image if there is one.
-    --rev: refuse unless it is that commit.
+    channel: re-signs the manifest, copies the image if there is one, and re-signs
+    the package catalog. --rev: refuse unless it is that commit.
 mortar update [--host HOST]       check for an update on the Brick now
 mortar update-creds [--host HOST] [--key-id ID]
     S3 mode: give the Brick its read-only bucket credentials (asks for the
@@ -243,6 +247,8 @@ fn parse_publish(args: &[String]) -> publish::Opts {
         region: None,
         upstream: Vec::new(),
         image: None,
+        catalog: None,
+        catalog_only: false,
         key: None,
         creds: None,
         publisher: env::var("MORTAR_PUBLISHER").unwrap_or_else(|_| "mortar publish".into()),
@@ -264,6 +270,8 @@ fn parse_publish(args: &[String]) -> publish::Opts {
             "--region" => o.region = Some(val(&mut it, a)),
             "--upstream" => o.upstream.push(val(&mut it, a)),
             "--image" => o.image = Some(val(&mut it, a).into()),
+            "--catalog" => o.catalog = Some(val(&mut it, a).into()),
+            "--catalog-only" => o.catalog_only = true,
             "--key" => o.key = Some(val(&mut it, a).into()),
             "--credentials" => o.creds = Some(val(&mut it, a).into()),
             "--publisher" => o.publisher = val(&mut it, a),

@@ -2,15 +2,11 @@
 //! `channels/<channel>/<config>.json`: the newest system published for a
 //! configuration on a channel.
 
-use base64::{engine::general_purpose::STANDARD as B64, Engine};
-use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use crate::keys::{self, Domain};
+pub use crate::keys::SecretKey;
 use serde::{Deserialize, Serialize};
 
 pub const SCHEMA: u32 = 1;
-
-/// What is signed: this tag, then the manifest as JSON without its signature.
-/// (A publisher that adds a field bumps SCHEMA: an older Brick can't check it.)
-const SIGNED_TAG: &[u8] = b"mortar-manifest-1\n";
 
 /// Where a channel's manifest lives in the bucket.
 pub fn key(channel: &str, config: &str) -> String {
@@ -57,34 +53,6 @@ pub struct Manifest {
     pub signature: Option<String>,
 }
 
-/// A Nix secret key: `name:base64(seed + public)` (`nix key generate-secret`).
-pub struct SecretKey {
-    name: String,
-    key: SigningKey,
-}
-
-impl SecretKey {
-    /// The public half, as `nix key convert-secret-to-public` writes it.
-    pub fn public(&self) -> String {
-        format!("{}:{}", self.name, B64.encode(self.key.verifying_key().to_bytes()))
-    }
-
-    pub fn parse(text: &str) -> Result<SecretKey, String> {
-        let (name, b) = text.trim().split_once(':').ok_or("signing key: want name:base64")?;
-        let raw = B64.decode(b).map_err(|e| format!("signing key: {e}"))?;
-        let raw: [u8; 64] = raw.try_into().map_err(|_| "signing key: want 64 bytes (nix key generate-secret)")?;
-        let key = SigningKey::from_keypair_bytes(&raw).map_err(|e| format!("signing key: {e}"))?;
-        Ok(SecretKey { name: name.to_string(), key })
-    }
-}
-
-fn parse_public(text: &str) -> Result<(&str, VerifyingKey), String> {
-    let (name, b) = text.trim().split_once(':').ok_or_else(|| format!("key '{text}': want name:base64"))?;
-    let raw = B64.decode(b).map_err(|e| format!("key {name}: {e}"))?;
-    let raw: [u8; 32] = raw.try_into().map_err(|_| format!("key {name}: want 32 bytes"))?;
-    Ok((name, VerifyingKey::from_bytes(&raw).map_err(|e| format!("key {name}: {e}"))?))
-}
-
 /// `/nix/store/<32 base32 chars>-<name>` and nothing more.
 pub fn valid_store_path(p: &str) -> bool {
     let Some(rest) = p.strip_prefix("/nix/store/") else { return false };
@@ -118,34 +86,28 @@ impl Manifest {
         Ok(())
     }
 
-    /// The bytes the signature covers.
-    pub fn signed_bytes(&self) -> Vec<u8> {
+    /// The manifest as JSON without its signature. A signature covers
+    /// [`Domain::Manifest`]'s tag, then this. (A publisher that adds a field bumps
+    /// SCHEMA: an older Brick can't check it.)
+    fn body(&self) -> Vec<u8> {
         let mut bare = self.clone();
         bare.signature = None;
-        let mut out = SIGNED_TAG.to_vec();
-        out.extend(serde_json::to_vec(&bare).expect("manifest serializes"));
-        out
+        serde_json::to_vec(&bare).expect("manifest serializes")
+    }
+
+    /// The bytes the signature covers.
+    pub fn signed_bytes(&self) -> Vec<u8> {
+        Domain::Manifest.message(&self.body())
     }
 
     pub fn sign(&mut self, key: &SecretKey) {
-        let sig = key.key.sign(&self.signed_bytes());
-        self.signature = Some(format!("{}:{}", key.name, B64.encode(sig.to_bytes())));
+        self.signature = Some(key.sign(Domain::Manifest, &self.body()));
     }
 
     /// A valid signature by one of `trusted` (Nix public keys, `name:base64`).
     pub fn verify(&self, trusted: &[String]) -> Result<(), String> {
         let sig = self.signature.as_deref().ok_or("the manifest isn't signed")?;
-        let (name, b) = sig.split_once(':').ok_or("malformed signature")?;
-        let raw = B64.decode(b).map_err(|_| "malformed signature")?;
-        let sig = Signature::from_slice(&raw).map_err(|_| "malformed signature")?;
-        let msg = self.signed_bytes();
-        for t in trusted {
-            let (key_name, key) = parse_public(t)?;
-            if key_name == name {
-                return key.verify(&msg, &sig).map_err(|_| format!("bad signature for key {name}"));
-            }
-        }
-        Err(format!("signed by {name}, which this Brick doesn't trust"))
+        keys::verify(Domain::Manifest, &self.body(), sig, trusted)
     }
 
     pub fn to_json(&self) -> String {
@@ -184,17 +146,45 @@ mod tests {
         }
     }
 
-    // Throwaway keys for these tests only: `nix key generate-secret --key-name test-1`
-    // and its public half.
-    const SECRET: &str = "test-1:JMPmnQgjB/X0wg+yK5jOkfHTpB0SnK3WQnrptJSIo5UgRd4ydstkc+7FqUCsadPkKIelyJQW0f62jEacj+reRA==";
-    const PUBLIC: &str = "test-1:IEXeMnbLZHPuxalArGnT5CiHpciUFtH+toxGnI/q3kQ=";
-    // another key with the name of the first
-    const OTHER_SECRET: &str = "test-1:+ELUiEGocXxNHU9eEKTaMrR9CqLsBrjEqhc5dNxvu9f4vfB4aFGzVIyFhC208mm4cj9TiFnqlLyxsqiGzj07lw==";
+    use crate::keys::test_keys::*;
 
     fn signed() -> Manifest {
         let mut x = m();
         x.sign(&SecretKey::parse(SECRET).unwrap());
         x
+    }
+
+    /// Written by the code as it was before the signing moved into this crate, with the
+    /// throwaway key above. Published systems are out there with signatures like this.
+    #[test]
+    fn signatures_from_before_still_verify() {
+        const FROZEN: &str = r#"{
+  "schema": 1,
+  "channel": "mortar",
+  "system": "aarch64-linux",
+  "config": "brick-bare",
+  "toplevel": "/nix/store/0c7f8ms0x6r4n3pq7x2a9w1kz5lbv8yd-nixos-system-mortar-26.05",
+  "published": 1793525400,
+  "date": "2026-11-01T09:30:00Z",
+  "rev": "fb4f6aa0123456789",
+  "version": "v0.1.0",
+  "label": "26.05",
+  "changelog": [
+    "USB MIDI",
+    "Files · on the Brick"
+  ],
+  "publisher": "github-actions",
+  "signature": "test-1:oeJSNuNuj6B+dEAt8vFMdMdtSP8dBWzuTWZw6ZFDWPzl6l/vEpcRUZeWX9C0DniKLO2egSo8Kf5qB6uDSK8vDA=="
+}
+"#;
+        let m = Manifest::parse(FROZEN.as_bytes()).unwrap();
+        m.verify(&[PUBLIC.to_string()]).unwrap();
+        // and signing it again gives the same bytes, byte for byte
+        let mut again = m.clone();
+        again.signature = None;
+        again.sign(&SecretKey::parse(SECRET).unwrap());
+        assert_eq!(again.signature, m.signature);
+        assert_eq!(again.to_json(), FROZEN);
     }
 
     #[test]

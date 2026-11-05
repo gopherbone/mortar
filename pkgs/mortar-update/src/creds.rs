@@ -6,7 +6,7 @@
 //! on the card (moved here at boot, then blanked in the file) or through
 //! `mortar update-creds` from a computer (`mortar-update provision --stdin`).
 
-use crate::fsutil::write_atomic;
+use mortar_index::fsutil::write_atomic;
 use mortar_update::Credentials;
 use std::path::Path;
 use toml_edit::{DocumentMut, Item, Value};

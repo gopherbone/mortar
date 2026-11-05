@@ -14,6 +14,8 @@ rustPlatform.buildRustPackage {
       ./src
       ../mortar-pair/Cargo.toml
       ../mortar-pair/src
+      ../mortar-index/Cargo.toml
+      ../mortar-index/src
       ../mortar-update/Cargo.toml
       ../mortar-update/src
     ];

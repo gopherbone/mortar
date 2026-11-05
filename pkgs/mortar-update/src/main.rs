@@ -5,6 +5,7 @@
 //!             configuration and age, download the system closure (HTTPS mode:
 //!             `nix-store --realise`, from the public cache and its upstreams;
 //!             S3 mode: `nix copy --from s3://…`; signatures checked by Nix),
+//!             check nothing in it came from elsewhere (guard.rs),
 //!             make it the next boot entry, tell the shell
 //!   init      boot: take settings and any credentials from the card's
 //!             mortar.toml, write the first status
@@ -17,11 +18,11 @@
 
 mod config;
 mod creds;
-mod fsutil;
-mod power;
+mod guard;
 mod status;
 
 use config::{Config, Source};
+use mortar_index::{fsutil, nixargs, power};
 use mortar_update::{Credentials, FetchError, Manifest};
 use status::{plan, Allow, Phase, Plan, State, Status};
 use std::fs;
@@ -32,13 +33,15 @@ use std::process::{Command, ExitCode, Stdio};
 const USAGE: &str = "\
 usage: mortar-update [--config FILE] <command>
 
-  check [--auto] [--force] [--allow-downgrade] [--allow-config-change]
+  check [--auto] [--force] [--allow-downgrade] [--allow-config-change] [--allow-foreign-paths]
                              check for an update; download and stage it
                              (--auto: only if Auto-check daily is on;
                              --force: take the manifest last taken again;
                              --allow-downgrade: also one older than that;
                              --allow-config-change: also one of another
-                             configuration, e.g. bare to full)
+                             configuration, e.g. bare to full;
+                             --allow-foreign-paths: even if the store holds some
+                             of its paths signed only by someone else)
   status [--json]            what the last check found
   auto on|off                Auto-check daily
   provision --stdin          S3 mode: store bucket credentials read from stdin
@@ -111,7 +114,7 @@ fn main() -> ExitCode {
     let r = match cmd.as_str() {
         "check" => {
             let has = |f: &str| rest.iter().any(|a| a == f);
-            let allow = Allow { same: has("--force"), downgrade: has("--allow-downgrade"), config_change: has("--allow-config-change") };
+            let allow = Allow { same: has("--force"), downgrade: has("--allow-downgrade"), config_change: has("--allow-config-change"), foreign: has("--allow-foreign-paths") };
             check(&mut cx, has("--auto"), allow)
         }
         "status" => show_status(&cx, rest.iter().any(|a| a == "--json")),
@@ -393,6 +396,29 @@ fn do_check(cx: &mut Ctx, allow: Allow) -> Status {
         return s;
     }
 
+    // Every path of it is what was published, before it can run as root at boot.
+    if !allow.foreign {
+        let verdict = match guard::check(&cx.cfg, &source, creds.as_ref(), &m.toplevel) {
+            Ok(v) => v,
+            Err(e) => {
+                let mut s = cx.status(Phase::Error, "Could not check the update").detail(e);
+                s.available = Some(m);
+                return s;
+            }
+        };
+        if verdict.unsigned > 0 {
+            eprintln!("mortar-update: {} paths in this system have no signature: from the card, a deploy or a local build", verdict.unsigned);
+        }
+        if !verdict.foreign.is_empty() {
+            for p in &verdict.foreign {
+                eprintln!("mortar-update: signed by someone else, and not what was published: {p}");
+            }
+            let mut s = cx.status(Phase::Error, "Update blocked").detail(guard::refusal_detail(&verdict.foreign));
+            s.available = Some(m);
+            return s;
+        }
+    }
+
     let mut s = cx.status(Phase::Installing, "Installing…");
     s.available = Some(m.clone());
     cx.write(&s);
@@ -435,7 +461,6 @@ fn ensure_space(cfg: &Config) -> Result<(), String> {
 /// count, not what nix.conf trusts for other caches: a path signed by someone
 /// else isn't part of a published system.
 fn download_command(cfg: &Config, source: &Source, creds: Option<&Credentials>, toplevel: &str) -> Command {
-    let timeouts = ["--option", "connect-timeout", "20", "--option", "stalled-download-timeout", "120", "--option", "download-attempts", "3"];
     match source {
         // `nix copy --from` wants the whole closure in one store, which the
         // public cache doesn't have: substituting walks the closure and takes
@@ -445,12 +470,7 @@ fn download_command(cfg: &Config, source: &Source, creds: Option<&Credentials>, 
             substituters.extend(cfg.upstreams.iter().map(|u| u.url.clone()));
             let mut c = Command::new(&cfg.nix_store);
             c.args(["--realise", toplevel])
-                .args(["--option", "substituters", &substituters.join(" ")])
-                .args(["--option", "trusted-public-keys", &cfg.closure_keys().join(" ")])
-                .args(["--option", "require-sigs", "true", "--option", "max-jobs", "0", "--option", "builders", ""])
-                // a repaired cache counts at once, not when Nix's memory of it expires
-                .args(["--option", "narinfo-cache-negative-ttl", "0", "--option", "narinfo-cache-positive-ttl", "0"])
-                .args(timeouts);
+                .args(nixargs::realise_options(&substituters, &cfg.closure_keys()));
             c
         }
         Source::S3(bucket) => {
@@ -458,7 +478,7 @@ fn download_command(cfg: &Config, source: &Source, creds: Option<&Credentials>, 
             let mut c = Command::new(&cfg.nix);
             c.args(["--extra-experimental-features", "nix-command", "copy", "--from", &url])
                 .args(["--option", "trusted-public-keys", &cfg.trusted_keys.join(" ")])
-                .args(timeouts)
+                .args(nixargs::timeouts())
                 .arg(toplevel);
             if let Some(creds) = creds {
                 c.envs(creds.env());
@@ -575,7 +595,7 @@ mod tests {
                 "toplevel":"/nix/store/0c7f8ms0x6r4n3pq7x2a9w1kz5lbv8yd-x","published":5,"date":"x"}"#,
         )
         .unwrap();
-        m.sign(&mortar_update::manifest::SecretKey::parse("test-1:JMPmnQgjB/X0wg+yK5jOkfHTpB0SnK3WQnrptJSIo5UgRd4ydstkc+7FqUCsadPkKIelyJQW0f62jEacj+reRA==").unwrap());
+        m.sign(&mortar_index::SecretKey::parse("test-1:JMPmnQgjB/X0wg+yK5jOkfHTpB0SnK3WQnrptJSIo5UgRd4ydstkc+7FqUCsadPkKIelyJQW0f62jEacj+reRA==").unwrap());
         m
     }
 
@@ -611,7 +631,7 @@ mod tests {
         let sign = |f: fn(&mut Manifest)| {
             let mut x = manifest();
             f(&mut x);
-            x.sign(&mortar_update::manifest::SecretKey::parse("test-1:JMPmnQgjB/X0wg+yK5jOkfHTpB0SnK3WQnrptJSIo5UgRd4ydstkc+7FqUCsadPkKIelyJQW0f62jEacj+reRA==").unwrap());
+            x.sign(&mortar_index::SecretKey::parse("test-1:JMPmnQgjB/X0wg+yK5jOkfHTpB0SnK3WQnrptJSIo5UgRd4ydstkc+7FqUCsadPkKIelyJQW0f62jEacj+reRA==").unwrap());
             x
         };
         assert_eq!(refuse(&cfg, &sign(|m| m.channel = "testing".into()), no).unwrap().0, "Wrong channel");

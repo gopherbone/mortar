@@ -3,7 +3,7 @@
 //! rewritten at each step), and the small persistent state in
 //! `/var/lib/mortar-update/state.json`.
 
-use crate::fsutil::{write_atomic, write_atomic_in};
+use mortar_index::fsutil::{write_atomic, write_atomic_in};
 use mortar_update::Manifest;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -112,6 +112,8 @@ pub struct Allow {
     pub downgrade: bool,
     /// `--allow-config-change`
     pub config_change: bool,
+    /// `--allow-foreign-paths`
+    pub foreign: bool,
 }
 
 pub fn plan(m: &Manifest, running: Option<&str>, staged: Option<&str>, st: &State, allow: Allow) -> Plan {

@@ -8,6 +8,7 @@
 //! over SSH).
 
 use crate::{build_toplevel, die, remote, say, ssh_cmd};
+use mortar_index::catalog::{self, Catalog};
 use mortar_update::manifest::SecretKey;
 use mortar_update::{get_many, manifest, time, Bucket, Credentials, FetchError, Manifest};
 use std::collections::HashSet;
@@ -29,6 +30,10 @@ pub struct Opts {
     pub upstream: Vec<String>,
     /// `mortar publish-image`: the compressed SD image.
     pub image: Option<PathBuf>,
+    /// `mortar publish`: an unsigned catalog (lib.mkCatalog) to sign and write too.
+    pub catalog: Option<PathBuf>,
+    /// `mortar publish`: only the catalog, and no system.
+    pub catalog_only: bool,
     pub key: Option<PathBuf>,
     pub creds: Option<PathBuf>,
     pub publisher: String,
@@ -204,6 +209,17 @@ pub fn publish(o: &Opts) {
     let st = settings(o);
     let creds = write_creds(o);
     let key = signing_key(o);
+    if o.catalog_only {
+        publish_catalog(o, &st, &creds, &key);
+        return;
+    }
+    publish_system(o, &st, &creds, &key);
+    if o.catalog.is_some() {
+        publish_catalog(o, &st, &creds, &key);
+    }
+}
+
+fn publish_system(o: &Opts, st: &Settings, creds: &Credentials, key: &Path) {
     let top = match &o.path {
         Some(p) => p.clone(),
         None => build_toplevel(&o.flake, &o.config),
@@ -214,7 +230,7 @@ pub fn publish(o: &Opts) {
     let key_name = manifest::key(&st.channel, &st.config);
 
     say(&format!("Reading {key_name}"));
-    let prev = match st.bucket.get(&creds, &key_name, "curl") {
+    let prev = match st.bucket.get(creds, &key_name, "curl") {
         Ok(b) => match Manifest::parse(&b) {
             Ok(m) => Some(m),
             Err(e) => {
@@ -250,13 +266,13 @@ pub fn publish(o: &Opts) {
         signature: None,
     };
     let mut m = m;
-    m.sign(&read_secret(&key));
+    m.sign(&read_secret(key));
     if o.dry_run {
         print!("{}", m.to_json());
         return;
     }
 
-    put_text(&st, &creds, "nix-cache-info", CACHE_INFO, "text/x-nix-cache-info");
+    put_text(st, creds, "nix-cache-info", CACHE_INFO, "text/x-nix-cache-info");
     if st.upstreams.is_empty() {
         let url = st.bucket.store_url(&[("secret-key", &key.to_string_lossy()), ("compression", "zstd")]);
         say(&format!("Pushing the closure of {top} to s3://{}", st.bucket.bucket));
@@ -270,15 +286,99 @@ pub fn publish(o: &Opts) {
             die("nix copy to the bucket failed (the manifest was not changed)");
         }
     } else {
-        push_new_paths(&st, &creds, &key, &top);
+        push_new_paths(st, creds, key, &top);
     }
 
     // the closure is complete; now point the channel at it
-    write_manifest(&st, &creds, &m);
+    write_manifest(st, creds, &m);
     say(&format!("Published {} on '{}' ({})", m.short(), st.channel, top));
     for c in m.changelog.iter().take(10) {
         println!("  - {c}");
     }
+}
+
+/// `mortar publish --catalog FILE`: push what the catalog lists, then write it, signed.
+/// Written last like a manifest, so a Brick reading it can get all it names. A catalog
+/// listing what's already published changes nothing: its date is what a Brick compares.
+fn publish_catalog(o: &Opts, st: &Settings, creds: &Credentials, key: &Path) {
+    let file = o.catalog.as_deref().unwrap_or_else(|| die("--catalog FILE"));
+    let text = std::fs::read(file).unwrap_or_else(|e| die(&format!("{}: {e}", file.display())));
+    let mut c: Catalog = serde_json::from_slice(&text).unwrap_or_else(|e| die(&format!("{}: {e}", file.display())));
+    let key_name = catalog::key(&st.channel);
+    let prev = read_catalog(st, creds, &key_name);
+    c.channel = st.channel.clone();
+    c.published = time::now().max(prev.as_ref().map(|p| p.published + 1).unwrap_or(0));
+    c.signature = None;
+    c.check().unwrap_or_else(|e| die(&format!("{}: {e}", file.display())));
+    if let Some(p) = prev.as_ref().filter(|p| same_contents(p, &c) && !o.force) {
+        say(&format!("Unchanged: {key_name} already lists these ({})", time::date(p.published)));
+        return;
+    }
+    c.sign(&read_secret(key));
+    if o.dry_run {
+        print!("{}", c.to_json());
+        return;
+    }
+    put_text(st, creds, "nix-cache-info", CACHE_INFO, "text/x-nix-cache-info");
+    let paths = c.packages.iter().flat_map(|p| p.builds.iter().map(|b| b.path.clone())).chain(c.tools.iter().map(|t| t.path.clone()));
+    for path in paths {
+        if st.upstreams.is_empty() {
+            let url = st.bucket.store_url(&[("secret-key", &key.to_string_lossy()), ("compression", "zstd")]);
+            say(&format!("Pushing the closure of {path} to s3://{}", st.bucket.bucket));
+            let ok = Command::new("nix").args(["--extra-experimental-features", "nix-command", "copy", "--to", &url, &path]).envs(creds.env()).status().map(|s| s.success()).unwrap_or(false);
+            if !ok {
+                die("nix copy to the bucket failed (the catalog was not changed)");
+            }
+        } else {
+            push_new_paths(st, creds, key, &path);
+        }
+    }
+    put_text(st, creds, &key_name, &c.to_json(), "application/json");
+    say(&format!("Published the catalog on '{}': {} packages", st.channel, c.packages.len()));
+}
+
+fn read_catalog(st: &Settings, creds: &Credentials, key: &str) -> Option<Catalog> {
+    match st.bucket.get(creds, key, "curl") {
+        Ok(b) => match Catalog::parse(&b) {
+            Ok(c) => Some(c),
+            Err(e) => {
+                eprintln!("mortar: the current catalog is unreadable ({e}); replacing it");
+                None
+            }
+        },
+        Err(FetchError::NotFound) => None,
+        Err(e) => die(&format!("{key}: {e}")),
+    }
+}
+
+fn same_contents(a: &Catalog, b: &Catalog) -> bool {
+    a.packages == b.packages && a.tools == b.tools
+}
+
+/// What `mortar promote` does for the catalog: the channel is part of what's signed,
+/// so it's signed again. A channel with no catalog is no reason to stop a release.
+fn promote_catalog(o: &Opts, st: &Settings, creds: &Credentials, secret: &SecretKey, from: &str) {
+    let src = catalog::key(from);
+    let Some(mut c) = read_catalog(st, creds, &src) else {
+        eprintln!("mortar: no catalog at {src}: nothing to promote");
+        return;
+    };
+    c.verify(&[secret.public()]).unwrap_or_else(|e| die(&format!("{src}: {e}")));
+    let to = catalog::key(&st.channel);
+    let prev = read_catalog(st, creds, &to);
+    if prev.as_ref().is_some_and(|p| same_contents(p, &c)) && !o.force {
+        say(&format!("Unchanged: {to} already lists the same"));
+        return;
+    }
+    c.channel = st.channel.clone();
+    c.published = time::now().max(prev.as_ref().map(|p| p.published + 1).unwrap_or(0));
+    c.sign(secret);
+    if o.dry_run {
+        print!("{}", c.to_json());
+        return;
+    }
+    put_text(st, creds, &to, &c.to_json(), "application/json");
+    say(&format!("Promoted the catalog to '{}': {} packages", st.channel, c.packages.len()));
 }
 
 /// Push what the closure needs and neither an upstream nor the bucket has.
@@ -452,6 +552,10 @@ pub fn promote(o: &Opts) {
         Err(FetchError::NotFound) => None,
         Err(e) => die(&format!("{k}: {e}")),
     };
+    if o.catalog_only {
+        promote_catalog(o, &st, &creds, &secret, from);
+        return;
+    }
     let src_key = manifest::key(from, &st.config);
     let mut m = read(&src_key).unwrap_or_else(|| die(&format!("nothing published at {src_key}")));
     m.verify(&[secret.public()]).unwrap_or_else(|e| die(&format!("{src_key}: {e}")));
@@ -463,6 +567,7 @@ pub fn promote(o: &Opts) {
     let prev = read(&manifest::key(&st.channel, &st.config));
     if let Some(p) = prev.as_ref().filter(|p| p.toplevel == m.toplevel && !o.force) {
         say(&format!("Unchanged: {} is already on '{}' ({})", m.toplevel, st.channel, p.short()));
+        promote_catalog(o, &st, &creds, &secret, from);
         return;
     }
     let now = time::now();
@@ -483,6 +588,7 @@ pub fn promote(o: &Opts) {
     promote_image(&st, &creds, from, &m);
     write_manifest(&st, &creds, &m);
     say(&format!("Promoted {} from '{from}' to '{}' ({})", m.short(), st.channel, m.toplevel));
+    promote_catalog(o, &st, &creds, &secret, from);
 }
 
 /// `mortar update`: check now on the Brick (it downloads and stages).

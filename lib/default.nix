@@ -9,6 +9,10 @@
 # And an app the shell finds at runtime, outside any system (mk-app.nix):
 #
 #   mortar.lib.mkApp pkgs { package = ...; id = "my-port"; name = "My Port"; }
+#
+# And what a repository offers (mk-catalog.nix):
+#
+#   mortar.lib.mkCatalog pkgs { devices.brick = [ my-port-app ]; }
 { self, nixpkgs }:
 
 let
@@ -17,6 +21,9 @@ let
 in
 {
   mkApp = import ./mk-app.nix { inherit (nixpkgs) lib; };
+
+  # A package catalog from mkApp packages, for `mortar publish --catalog`.
+  mkCatalog = import ./mk-catalog.nix { inherit (nixpkgs) lib; };
 
   # bare, full, and each pack and port alone on top of bare.
   matrix =

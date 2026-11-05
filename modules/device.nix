@@ -19,6 +19,16 @@ in
       description = "The product name, as the USB gadget reports it to a computer.";
     };
 
+    id = mkOption {
+      type = types.nullOr types.str;
+      default = null;
+      example = "brick";
+      description = ''
+        A short name for builds: a package catalog lists a build per device id, and a
+        device only takes its own. `null`: nothing in a catalog is for it.
+      '';
+    };
+
     gpu = {
       libDir = mkOption {
         type = types.nullOr types.str;

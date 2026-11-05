@@ -36,6 +36,7 @@
   # What the layers above need to know (modules/device.nix; audio: audio.nix)
   mortar.device = {
     name = "TrimUI Brick";
+    id = "brick";
     gpu.libDir = if config.mortar.gpu.enable then "${config.mortar.gpu.package}/lib" else null;
     gpu.apps = config.mortar.gpu.enable;
     sdlRun = config.mortar.gpu.sdlRun;

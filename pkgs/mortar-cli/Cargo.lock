@@ -194,8 +194,19 @@ checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 name = "mortar"
 version = "0.1.0"
 dependencies = [
+ "mortar-index",
  "mortar-pair",
  "mortar-update",
+ "serde_json",
+]
+
+[[package]]
+name = "mortar-index"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "ed25519-dalek",
+ "serde",
  "serde_json",
 ]
 
@@ -218,8 +229,7 @@ dependencies = [
 name = "mortar-update"
 version = "0.1.0"
 dependencies = [
- "base64",
- "ed25519-dalek",
+ "mortar-index",
  "serde",
  "serde_json",
 ]

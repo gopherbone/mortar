@@ -7,6 +7,7 @@ license = "GPL-2.0-or-later"
 
 [dependencies]
 mortar-pair = { path = "../mortar-pair" }
+mortar-index = { path = "../mortar-index" }
 mortar-update = { path = "../mortar-update", default-features = false }
 serde_json = "1.0.140"
 
