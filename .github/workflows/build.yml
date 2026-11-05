@@ -251,8 +251,7 @@ jobs:
             | jq -r '.[] | ".#checks.aarch64-linux." + .' \
             | xargs -r nix build --no-link --print-build-logs
 
-      # Rooted, because the disk is short (14 GB): garbage collection makes room for the
-      # images, keeping these.
+      # Rooted, because garbage collection makes room for the images, and keeps these.
       - name: Build
         id: build
         run: |
@@ -308,8 +307,8 @@ jobs:
             make_room
           done
 
-  # A job of its own: the disk is short, and WebKit alone wants most of it. A system is
-  # published with or without this. Its time in the log is how long WebKit takes here.
+  # A job of its own: a system is published with or without this. WebKit takes about 66
+  # minutes here when it has to be built (its time is in the log), and fits the disk.
   packages:
     needs: [settings, build]
     runs-on: ${{ fromJSON(inputs.runner == 'x86-qemu' && '"ubuntu-24.04"' || inputs.runner == 'self-hosted' && '["self-hosted","mortar"]' || '"ubuntu-24.04-arm"') }}
