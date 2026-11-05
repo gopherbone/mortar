@@ -48,7 +48,7 @@ fn run() -> Result<(), String> {
     let mut app = App::new(setup);
     #[cfg(target_os = "linux")]
     {
-        mortar_files::wl::run(&mut app, wake_fd)
+        mortar_files::wl::run(&mut app, wake_fd, "Files", "mortar-files")
     }
     #[cfg(not(target_os = "linux"))]
     {

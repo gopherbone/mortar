@@ -18,32 +18,32 @@ use std::os::unix::ffi::OsStrExt;
 /// The panel: its left edge, and the square of art in it.
 pub const PANEL_X: f32 = 664.0;
 pub const ART: u32 = 320;
-const ART_X: f32 = 684.0;
-const ART_Y: f32 = 20.0;
+pub const ART_X: f32 = 684.0;
+pub const ART_Y: f32 = 20.0;
 /// The band, fixed: the list rolls under it.
-const BAND_Y: f32 = 228.0;
-const BAND_H: f32 = 96.0;
-const ROW_H: f32 = 60.0;
+pub const BAND_Y: f32 = 228.0;
+pub const BAND_H: f32 = 96.0;
+pub const ROW_H: f32 = 60.0;
 /// The band's hard shadow, and the gap under it.
-const BAND_SHADOW: f32 = 10.0;
-const BAND_GAP: f32 = 14.0;
-const TITLE_H: f32 = 92.0;
-const LIST_BOTTOM: f32 = H - HINT_H;
+pub const BAND_SHADOW: f32 = 10.0;
+pub const BAND_GAP: f32 = 14.0;
+pub const TITLE_H: f32 = 92.0;
+pub const LIST_BOTTOM: f32 = H - HINT_H;
 /// The text viewer.
 pub const TEXT_COLS: usize = 58;
 pub const TEXT_ROWS: usize = 15;
 const TEXT_LINE: f32 = 38.0;
 
-fn serif(size: f32, c: Color) -> TextStyle {
+pub fn serif(size: f32, c: Color) -> TextStyle {
     TextStyle::new(Face::SerifItalic, size, c).line_height(1.1)
 }
-fn body(size: f32, c: Color) -> TextStyle {
+pub fn body(size: f32, c: Color) -> TextStyle {
     TextStyle::new(Face::Body600, size, c)
 }
-fn regular(size: f32, c: Color) -> TextStyle {
+pub fn regular(size: f32, c: Color) -> TextStyle {
     TextStyle::new(Face::Body500, size, c)
 }
-fn mono(size: f32, c: Color) -> TextStyle {
+pub fn mono(size: f32, c: Color) -> TextStyle {
     TextStyle::new(Face::Mono400, size, c)
 }
 
@@ -117,7 +117,7 @@ pub fn wrap(ui: &Ui, s: &str, st: &TextStyle, max_w: f32, max_lines: usize) -> V
     lines
 }
 
-fn triangle(ui: &mut Ui, cx: f32, cy: f32, s: f32, dir: char, c: Color) {
+pub fn triangle(ui: &mut Ui, cx: f32, cy: f32, s: f32, dir: char, c: Color) {
     let pts = match dir {
         '◀' => [(cx - s, cy), (cx + s * 0.7, cy - s), (cx + s * 0.7, cy + s)],
         '▶' => [(cx + s, cy), (cx - s * 0.7, cy - s), (cx - s * 0.7, cy + s)],
@@ -129,7 +129,7 @@ fn triangle(ui: &mut Ui, cx: f32, cy: f32, s: f32, dir: char, c: Color) {
 
 /// The shell's button cap: a circle for one letter, a pill for more. Arrows
 /// are drawn, since the fonts don't all have them.
-fn cap(ui: &mut Ui, x: f32, cy: f32, label: &str, ink: Color, on: Color) -> f32 {
+pub fn cap(ui: &mut Ui, x: f32, cy: f32, label: &str, ink: Color, on: Color) -> f32 {
     let d = 38.0;
     let arrows = label.chars().all(|c| "◀▶▲▼".contains(c));
     let st = TextStyle::new(Face::Mono600, 19.0, on);
@@ -154,11 +154,11 @@ fn cap(ui: &mut Ui, x: f32, cy: f32, label: &str, ink: Color, on: Color) -> f32 
     w
 }
 
-fn cap_ink() -> Color {
+pub fn cap_ink() -> Color {
     theme::get().line_soft
 }
 
-fn hints_w(ui: &Ui, hints: &[(&str, &str)]) -> f32 {
+pub fn hints_w(ui: &Ui, hints: &[(&str, &str)]) -> f32 {
     let st = regular(23.0, cap_ink());
     let mut w = 0.0;
     for (b, l) in hints {
@@ -175,7 +175,7 @@ fn hints_w(ui: &Ui, hints: &[(&str, &str)]) -> f32 {
 }
 
 /// Button hints from x, left to right.
-fn hints(ui: &mut Ui, mut x: f32, hs: &[(&str, &str)], ink: Color, on: Color) {
+pub fn hints(ui: &mut Ui, mut x: f32, hs: &[(&str, &str)], ink: Color, on: Color) {
     let cy = H - HINT_H / 2.0;
     let st = regular(23.0, ink);
     for (b, l) in hs {
@@ -184,13 +184,13 @@ fn hints(ui: &mut Ui, mut x: f32, hs: &[(&str, &str)], ink: Color, on: Color) {
     }
 }
 
-fn hints_right(ui: &mut Ui, hs: &[(&str, &str)], ink: Color, on: Color) {
+pub fn hints_right(ui: &mut Ui, hs: &[(&str, &str)], ink: Color, on: Color) {
     let w = hints_w(ui, hs);
     hints(ui, W - 28.0 - w, hs, ink, on);
 }
 
 /// A block with a hard offset shadow and a thick ink edge: "this one".
-fn lifted(ui: &mut Ui, r: Rect, fill: Color) {
+pub fn lifted(ui: &mut Ui, r: Rect, fill: Color) {
     let t = theme::get();
     ui.fill_block(Rect::new(r.x + 10.0, r.y + 10.0, r.w, r.h), t.line);
     ui.fill_block(r, fill);
@@ -198,7 +198,7 @@ fn lifted(ui: &mut Ui, r: Rect, fill: Color) {
 }
 
 /// A big dark block: ink by day, a step up from the ground at night.
-fn block_dark() -> Color {
+pub fn block_dark() -> Color {
     let t = theme::get();
     if t.name == "dark" { t.ground_2 } else { DARK }
 }
@@ -214,7 +214,7 @@ fn glyph_for(e: &Entry) -> Glyph {
 }
 
 /// A small tile with a glyph on it.
-fn tile(ui: &mut Ui, x: f32, y: f32, s: f32, bg: Color, ink: Color, g: Glyph) {
+pub fn tile(ui: &mut Ui, x: f32, y: f32, s: f32, bg: Color, ink: Color, g: Glyph) {
     ui.fill_block(Rect::new(x, y, s, s), bg);
     let cell = ((s - 12.0) / 6.0).floor();
     let w = cell * 6.0;
@@ -245,7 +245,7 @@ pub fn draw(app: &mut App, ui: &mut Ui) {
 
 /// A frame of a slide: two finished pictures, moved. A few memcpys, far
 /// cheaper than drawing a screen.
-fn compose(ui: &mut Ui, s: &Slide, p: f32) {
+pub fn compose(ui: &mut Ui, s: &Slide, p: f32) {
     let (w, h) = (ui.pm.width() as usize, ui.pm.height() as usize);
     if s.from.width() as usize != w || s.to.width() as usize != w || s.from.height() as usize != h || s.to.height() as usize != h {
         ui.pm.data_mut().copy_from_slice(s.to.data());
@@ -477,7 +477,7 @@ fn row_value(app: &App, e: &Entry) -> String {
     }
 }
 
-fn row_y(d: f32) -> f32 {
+pub fn row_y(d: f32) -> f32 {
     // above the band, rows stack up from its top edge; below, from its bottom
     if d <= 0.0 {
         BAND_Y + d * ROW_H
@@ -1082,7 +1082,7 @@ fn draw_confirm(app: &App, ui: &mut Ui, c: &Confirm) {
 }
 
 /// A text field, big: the text, its cursor as a solid block.
-fn draw_field(ui: &mut Ui, r: Rect, f: &Field) {
+pub fn draw_field(ui: &mut Ui, r: Rect, f: &Field) {
     let t = theme::get();
     ui.fill_block(Rect::new(r.x + 8.0, r.y + 8.0, r.w, r.h), DARK);
     ui.fill_block(r, Color::hex(0xf4f8fd));

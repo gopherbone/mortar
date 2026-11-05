@@ -3,10 +3,9 @@
 //! keys from wl_keyboard. One poll() sleeps on the Wayland socket and the
 //! workers' wake pipe, with a timeout only when the app has a deadline. Frames
 //! are drawn when something changed, and while something moves, paced by the
-//! compositor's frame callbacks; at rest nothing runs at all.
+//! compositor's frame callbacks; at rest nothing runs at all. Files and Packages both
+//! run in this, each a [`Client`].
 
-use crate::app::App;
-use crate::view;
 use mortar_ui::gfx::{Fonts, Ui};
 use std::os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd};
 use std::time::{Duration, Instant};
@@ -27,6 +26,57 @@ use wayland_protocols::xdg::shell::client::{
     xdg_toplevel::{self, XdgToplevel},
     xdg_wm_base::{self, XdgWmBase},
 };
+
+/// What the window asks of an app: a clock, keys, and when it wants a frame.
+pub trait Client {
+    fn tick(&mut self, now: u64);
+    /// When it next has something to do with no input. None: sleep until woken.
+    fn next_deadline(&self) -> Option<u64>;
+    fn done(&self) -> bool;
+    /// What workers have sent since the last look.
+    fn poll(&mut self);
+    fn focus(&mut self, on: bool);
+    fn resized(&mut self, h: i32);
+    fn repeats(&self, code: u16) -> bool;
+    fn key(&mut self, code: u16, down: bool, repeat: bool);
+    /// Something changed, or something is moving.
+    fn wants_frame(&self) -> bool;
+    fn draw(&mut self, ui: &mut Ui);
+}
+
+impl Client for crate::app::App {
+    fn tick(&mut self, now: u64) {
+        crate::app::App::tick(self, now)
+    }
+    fn next_deadline(&self) -> Option<u64> {
+        crate::app::App::next_deadline(self)
+    }
+    fn done(&self) -> bool {
+        self.done
+    }
+    fn poll(&mut self) {
+        crate::app::App::poll(self);
+    }
+    fn focus(&mut self, on: bool) {
+        crate::app::App::focus(self, on)
+    }
+    fn resized(&mut self, h: i32) {
+        crate::app::App::resized(self, h)
+    }
+    fn repeats(&self, code: u16) -> bool {
+        crate::app::App::repeats(self, code)
+    }
+    fn key(&mut self, code: u16, down: bool, repeat: bool) {
+        crate::app::App::key(self, code, down, repeat)
+    }
+    fn wants_frame(&self) -> bool {
+        self.dirty || self.animating()
+    }
+    fn draw(&mut self, ui: &mut Ui) {
+        self.dirty = false;
+        crate::view::draw(self, ui);
+    }
+}
 
 struct Buf {
     id: usize,
@@ -166,7 +216,7 @@ impl State {
     fn new_buffer(&self, w: i32, h: i32, id: usize, qh: &QueueHandle<State>) -> Result<Buf, String> {
         let len = (w * h) as usize;
         let fd = unsafe {
-            let fd = libc::memfd_create(c"mortar-files".as_ptr(), libc::MFD_CLOEXEC);
+            let fd = libc::memfd_create(c"mortar-app".as_ptr(), libc::MFD_CLOEXEC);
             if fd < 0 {
                 return Err("memfd_create failed".into());
             }
@@ -188,7 +238,7 @@ impl State {
 }
 
 /// Open the window and run until the app is closed.
-pub fn run(app: &mut App, wake_fd: i32) -> Result<(), String> {
+pub fn run<C: Client>(app: &mut C, wake_fd: i32, title: &str, app_id: &str) -> Result<(), String> {
     let conn = Connection::connect_to_env().map_err(|e| format!("Wayland: {e}"))?;
     let mut queue = conn.new_event_queue();
     let qh = queue.handle();
@@ -200,8 +250,8 @@ pub fn run(app: &mut App, wake_fd: i32) -> Result<(), String> {
     let surface = compositor.create_surface(&qh, ());
     let xs = wm.get_xdg_surface(&surface, &qh, ());
     let top = xs.get_toplevel(&qh, ());
-    top.set_title("Files".into());
-    top.set_app_id("mortar-files".into());
+    top.set_title(title.into());
+    top.set_app_id(app_id.into());
     surface.commit();
     queue.roundtrip(&mut st).map_err(|e| e.to_string())?;
 
@@ -240,7 +290,7 @@ pub fn run(app: &mut App, wake_fd: i32) -> Result<(), String> {
             }
         }
         queue.dispatch_pending(&mut st).map_err(|e| e.to_string())?;
-        if st.closed || app.done {
+        if st.closed || app.done() {
             return Ok(());
         }
         app.poll();
@@ -283,7 +333,7 @@ pub fn run(app: &mut App, wake_fd: i32) -> Result<(), String> {
                 held = None;
             }
         }
-        if app.done {
+        if app.done() {
             return Ok(());
         }
 
@@ -291,7 +341,7 @@ pub fn run(app: &mut App, wake_fd: i32) -> Result<(), String> {
         // Behind other things there's nothing to draw for, and a job running
         // in the background costs no frames. The first frame comes regardless:
         // the shell shows an app when it has one.
-        let wanted = app.dirty || app.animating();
+        let wanted = app.wants_frame();
         if !wanted || !st.configured || st.frame_pending || (drawn && !activated) {
             continue;
         }
@@ -317,8 +367,7 @@ pub fn run(app: &mut App, wake_fd: i32) -> Result<(), String> {
                 st.bufs.len() - 1
             }
         };
-        app.dirty = false;
-        view::draw(app, u);
+        app.draw(u);
         let b = &mut st.bufs[idx];
         let px = unsafe { std::slice::from_raw_parts_mut(b.ptr, b.len) };
         for y in 0..h as usize {

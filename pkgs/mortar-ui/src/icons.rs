@@ -23,6 +23,8 @@ pub enum Icon {
     Check,
     Lock,
     Power,
+    /// A parcel: Packages.
+    Box,
     /// Anthropic's Claude Spark (filled, in its Clay colour), for Claude apps.
     Claude,
 }
@@ -45,6 +47,7 @@ impl Icon {
             Icon::Check => r#"<path d="M5 12.5l4.5 4.5L19 7.5"/>"#,
             Icon::Lock => r#"<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>"#,
             Icon::Power => r#"<path d="M12 3v8M7.5 6.5a7 7 0 1 0 9 0"/>"#,
+            Icon::Box => r#"<path d="M3 8l9-5 9 5v8l-9 5-9-5zM3 8l9 5 9-5M12 13v8"/>"#,
             Icon::Claude => CLAUDE_ICON,
         }
     }

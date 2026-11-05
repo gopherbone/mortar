@@ -113,11 +113,11 @@ impl Field {
     pub fn string(&self) -> String {
         self.text.iter().collect()
     }
-    fn insert(&mut self, c: char) {
+    pub fn insert(&mut self, c: char) {
         self.text.insert(self.cursor, c);
         self.cursor += 1;
     }
-    fn backspace(&mut self) -> bool {
+    pub fn backspace(&mut self) -> bool {
         if self.cursor == 0 {
             return false;
         }
