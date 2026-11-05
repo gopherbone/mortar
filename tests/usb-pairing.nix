@@ -78,19 +78,22 @@ pkgs.testers.runNixOSTest {
 
     with subtest("no key, no password: SSH refuses"):
         computer.succeed("ssh-keygen -q -t ed25519 -N ''' -f /root/.ssh/id_ed25519 </dev/null")
-        computer.fail("ssh -o StrictHostKeyChecking=no -o BatchMode=yes root@10.55.0.1 true")
+        computer.fail("ssh -o StrictHostKeyChecking=no -o BatchMode=yes root@10.55.0.1 true </dev/null")
 
     with subtest("a wrong code adds nothing"):
-        computer.fail("mortar pair --host 10.55.0.1 --code TIDE-0000 --name wrong 2>&1")
+        computer.fail("mortar pair --host 10.55.0.1 --code TIDE-0000 --name wrong 2>&1 </dev/null")
         brick.fail("grep -q ssh-ed25519 /boot/ssh-keys/root")
 
     with subtest("mortar pair with the code on the screen"):
         code = brick.succeed("mortar-setup status | jq -r .pairing.code").strip()
-        print(computer.succeed(f"mortar pair --host 10.55.0.1 --code {code} 2>&1"))
+        print(computer.succeed(f"mortar pair --host 10.55.0.1 --code {code} 2>&1 </dev/null"))
         brick.succeed("grep -q ssh-ed25519 /boot/ssh-keys/root")
 
+    # Every ssh here takes its stdin from /dev/null. Otherwise it shares the test driver's
+    # shell: it can outlive its stdout by a moment, read the driver's next line (asking for
+    # the exit status) as its own input, and the test waits an hour for an answer.
     with subtest("SSH with the key, the host key pinned by pairing"):
-        computer.succeed("ssh -o BatchMode=yes -o StrictHostKeyChecking=yes brick true")
+        computer.succeed("ssh -o BatchMode=yes -o StrictHostKeyChecking=yes brick true </dev/null")
 
     with subtest("what mortar deploy does over it"):
         computer.succeed("nix copy --no-check-sigs --to ssh-ng://brick ${payload}")
@@ -102,23 +105,23 @@ pkgs.testers.runNixOSTest {
         brick.succeed("mortar-setup new-code")
         brick.succeed("echo 'root:rootpass' | chpasswd")
         nokey = "-o PubkeyAuthentication=no -o StrictHostKeyChecking=no root@10.55.0.1 true"
-        computer.fail(f"sshpass -p rootpass ssh {nokey}")
-        computer.fail(f"sshpass -p ''' ssh {nokey}")
+        computer.fail(f"sshpass -p rootpass ssh {nokey} </dev/null")
+        computer.fail(f"sshpass -p ''' ssh {nokey} </dev/null")
 
     with subtest("ssh-copy-id with the code as the password: nothing to install"):
         brick.succeed("""echo '{"op":"set_password_login","on":true}' | socat - UNIX-CONNECT:/run/mortar-setup/control.sock""")
         code = brick.succeed("mortar-setup new-code").strip()
         computer.succeed("ssh-keygen -q -t ed25519 -N ''' -f /root/second </dev/null")
         second = "-i /root/second -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=no root@10.55.0.1"
-        computer.fail(f"ssh {second} true")
-        computer.fail("sshpass -p WRONG-0000 ssh-copy-id -f -i /root/second.pub -o PubkeyAuthentication=no -o StrictHostKeyChecking=no root@10.55.0.1")
+        computer.fail(f"ssh {second} true </dev/null")
+        computer.fail("sshpass -p WRONG-0000 ssh-copy-id -f -i /root/second.pub -o PubkeyAuthentication=no -o StrictHostKeyChecking=no root@10.55.0.1 </dev/null")
         # sshd turns this address away for a while after a failed login
-        computer.wait_until_succeeds(f"sshpass -p {code} ssh-copy-id -f -i /root/second.pub -o PubkeyAuthentication=no -o StrictHostKeyChecking=no root@10.55.0.1", timeout=120)
-        computer.wait_until_succeeds(f"ssh {second} true", timeout=120)
+        computer.wait_until_succeeds(f"sshpass -p {code} ssh-copy-id -f -i /root/second.pub -o PubkeyAuthentication=no -o StrictHostKeyChecking=no root@10.55.0.1 </dev/null", timeout=120)
+        computer.wait_until_succeeds(f"ssh {second} true </dev/null", timeout=120)
         # the code was for one key: with one added (the daemon looks once a second), it
         # isn't a password any more
         brick.wait_until_succeeds("mortar-setup status | jq -e '.password_login == false'")
-        computer.fail(f"sshpass -p {code} ssh -o PubkeyAuthentication=no -o StrictHostKeyChecking=no root@10.55.0.1 true")
+        computer.fail(f"sshpass -p {code} ssh -o PubkeyAuthentication=no -o StrictHostKeyChecking=no root@10.55.0.1 true </dev/null")
 
     with subtest("Wi-Fi from a terminal says so when there's none"):
         out = brick.succeed("mortar-setup wifi")
