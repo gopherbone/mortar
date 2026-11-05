@@ -168,6 +168,15 @@ pub fn sign_stdin(key: &Path) {
     print!("{}", m.to_json());
 }
 
+/// `mortar sign-catalog --key FILE`: the same for a package catalog.
+pub fn sign_catalog_stdin(key: &Path) {
+    let mut text = Vec::new();
+    io::Read::read_to_end(&mut io::stdin(), &mut text).unwrap_or_else(|e| die(&format!("stdin: {e}")));
+    let mut c: Catalog = serde_json::from_slice(&text).unwrap_or_else(|e| die(&format!("catalog: {e}")));
+    c.sign(&read_secret(key));
+    print!("{}", c.to_json());
+}
+
 fn git(flake: &str, args: &[&str]) -> Option<String> {
     let dir = if Path::new(flake).is_dir() { flake } else { "." };
     let out = Command::new("git").arg("-C").arg(dir).args(args).stderr(Stdio::null()).output().ok()?;

@@ -1,0 +1,32 @@
+[package]
+name = "mortar-packages"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-2.0-or-later"
+description = "Install software on a TrimUI Brick from the Brick: the app, and the root service behind it"
+publish = false
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+
+[lib]
+name = "mortar_packages"
+path = "src/lib.rs"
+
+[[bin]]
+name = "mortar-packages"
+path = "src/main.rs"
+
+[[bin]]
+name = "mortar-packagesd"
+path = "src/bin/mortar-packagesd.rs"
+
+[dependencies]
+mortar-files = { path = "../mortar-files" }
+mortar-ui = { path = "../mortar-ui", default-features = false }
+mortar-index = { path = "../mortar-index", features = ["device"] }
+mortar-update = { path = "../mortar-update", default-features = false }
+libc = "0.2.191"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"

@@ -17,6 +17,11 @@
 //! --realise` checks it against the repository's key like any package: compressed by
 //! the binary cache at about 3.5 MiB, so no second download path or checksum of its
 //! own, and the Worker needs no new kind of object.
+//!
+//! That store path must have no references. Nix scans an output for the hashes of its
+//! inputs, so a generator that takes the packages as inputs makes them all references,
+//! and fetching the list would fetch every package on it. Generate it from evaluation
+//! alone, with the names as plain strings. The service refuses one that isn't.
 
 use std::io::{self, BufRead, Read};
 

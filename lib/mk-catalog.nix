@@ -13,7 +13,7 @@
 #
 # `tools` names large indexes of terminal tools (pkgs/mortar-index/src/compact.rs),
 # as store paths with a tools.tsv: [ { system; path; count; } ]. Nothing generates one
-# yet.
+# yet; such a path can't have references, as that file says.
 { lib }:
 
 pkgs:

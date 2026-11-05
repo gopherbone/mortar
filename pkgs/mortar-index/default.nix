@@ -13,7 +13,6 @@ rustPlatform.buildRustPackage {
     fileset = lib.fileset.unions [ ./Cargo.toml ./Cargo.lock ./src ./tests ];
   };
   cargoLock.lockFile = ./Cargo.lock;
-  cargoCheckFeatures = [ "device" ];
   buildFeatures = [ "device" ];
   checkFeatures = [ "device" ];
   doCheck = true;

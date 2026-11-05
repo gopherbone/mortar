@@ -41,6 +41,20 @@ let
     "each under its own name" =
       self.nixosConfigurations.brick-bare.config.mortar.update.configName == "brick-bare"
       && self.nixosConfigurations.brick-full.config.mortar.update.configName == "brick-full";
+    "Packages follows Mortar's repository and no other, with the update's source and key" =
+      lib.all (c:
+        let rs = c.mortar.packages.repositories; in
+        c.mortar.packages.enable
+        && map (r: r.id) rs == [ "mortar" ]
+        && (lib.head rs).url == c.mortar.update.baseUrl
+        && (lib.head rs).publicKeys == c.mortar.update.trustedKeys
+        && (lib.head rs).official
+      ) [
+        self.nixosConfigurations.brick-bare.config
+        self.nixosConfigurations.brick-full.config
+      ];
+    "a system built on nixosModules.full follows no repository" =
+      let c = (self.lib.mkSystem { modules = own; }).config; in c.mortar.packages.repositories == [ ];
     "the settings that follow it aren't a flake output" =
       !(lib.any (m: m == follows) (lib.attrValues self.nixosModules));
     "a system built on nixosModules.full follows nothing" =

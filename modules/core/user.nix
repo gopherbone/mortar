@@ -170,6 +170,7 @@ in
         ++ lib.optional config.services.pipewire.enable "pipewire"
         # Settings > Updates: check now, auto-check (polkit rule in update.nix)
         ++ lib.optional (config.mortar.update.enable or false) "mortar-update"
+        ++ lib.optional (config.mortar.packages.enable or false) "mortar-packages"
         ++ cfg.extraGroups;
     };
     users.groups.uinput = { };

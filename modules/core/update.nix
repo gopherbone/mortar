@@ -17,7 +17,8 @@
 #   mortar-update             `mortar-update check`: manifest (signature,
 #                             channel, configuration and age checked) -> the
 #                             closure (signatures checked against this module's
-#                             keys, not nix.conf's) -> system profile ->
+#                             keys, not nix.conf's) -> nothing in it from another
+#                             source (docs/packages.md) -> system profile ->
 #                             `switch-to-configuration boot`
 #   mortar-update-auto.timer  the same once a day, while Auto-check daily
 #                             is on (Settings > Auto-check daily)

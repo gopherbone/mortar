@@ -119,6 +119,8 @@
           mortar-index = pkgs.callPackage ./pkgs/mortar-index { };
           # over-the-air updates end to end (Garage as the bucket)
           mortar-update = import ./tests/mortar-update.nix { inherit pkgs; };
+          # Packages: the service on a real Nix store, and the system guard
+          mortar-packages = import ./tests/mortar-packages.nix { inherit pkgs; inherit (self.lib) mkApp mkCatalog; };
           # apps in their own profiles on a real Nix store
           app-profiles = import ./tests/app-profiles.nix { inherit pkgs; inherit (self.lib) mkApp; };
           # apps appearing and leaving in a running shell (pkgs/mortar-shell)
@@ -141,6 +143,10 @@
           mortar-shell-headless = (pkgs.callPackage ./pkgs/mortar-shell { }).tests.headless;
           # Files on the same backend: found by its manifest, real file operations
           mortar-files-headless = (pkgs.callPackage ./pkgs/mortar-files {
+            mortar-shell = pkgs.callPackage ./pkgs/mortar-shell { };
+          }).tests.headless;
+          # Packages on the same backend, against a made-up service
+          mortar-packages-headless = (pkgs.callPackage ./pkgs/mortar-packages {
             mortar-shell = pkgs.callPackage ./pkgs/mortar-shell { };
           }).tests.headless;
           mortar-play-integration = (pkgs.callPackage ./pkgs/mortar-play { }).tests.integration;

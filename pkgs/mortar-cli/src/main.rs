@@ -387,6 +387,11 @@ fn main() {
         publish::sign_stdin(std::path::Path::new(key));
         return;
     }
+    if cmd == "sign-catalog" {
+        let key = rest.iter().position(|a| a == "--key").and_then(|i| rest.get(i + 1)).unwrap_or_else(|| die("sign-catalog --key FILE < catalog.json"));
+        publish::sign_catalog_stdin(std::path::Path::new(key));
+        return;
+    }
     if cmd == "publish" {
         publish::publish(&parse_publish(rest));
         return;

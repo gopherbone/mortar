@@ -511,16 +511,8 @@ fn download(cfg: &Config, source: &Source, creds: Option<&Credentials>, toplevel
     if ok {
         return Err((false, "the download is not a NixOS system".into()));
     }
-    let all = tail.join("\n");
-    let err = tail.iter().rev().find(|l| l.contains("error")).cloned().unwrap_or_else(|| tail.last().cloned().unwrap_or_default());
-    let low = all.to_ascii_lowercase();
-    if low.contains("signature") || low.contains("not signed") {
-        return Err((false, "not signed by a trusted key (mortar.update.trustedKeys)".into()));
-    }
-    let offline = ["could not resolve", "couldn't resolve", "couldn't connect", "could not connect", "failed to connect", "unable to download", "timeout", "timed out", "network is unreachable", "connection reset"]
-        .iter()
-        .any(|k| low.contains(k));
-    Err((offline, err.trim().trim_start_matches("error:").trim().to_string()))
+    let (offline, msg) = nixargs::classify_failure(&tail);
+    Err((offline, if msg.starts_with("not signed") { format!("{msg} (mortar.update.trustedKeys)") } else { msg }))
 }
 
 /// Make `toplevel` the next boot entry, keeping the older generations

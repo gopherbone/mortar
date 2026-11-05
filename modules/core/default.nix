@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 # Mortar core: the shell, the greeter, first-boot setup and pairing, battery
-# policy, updates, the session user, USB access and audio. Needs a device
+# policy, updates, packages, the session user, USB access and audio. Needs a device
 # module (devices/brick).
 { lib, pkgs, ... }:
 
@@ -17,6 +17,7 @@
     ./power.nix
     ./base.nix
     ./update.nix
+    ./packages.nix
     ./user.nix
   ];
 

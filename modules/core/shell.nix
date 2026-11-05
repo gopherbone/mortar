@@ -277,6 +277,19 @@ let
     category = "apps";
   };
 
+  packagesApp = {
+    name = "Packages";
+    description = "Get more for your Brick";
+    icon = "box";
+    gamepad = "keyboard";
+    singleInstance = true;
+    order = 8;
+    command = [ "${cfg.packages.package}/bin/mortar-packages" ];
+    env = { };
+    art = null;
+    category = "apps";
+  };
+
   fromGreeter = lib.mapAttrs (
     id: s: {
       inherit (s) name description icon env order requires;
@@ -300,6 +313,7 @@ let
       };
     })
     // (lib.optionalAttrs cfg.files.enable { files = filesApp; })
+    // (lib.optionalAttrs cfg.packages.enable { packages = packagesApp; })
     // cfg.apps;
 
   sorted = lib.sort (a: b: if a.order == b.order then a.id < b.id else a.order < b.order) (
@@ -464,6 +478,20 @@ in
         default = pkgs.callPackage ../../pkgs/mortar-files { mortar-shell = cfg.package; };
         defaultText = lib.literalExpression "pkgs.callPackage ../../pkgs/mortar-files { }";
         description = "The mortar-files package.";
+      };
+    };
+
+    packages = {
+      enable = mkOption {
+        type = types.bool;
+        default = true;
+        description = "Packages, which installs more from the repositories this system follows (mortar.packages), under Apps.";
+      };
+      package = mkOption {
+        type = types.package;
+        default = config.mortar.packages.package;
+        defaultText = lib.literalExpression "config.mortar.packages.package";
+        description = "The mortar-packages package.";
       };
     };
 
@@ -792,7 +820,7 @@ in
         ];
 
         environment.etc."mortar-shell/config.json".source = configFile;
-        environment.systemPackages = [ cfg.package session ] ++ lib.optional cfg.files.enable cfg.files.package ++ lib.optional cfg.terminal.enable cfg.terminal.package;
+        environment.systemPackages = [ cfg.package session ] ++ lib.optional cfg.files.enable cfg.files.package ++ lib.optional cfg.packages.enable cfg.packages.package ++ lib.optional cfg.terminal.enable cfg.terminal.package;
 
         # Per-app virtual gamepads (uinput): the uinput group may use
         # /dev/uinput. Session users also need the input and video groups
