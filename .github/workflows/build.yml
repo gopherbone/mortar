@@ -10,6 +10,8 @@
 #   build      arm64: the other checks, brick-bare and brick-full; then what of their
 #              closures isn't on cache.nixos.org, signed, to the bucket,
 #              channels/testing/<config>.json, and their SD images to images/testing/
+#   packages   arm64, after that: the official catalog (WebKit, built here, as no cache
+#              has it) and the list of terminal tools, to channels/testing/catalog.json
 #
 # What must never be in anything public: Claude Code, PICO-8 and game data. None is in brick-bare or brick-full; `settings` and
 # `build` check, and fail the run if that changes (modules/unfree.nix). TrimUI's
@@ -76,8 +78,8 @@ jobs:
     timeout-minutes: 30
     outputs:
       publish: ${{ steps.publish.outputs.publish }}
-      base_url: ${{ steps.bucket.outputs.base_url }}
-      public_key: ${{ steps.bucket.outputs.public_key }}
+      base_url: ${{ steps.cache.outputs.base_url }}
+      public_key: ${{ steps.cache.outputs.public_key }}
     steps:
       - uses: actions/checkout@v4
 
@@ -112,7 +114,16 @@ jobs:
         run: |
           nix build --no-link --print-build-logs .#checks.x86_64-linux.public-policy
           bash scripts/check-public-closure.sh $(nix eval --json .#lib.evalMatrix \
-            | jq -r '.bare, .full')
+            | jq -r '.bare, .full') $(nix eval --raw .#packages.aarch64-linux.catalog.drvPath)
+
+      # Public values. A run that doesn't publish still reads the cache, so it rebuilds
+      # only what changed.
+      - name: Where the cache is
+        id: cache
+        run: |
+          nix eval --json .#nixosConfigurations.brick-bare.config.mortar.update \
+            --apply 'u: { inherit (u) baseUrl publicKey; }' \
+            | jq -r '"base_url=\(.baseUrl)", "public_key=\(.publicKey)"' >> "$GITHUB_OUTPUT"
 
       # Fail here, not after hours of building.
       - name: Update settings
@@ -144,8 +155,6 @@ jobs:
             [ "$(j .trustHost)" = false ] || err "$c: mortar.usb.trustHost is on"
           done
           [ "$fail" = 0 ] || exit 1
-          c=${CONFIGS%% *}
-          jq -r '"base_url=\(.baseUrl)", "public_key=\(.publicKey)"' "$RUNNER_TEMP/$c.json" >> "$GITHUB_OUTPUT"
 
   # KVM: x86 runners have it once the device is opened up. GitHub's documentation
   # doesn't promise it on the arm64 ones, so VM tests aren't run there.
@@ -298,3 +307,89 @@ jobs:
               --channel testing --config "$c" --image "$(echo "$image"/sd-image/*.img.zst)"
             make_room
           done
+
+  # A job of its own: the disk is short, and WebKit alone wants most of it. A system is
+  # published with or without this. Its time in the log is how long WebKit takes here.
+  packages:
+    needs: [settings, build]
+    runs-on: ${{ fromJSON(inputs.runner == 'x86-qemu' && '"ubuntu-24.04"' || inputs.runner == 'self-hosted' && '["self-hosted","mortar"]' || '"ubuntu-24.04-arm"') }}
+    timeout-minutes: 360
+    steps:
+      - name: Free disk space
+        if: runner.environment == 'github-hosted'
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache \
+            /usr/local/share/boost /usr/local/.ghcup /usr/share/swift || true
+          df -h /
+
+      - uses: actions/checkout@v4
+
+      - name: Emulate aarch64 (x86 fallback)
+        if: inputs.runner == 'x86-qemu'
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Install Nix
+        if: runner.environment == 'github-hosted'
+        uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+            max-jobs = auto
+            cores = 0
+            fallback = true
+
+      - name: Configure Nix
+        if: runner.environment == 'github-hosted'
+        env:
+          BASE_URL: ${{ needs.settings.outputs.base_url }}
+          PUBLIC_KEY: ${{ needs.settings.outputs.public_key }}
+          QEMU: ${{ inputs.runner == 'x86-qemu' }}
+        run: |
+          if [ "$QEMU" = true ]; then
+            echo "extra-platforms = aarch64-linux" | sudo tee -a /etc/nix/nix.conf
+          fi
+          if [ -n "$BASE_URL" ]; then
+            { echo "extra-substituters = $BASE_URL"; echo "extra-trusted-public-keys = $PUBLIC_KEY"; } \
+              | sudo tee -a /etc/nix/nix.conf
+          fi
+          sudo systemctl daemon-reload
+          sudo systemctl restart nix-daemon
+
+      - name: Build the catalog
+        run: |
+          time nix build --print-build-logs --out-link "$RUNNER_TEMP/catalog" .#packages.aarch64-linux.catalog
+          bash scripts/check-public-closure.sh "$RUNNER_TEMP/catalog"
+          nix build --out-link "$RUNNER_TEMP/mortar" .#mortar
+          df -h /
+
+      - name: The list of terminal tools
+        run: |
+          time read -r path count < <(bash scripts/make-tools-index.sh aarch64-linux 3)
+          test -n "$path"
+          nix-store --add-root "$RUNNER_TEMP/tools" --indirect --realise "$path"
+          # no references, or fetching it fetches everything it names
+          test "$(nix-store --query --references "$path" | wc -l)" = 0
+          bash scripts/check-public-closure.sh "$path"
+          jq --arg path "$path" --argjson count "$count" \
+            '.tools = [{ system: "aarch64-linux", path: $path, count: $count }]' \
+            "$RUNNER_TEMP/catalog" > "$RUNNER_TEMP/catalog.json"
+          du -h "$path/tools.tsv"
+          df -h /
+
+      - name: Publish to testing
+        if: needs.settings.outputs.publish == 'true'
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          NIX_SIGNING_KEY: ${{ secrets.NIX_SIGNING_KEY }}
+          MORTAR_PUBLISHER: github-actions
+        run: |
+          key="$RUNNER_TEMP/signing-key"
+          trap 'rm -f "$key"' EXIT
+          (umask 077; printf '%s\n' "$NIX_SIGNING_KEY" > "$key")
+          "$RUNNER_TEMP/mortar/bin/mortar" publish \
+            --endpoint "https://$R2_ACCOUNT_ID.r2.cloudflarestorage.com" --bucket "$BUCKET" --upstream "$UPSTREAM" \
+            --channel testing --config brick-bare --catalog "$RUNNER_TEMP/catalog.json" --catalog-only --key "$key"

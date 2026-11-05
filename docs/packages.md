@@ -6,8 +6,8 @@ Apps, with no system rebuild and no restart. The app and service are in
 [pkgs/mortar-packages](../pkgs/mortar-packages/DESIGN.md).
 
 **Not exercised yet.** All of this has run in VMs and on the shell's headless backend,
-with made-up packages. No catalog is published, no CI builds one, and no Brick has
-installed anything through it. The browser and the nixpkgs index are the next steps.
+with made-up packages. CI publishes a catalog with a release candidate, but no Brick has
+installed anything through it.
 
 ## What a repository is
 
@@ -121,10 +121,17 @@ mortar promote --from testing --channel mortar --catalog-only …
 
 `mortar publish --catalog` pushes what's listed, then signs and writes the catalog last, as
 with a manifest; without `--catalog-only` it does so after the system. `mortar promote` signs
-it again for the other channel. A list that hasn't changed isn't written. CI does none of this
-yet, and the check that nothing private is in a catalog's closure is only `--upstream`'s,
-by name: `scripts/check-public-closure.sh` doesn't cover catalogs yet, and has to before
-anything is published.
+it again for the other channel. A list that hasn't changed isn't written.
+
+CI's `packages` job does this for the official repository on a release candidate's tag, after
+the systems: `packages.aarch64-linux.catalog` (the flake's list), and
+`scripts/make-tools-index.sh`, which evaluates the nixpkgs the systems are built from with
+`nix-eval-jobs`, asks cache.nixos.org for every path, and leaves out what it doesn't hold and
+anything `scripts/check-public-closure.sh` refuses by name. A request that keeps failing, or a
+list under 50,000, stops the job, so a network failure can't publish a short list.
+
+What the catalog lists has to pass the same rules as a system: `tests/public-policy.nix`
+evaluates it with `mortar.public` on, and CI runs the closure check on it.
 
 ## The system guard
 
@@ -157,5 +164,5 @@ Deploys themselves don't go through this: `mortar deploy` runs nothing of mortar
 ## Not here yet
 
 Bundles' runtime and sandbox, PortMaster, third-party repository UI, `mortar install`,
-`mortar repo publish`, and generating the nixpkgs index or publishing the browser in CI. The hooks
+and `mortar repo publish`. The hooks
 are `kind`, `RepoKind`, `official`, and `tools` in the catalog.

@@ -5,10 +5,16 @@
 # for what isn't marked unfree. Takes built paths or .drv files, the latter so it
 # can run before anything is built.
 #   usage: check-public-closure.sh <store path>...
+#          check-public-closure.sh --print-deny   the pattern, for make-tools-index.sh
 set -euo pipefail
 
 # Commercial software, and what comes from a user's own files.
 deny='-(claude-code|mortar-claude|pico-8|pico8|acgc|GAFE01|openxcom-data|UFO|liar)([-.]|$)'
+
+if [ "${1:-}" = --print-deny ]; then
+  printf '%s\n' "$deny"
+  exit 0
+fi
 
 status=0
 for path in "$@"; do

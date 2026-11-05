@@ -51,10 +51,10 @@ impl Tool {
         format!("/nix/store/{}-{}", self.hash, self.name)
     }
 
-    /// `ripgrep-14.1.1` -> `14.1.1`: what follows the last `-<digit>`. Empty when a
-    /// name has no version.
+    /// `ripgrep-14.1.1` -> `14.1.1`: what follows the last `-<digit>`, without the output
+    /// a path may name (`jq-1.8.2-bin`). Empty when a name has no version.
     pub fn version(&self) -> &str {
-        let n = &self.name;
+        let n = ["-bin", "-out", "-lib"].iter().find_map(|o| self.name.strip_suffix(o)).unwrap_or(&self.name);
         let mut i = n.len();
         while let Some(d) = n[..i].rfind('-') {
             if n[d + 1..].starts_with(|c: char| c.is_ascii_digit()) {
@@ -269,6 +269,8 @@ mod tests {
         assert!(find(Cursor::new(sample()), "rip").unwrap().is_none());
         let bare = Tool { attr: "x".into(), name: "x".into(), hash: H.into(), program: String::new(), description: String::new() };
         assert_eq!((bare.version(), bare.title()), ("", "x"));
+        let bin = Tool { name: "jq-1.8.2-bin".into(), ..bare.clone() };
+        assert_eq!(bin.version(), "1.8.2");
     }
 
     #[test]

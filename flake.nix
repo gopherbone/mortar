@@ -86,6 +86,20 @@
             inherit (self.lib) mkApp;
           };
 
+          # What the official repository offers (docs/packages.md). Built and published by
+          # CI from a release candidate's tag, after the systems. The source link is where
+          # this build's patches are: WebKit is LGPL-2.1, and this cache hosts it.
+          catalog = self.lib.mkCatalog self.nixosConfigurations.brick-full.pkgs {
+            devices.brick = [
+              {
+                app = self.packages.${system}.wpe-browser;
+                version = nixpkgs.lib.removePrefix "0-unstable-" self.packages.${system}.wpe-browser.package.version;
+                licence = "MIT, LGPL-2.1, BSD, others";
+                source = "https://github.com/gopherbone/mortar/tree/mortar/pkgs/wpe-browser";
+              }
+            ];
+          };
+
           # Its test in a VM with the real shell but no GPU. Not under `checks`, which CI
           # builds on every push.
           wpe-browser-test = import ./tests/wpe-browser.nix {
@@ -114,6 +128,8 @@
       checks = lib.genAttrs linuxSystems (system:
         let pkgs = nixpkgs.legacyPackages.${system};
         in {
+          # the list of terminal tools from nix-eval-jobs output
+          tools-index = pkgs.callPackage ./tests/tools-index.nix { };
           # signed manifests and package indexes: refusals, domain separation, and
           # searching an index the size of nixpkgs within a fixed buffer
           mortar-index = pkgs.callPackage ./pkgs/mortar-index { };

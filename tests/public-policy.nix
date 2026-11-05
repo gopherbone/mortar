@@ -4,6 +4,7 @@
 #   - bare and full evaluate to the same system with mortar.public on, which
 #     refuses every unfree package outside mortar.publicUnfree. So nothing else
 #     unfree is in them, however it got there.
+#   - So does what the official catalog lists, with the same refusal.
 #   - The opt-ins are in fact refused: Claude Code and a root console for USB hosts.
 #   - The non-commercial cores are in, and can be turned off.
 #   - A flake of your own doesn't follow the public channel by accident: it would
@@ -27,6 +28,12 @@ let
   checks = {
     "bare holds only what may be published" = drv [ bare follows public ] == self.nixosConfigurations.brick-bare.config.system.build.toplevel.drvPath;
     "full holds only what may be published" = drv [ full follows public ] == self.nixosConfigurations.brick-full.config.system.build.toplevel.drvPath;
+    "the catalog holds only what may be published" =
+      let
+        pkgs = (self.lib.mkSystem { modules = [ full follows public ]; }).pkgs;
+        app = pkgs.callPackage ../pkgs/wpe-browser/app.nix { inherit (self.lib) mkApp; };
+      in
+      app.drvPath == self.packages.aarch64-linux.wpe-browser.drvPath;
     "Claude Code is refused" = refused [ bare self.nixosModules.pack-ai public ];
     "the non-commercial cores may be published" =
       !(refused [ bare self.nixosModules.pack-emulation public ]);
